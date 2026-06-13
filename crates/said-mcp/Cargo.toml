@@ -1,0 +1,29 @@
+[package]
+name = "said-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server for .said portable brain files — 5 facade tools for LLM integration"
+
+[[bin]]
+name = "said-mcp"
+path = "src/main.rs"
+
+[dependencies]
+sca-core = { path = "../sca-core", features = ["static-embed", "docs"] }
+said-prompts = { path = "../said-prompts" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+rust-mcp-sdk = { version = "0.9", default-features = false, features = ["server", "stdio", "macros"] }
+said-forge = { path = "../said-forge", optional = true }
+
+[features]
+default = ["docs"]
+docs = []
+ocr = ["sca-core/ocr"]
+whisper = ["sca-core/whisper"]
+code = ["sca-core/code"]
+forge = ["dep:said-forge"]
+forge-xlsx = ["forge", "said-forge/forge-xlsx"]
+forge-docs = ["forge", "said-forge/forge-docs"]

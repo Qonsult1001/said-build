@@ -1,0 +1,64 @@
+name: build-binaries
+
+# Builds `said` (CLI) + `said-mcp` for Linux / Windows / macOS.
+# The encoder model is committed in this repo (SAID-LAM-private/said-lam-static),
+# so NO secrets/tokens are needed. Runs on tag push (v*) or manual dispatch.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   os: ubuntu-22.04,   cli: said,     mcp: said-mcp }
+          - { name: windows-x64, os: windows-latest, cli: said.exe, mcp: said-mcp.exe }
+          - { name: macos-arm64, os: macos-14,       cli: said,     mcp: said-mcp }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify encoder present (real bytes)
+        shell: bash
+        run: |
+          f=SAID-LAM-private/said-lam-static/model.safetensors
+          test -f "$f" && test "$(wc -c < "$f")" -gt 1000000 || { echo "::error::encoder missing/pointer"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake clang libssl-dev
+      - name: macOS deps
+        if: runner.os == 'macOS'
+        run: brew install cmake
+      - name: Build said CLI
+        run: cargo build --release -p said-cli --features "code,docs"
+      - name: Build said-mcp
+        run: cargo build --release -p said-mcp --features "code"
+      - name: Smoke test (CLI runs)
+        shell: bash
+        run: ./target/release/${{ matrix.cli }} --version
+      - name: Stage
+        shell: bash
+        run: mkdir -p dist && cp "target/release/${{ matrix.cli }}" "target/release/${{ matrix.mcp }}" dist/ && ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: said-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - run: cd artifacts && for d in */; do (cd "$d" && zip -r "../${d%/}.zip" .); done
+      - uses: softprops/action-gh-release@v2
+        with: { files: artifacts/*.zip }

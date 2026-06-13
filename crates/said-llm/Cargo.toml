@@ -1,0 +1,34 @@
+[package]
+name = "said-llm"
+version = "0.1.0"
+edition = "2021"
+description = "Workspace-shared BYO-LLM trait + providers (Anthropic Messages API, OpenAI-compatible Chat Completions). Used by said-forge, the LongMemEval harness, and any future LLM-using SAID component."
+license = "MIT"
+
+[dependencies]
+# Async runtime + trait
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util"] }
+async-trait = "0.1"
+
+# HTTPS — Anthropic + OpenAI-compatible HTTP calls
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+
+[features]
+default = []
+# Exposes `stub::StubProvider` to external integration tests. The module is
+# also auto-included under `cfg(test)`, but `tests/*.rs` integration tests
+# run as a SEPARATE crate that only sees this cfg.
+stub-llm = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

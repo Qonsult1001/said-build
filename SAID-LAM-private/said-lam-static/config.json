@@ -1,0 +1,14 @@
+{
+    "model_type": "model2vec",
+    "architectures": [
+        "StaticModel"
+    ],
+    "tokenizer_name": "nomic-ai/nomic-embed-text-v1.5",
+    "apply_pca": 64,
+    "sif_coefficient": 0.0001,
+    "hidden_dim": 64,
+    "seq_length": 1000000,
+    "normalize": true,
+    "pooling": "mean",
+    "embedding_dtype": "float16"
+}

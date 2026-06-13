@@ -1,0 +1,85 @@
+[package]
+name = "said-forge"
+version = "0.1.0"
+edition = "2021"
+description = "Spec-driven workspace generator plugin for .said — turns a directive (OpenAPI / Markdown) plus a grounded brain into story + plan + tasks + skill files."
+
+[dependencies]
+sca-core = { path = "../sca-core", features = ["static-embed"] }
+said-llm = { path = "../said-llm" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+serde_bytes = "0.11"
+toml = "0.8"
+
+# Hashing (already in workspace via said-cli)
+blake3 = "1.5"
+
+# Async runtime (already in workspace via said-mcp)
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "net"] }
+async-trait = "0.1"
+
+# HTTPS for OpenAPI URL fetch (LLM calls)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+
+# OpenAPI parsing uses serde_json + serde_yaml directly (see source/openapi.rs)
+# — no oas3 dep needed; its API churns between versions.
+
+# Path / slug utilities
+pathdiff = "0.2.3"
+
+# Logging
+tracing = "0.1"
+
+# Errors
+thiserror = "1"
+
+# XLSX / XLSM reader — optional, gated behind `forge-xlsx` feature.
+# Ships with no deps when disabled (large binary-format parsing pulls in
+# chunks of zip + xml machinery).
+calamine = { version = "0.34", optional = true }
+# Used by the xlsx plugin to strip macro-sheet entries from `.xlsm` files
+# before handing the repackaged workbook to calamine. calamine rejects any
+# workbook that references sheets outside xl/worksheets/ xl/chartsheets/
+# xl/dialogsheets/ — macro-enabled books reference xl/macrosheets/.
+zip = { version = "0.6", optional = true, default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.31", optional = true }
+# Required at runtime (not just dev) for the macrosheet-strip temp file.
+tempfile = { version = "3", optional = true }
+
+# SQL Server client for sandbox verification (Step 1: read-only sys.parameters
+# + lookup contents). Optional, gated behind `forge-sql-verify` so file-only
+# users don't pay the rustls/tokio-util compile cost.
+tiberius = { version = "0.12", default-features = false, features = ["rustls"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
+# UUID generation + futures stream consumption for the contract tester.
+uuid = { version = "1", features = ["v4"], optional = true }
+futures-util = { version = "0.3", optional = true }
+# Synthetic HTTP server used by the test harness (Step 10) — listens
+# on localhost, routes requests to the sandbox proc bindings declared
+# in the OpenAPI spec. Optional, gated behind `forge-sql-verify`.
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[features]
+default = []
+# Exposes `llm::stub::StubProvider` to external integration tests. The
+# module is also auto-included under `cfg(test)`, but `tests/*.rs`
+# integration tests run as a SEPARATE crate that only sees this cfg.
+stub-llm = ["said-llm/stub-llm"]
+# Enables the xlsx/xlsm ingester via calamine. `zip` + `quick-xml` are
+# used to strip macro-sheets from `.xlsm` files before handing to calamine.
+forge-xlsx = ["dep:calamine", "dep:zip", "dep:quick-xml", "dep:tempfile"]
+# Enables real PDF/DOCX ingest via sca-core's docs plugin (vs pointer-only frames).
+forge-docs = ["sca-core/docs"]
+# Enables read-only verification of generated specs against a running
+# `said sandbox` SQL Server container — confirms parsed proc signatures
+# via `sys.parameters` and pulls closed-set lookup values for `enum:`
+# emission. Pure read pass; no mutations.
+forge-sql-verify = ["dep:tiberius", "dep:tokio-util", "dep:uuid", "dep:futures-util", "dep:axum"]

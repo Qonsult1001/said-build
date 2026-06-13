@@ -1,0 +1,13 @@
+[package]
+name = "said-prompts"
+version = "0.1.0"
+edition = "2021"
+description = "Canonical agent prompts for .said. One source of truth, consumed by said-wasm (browser), said-mcp (MCP servers), and native callers."
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "said_prompts"

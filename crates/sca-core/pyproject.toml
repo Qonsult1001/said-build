@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "sca-core-py"
+version = "0.1.0"
+description = "SCA (Said Crystalline Attention) — Python bindings for the Rust search engine"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://saidhome.ai"
+Repository = "https://github.com/SAIDResearch/SAID-LAM"
+
+[tool.maturin]
+module-name = "sca_core_py"
+features = ["python", "embed-model", "gpu"]

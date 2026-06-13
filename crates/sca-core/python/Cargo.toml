@@ -1,0 +1,16 @@
+[package]
+name = "sca-core-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for SCA (Said Crystalline Attention) — perfect recall plugin"
+license = "MIT"
+
+[workspace]
+
+[lib]
+name = "sca_core_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+sca-core = { path = ".." }

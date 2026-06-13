@@ -1,0 +1,364 @@
+[package]
+name = "sca-core"
+version = "0.2.0"
+edition = "2021"
+description = "Said Crystalline Attention — pluggable deterministic search engine for .said memory files"
+license = "MIT"
+repository = "https://github.com/Qonsult1001/SAID-ECHO"
+
+[dependencies]
+# Data structures
+roaring = { version = "0.10" }
+ahash = { version = "0.8" }
+
+# Content-addressable hashing (BLAKE3 for O(1) dedup in latent_cluster)
+blake3 = "1.5"
+
+# Parallelism
+rayon = "1.10"
+
+# Regex (for query analysis + code detection)
+regex = "1"
+
+# Stemming (English Porter2 stemmer for morphological normalization)
+rust-stemmers = "1.2"
+
+[features]
+default = []
+# BERT tokenizer for fine-grained token indexing
+bert = ["dep:tokenizers"]
+# SIMD-accelerated Hamming distance (simsimd)
+simd = ["dep:simsimd"]
+# Model2Vec static embeddings for fast latent space encoding (500x faster than transformer)
+static-embed = ["dep:model2vec-rs"]
+# Embed said-lam-static model weights into binary (zero external files, +4.8MB binary size)
+embed-model = ["static-embed"]
+# GPU-accelerated Hamming search via wgpu compute shader
+gpu = ["dep:wgpu", "dep:pollster"]
+# Per-frame AES-256-GCM encryption
+encryption = ["dep:aes-gcm"]
+# Tree-sitter AST parsing for code chunking (all languages). SQL chunking
+# stays on the custom GO-batch parser; said-forge has its own
+# tree-sitter-sequel dep for T-SQL wire-shape analysis (different concern).
+code = ["dep:tree-sitter", "dep:tree-sitter-rust", "dep:tree-sitter-python", "dep:tree-sitter-javascript", "dep:tree-sitter-typescript", "dep:tree-sitter-go", "dep:tree-sitter-java", "dep:tree-sitter-c-sharp", "dep:tree-sitter-c", "dep:tree-sitter-cpp", "dep:tree-sitter-ruby", "dep:tree-sitter-php", "dep:tree-sitter-kotlin-ng", "dep:tree-sitter-swift", "dep:tree-sitter-lua", "dep:tree-sitter-md", "dep:tree-sitter-json", "dep:tree-sitter-yaml", "dep:tree-sitter-toml-ng", "dep:tree-sitter-xml", "dep:tree-sitter-bash", "dep:tree-sitter-hcl", "dep:tree-sitter-powershell", "dep:tree-sitter-perl"]
+# LSP client for cross-file code intelligence
+lsp = ["dep:lsp-types"]
+# Python bindings via PyO3
+python = ["dep:pyo3"]
+mmap = []
+# Audio transcription via sherpa-rs (Whisper, Moonshine, SenseVoice — all engines)
+# DirectML GPU on any Windows GPU (no CUDA), prebuilt sherpa-onnx binaries
+whisper = ["dep:sherpa-rs", "dep:symphonia"]
+directml = ["sherpa-rs/directml"]
+# DOCX-only text extraction (zip + quick-xml, pure Rust, wasm-safe).
+# Subset of `docs` without the native PDF deps (pdfium/pdf-extract).
+docx = ["dep:quick-xml", "dep:zip"]
+# Document ingestion: PDF, DOCX, TXT, MD.
+# pdf-extract = pure Rust fallback; pdfium = layout-aware (multi-column)
+docs = ["docx", "dep:pdf-extract", "dep:pdfium"]
+# OCR for scanned/image-only PDFs. PaddleOCR v5 via MNN inference.
+# Models bundled at compile time (~6 MB). Requires pdfium for page rendering.
+ocr = ["dep:ocr-rs", "dep:image", "docs"]
+
+[dependencies.pyo3]
+version = "0.22"
+optional = true
+features = ["extension-module"]
+
+[lib]
+name = "sca_core"
+crate-type = ["lib", "cdylib"]
+
+[dependencies.tokenizers]
+version = "0.20"
+optional = true
+
+[dependencies.simsimd]
+version = "6"
+optional = true
+
+# model2vec-rs backend is selected per-target (see below):
+#   native (non-wasm) → fancy-regex (pure-Rust regex, still allows BPE training)
+#   wasm32            → model2vec's `wasm` feature (local-only + tokenizers
+#                       unstable_wasm: fancy-regex + getrandom/wasm_js, and NO
+#                       native C deps — onig, esaxx — and NO hf-hub networking).
+# Both use the SAME model + tokenizer; only the regex/runtime backend differs.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.model2vec-rs]
+version = "0.2"
+optional = true
+default-features = false
+features = ["fancy-regex"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.model2vec-rs]
+version = "0.2"
+optional = true
+default-features = false
+features = ["wasm"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.js-sys]
+version = "0.3"
+
+[dependencies.wgpu]
+version = "24"
+optional = true
+
+[dependencies.bytemuck]
+version = "1"
+features = ["derive"]
+
+[dependencies.tempfile]
+version = "3"
+
+[dependencies.pollster]
+version = "0.4"
+optional = true
+
+[dependencies.zstd]
+version = "0.13"
+
+[dependencies.memmap2]
+version = "0.9"
+
+[dependencies.brotli]
+version = "8"
+
+[dependencies.aes-gcm]
+version = "0.10"
+optional = true
+
+# Audio transcription via sherpa-rs (prebuilt binaries, no LLVM needed)
+[dependencies.sherpa-rs]
+version = "0.6"
+optional = true
+features = ["download-binaries"]
+
+# Audio decode for MP4/MP3 (sherpa-rs only reads WAV, symphonia decodes anything)
+[dependencies.symphonia]
+version = "0.5"
+optional = true
+default-features = false
+features = ["aac", "mp3", "isomp4", "wav", "pcm"]
+
+# Document ingestion (Step 8): PDF + DOCX + TXT extraction
+[dependencies.pdf-extract]
+version = "0.10"
+optional = true
+
+# Layout-aware PDF extraction via Google's pdfium (multi-column, tables).
+# Needs pdfium.dll/so at runtime — auto-fallback to pdf-extract if absent.
+[dependencies.pdfium]
+version = "0.10"
+optional = true
+
+# OCR: PaddleOCR v5 via MNN inference framework.
+# Models bundled via include_bytes! at compile time (~6 MB added to binary).
+# MNN builds from source (needs cmake) OR uses prebuilt static lib.
+[dependencies.ocr-rs]
+version = "2.2"
+optional = true
+
+[dependencies.image]
+version = "0.25"
+optional = true
+default-features = false
+features = ["png", "jpeg"]
+
+[dependencies.quick-xml]
+version = "0.31"
+optional = true
+
+[dependencies.zip]
+version = "0.6"
+optional = true
+default-features = false
+features = ["deflate"]
+
+# Tree-sitter: proper AST parsing for ALL languages (no regex hacks)
+[dependencies.tree-sitter]
+version = "0.26"
+optional = true
+
+[dependencies.tree-sitter-rust]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-python]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-javascript]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-typescript]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-go]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-java]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-c-sharp]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-c]
+version = "0.24"
+optional = true
+
+[dependencies.tree-sitter-cpp]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-ruby]
+version = "0.23"
+optional = true
+
+[dependencies.tree-sitter-php]
+version = "0.24"
+optional = true
+
+# kotlin-ng = community-maintained Kotlin grammar (the original
+# tree-sitter-kotlin is unmaintained on crates.io). Same API surface.
+[dependencies.tree-sitter-kotlin-ng]
+version = "1.1"
+optional = true
+
+[dependencies.tree-sitter-swift]
+version = "0.7"
+optional = true
+
+[dependencies.tree-sitter-lua]
+version = "0.5"
+optional = true
+
+[dependencies.tree-sitter-md]
+version = "0.3"
+optional = true
+
+[dependencies.tree-sitter-json]
+version = "0.24"
+optional = true
+
+[dependencies.tree-sitter-yaml]
+version = "0.7"
+optional = true
+
+# tree-sitter-toml-ng = community-maintained TOML grammar against
+# tree-sitter 0.24+ (the original tree-sitter-toml crate is stuck on
+# tree-sitter 0.20 and won't link with our other grammars).
+[dependencies.tree-sitter-toml-ng]
+version = "0.7"
+optional = true
+
+[dependencies.tree-sitter-xml]
+version = "0.7"
+optional = true
+
+[dependencies.tree-sitter-bash]
+version = "0.25"
+optional = true
+
+# Terraform / HashiCorp Configuration Language. Covers .tf, .tfvars, .hcl
+[dependencies.tree-sitter-hcl]
+version = "1.1"
+optional = true
+
+# PowerShell — covers .ps1 and .psm1.
+[dependencies.tree-sitter-powershell]
+version = "0.26"
+optional = true
+
+# Perl — covers .pl, .pm, .t. Requires tree-sitter 0.26+.
+[dependencies.tree-sitter-perl]
+version = "1.1"
+optional = true
+
+# LSP client — connects to language servers (rust-analyzer, tsserver, pyright)
+[dependencies.lsp-types]
+version = "0.97"
+optional = true
+
+[dependencies.serde_json]
+version = "1"
+
+[dev-dependencies]
+tempfile = "3"
+model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex"] }
+# MTEB harness: hf-hub for dataset download, serde for JSONL parsing.
+# Example-only — sca-core itself never touches these.
+hf-hub = { version = "0.4", features = ["ureq"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bench]]
+name = "search_profile"
+harness = false
+
+[[example]]
+name = "test_folder_recall"
+required-features = ["docs", "static-embed"]
+
+[[example]]
+name = "mteb_rust"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_baseline"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_with_dream"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_f1"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_rank_ceiling"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_miss_trace"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_sca_trace"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_ceiling_search_internal"
+required-features = ["static-embed"]
+
+[[example]]
+name = "locomo_mem0_test"
+required-features = ["static-embed"]
+
+[[example]]
+name = "realworld_recall_probe"
+required-features = ["static-embed"]
+
+[[example]]
+name = "diagnose_intent_miss"
+required-features = ["static-embed"]
+
+[[example]]
+name = "check_query_routes"
+required-features = ["static-embed"]
+
+[[example]]
+name = "surprise_probe"
+required-features = ["static-embed"]
+
+[[example]]
+name = "competitor_bench"
+required-features = ["static-embed"]
+
+[[example]]
+name = "pillar_writers_probe"
+required-features = ["static-embed"]

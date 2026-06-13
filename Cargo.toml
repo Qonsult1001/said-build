@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/sca-core", "crates/said-cli", "crates/said-mcp", "crates/said-forge", "crates/said-prompts", "crates/said-vault", "crates/said-llm"]
+resolver = "2"
