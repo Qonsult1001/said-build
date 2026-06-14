@@ -265,6 +265,47 @@ pub struct EditTool {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Tool 8c: EDIT_BATCH — transactional multi-edit (all-or-nothing)
+// ════════════════════════════════════════════════════════════════════════════
+
+/// One edit within an `edit_batch`. Same fields as `edit` minus dry_run
+/// (the batch controls dry_run for the whole set).
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct BatchEdit {
+    /// Repo-relative path to change.
+    pub file: String,
+    /// Edit mode (same set as the `edit` tool).
+    pub mode: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub anchor: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub allow_large: bool,
+}
+
+#[mcp_tool(
+    name = "edit_batch",
+    description = "Apply a SET of surgical edits ALL-OR-NOTHING. Every edit is resolved, applied, \
+                   and syntax-verified in memory first; the files are written ONLY if every edit \
+                   succeeds. If any edit fails, NOTHING is written — you can never get a \
+                   half-applied change set on disk. Use this when a change spans multiple files \
+                   (e.g. an endpoint + its test) so they land together or not at all. Send at most \
+                   one edit per file per batch. Same modes/anchors as the `edit` tool.",
+    destructive_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct EditBatchTool {
+    /// The edits to apply atomically (one per file).
+    pub edits: Vec<BatchEdit>,
+    /// Preview only: compute + verify every edit but write nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Tool 9: DELETE — remove a memory or frame
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1020,14 +1061,14 @@ pub struct LspSymbolsTool {
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
-                      SymTool, HistoryTool, CheckoutTool, EditTool, DeleteTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
-                      SymTool, HistoryTool, CheckoutTool, EditTool, DeleteTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,

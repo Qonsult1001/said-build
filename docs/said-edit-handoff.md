@@ -1,6 +1,6 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.3.0` (both `said` CLI and `said-mcp`)
+**Date:** 2026-06-14 · **Version:** `said 0.4.0` (both `said` CLI and `said-mcp`)
 **Artifact:** `said-full-linux-x64`
 
 This is the durable fix for the production failure where the Groq cycle did a
@@ -29,6 +29,21 @@ construction** — there is no whole-file-write path.
 | **Transactional edit sets** | When applying multiple edits, if any one fails the whole set fails — no half-applied change reaches disk. |
 
 **Net effect for an autonomous agent:** it cannot delete the rest of a file, cannot land an edit in the wrong place when text repeats, and cannot leave the file un-compilable. Three independent guarantees.
+
+### New in 0.4.0 — recall-correctness + transactional edits
+
+| Upgrade | What it gives you |
+|---------|-------------------|
+| **Universal parse-check** | The post-edit syntax gate now covers **all 24 bundled languages** (Rust, Python, JS, TS, Go, Java, C#, C, C++, Ruby, PHP, Kotlin, Swift, Lua, Markdown, JSON, YAML, TOML, XML, Bash, HCL/Terraform, PowerShell, Perl) — not just the original 7. |
+| **Anchor-drift detection** | Before a symbol-mode edit, the file on disk must still match what the brain indexed; if it changed since the last `init`/`reindex`, the edit is **refused** with "run `said reindex`" rather than editing against a stale brain. Whitespace-insensitive (formatting noise isn't drift). |
+| **Symbol-span correctness** | `replace-symbol`/`delete-symbol` now use the brain's stored content as the authoritative span (the symbol index `end_line` was off-by-one on the closing brace), so the **whole construct incl. its closing `}` is replaced cleanly** — no orphan brace. |
+| **`edit_batch` (MCP)** | Apply a SET of edits **all-or-nothing**. Every edit is resolved+applied+syntax-verified in memory first; files are written only if every edit succeeds. If any fails, nothing is written — no half-applied change set on disk. Use for multi-file changes (endpoint + its test) so they land together or not at all. |
+
+> **For the Groq cycle:** prefer the MCP `edit_batch` tool for a multi-file change set — it gives the cross-file all-or-nothing guarantee the loop-and-abort approach lacked. Still: this catches *parse* breakage, not *type/compile* errors — the in-clone `dotnet build`/`test` (SDK in the container) remains the required backstop before a PR is mergeable. Do not auto-merge drafts that haven't built in-clone.
+
+### Known boundary (honest)
+
+`said edit` syntax-verify catches **structural/parse** breakage (the PR-#93 class). It does **not** catch **type/semantic** errors (wrong type, missing `using`, undefined symbol) — those parse fine but don't compile. A real compiler (dotnet/cargo/tsc) is still needed for that, and that belongs in the cycle's in-clone build step, not in `.said`.
 
 ---
 

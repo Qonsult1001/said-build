@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "said-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "clap",
@@ -4298,7 +4298,7 @@ dependencies = [
 
 [[package]]
 name = "said-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "rust-mcp-sdk",

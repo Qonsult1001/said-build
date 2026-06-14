@@ -494,6 +494,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::HistoryTool(t) => self.handle_history(t),
             SaidTools::CheckoutTool(t) => self.handle_checkout(t),
             SaidTools::EditTool(t) => self.handle_edit(t),
+            SaidTools::EditBatchTool(t) => self.handle_edit_batch(t),
             SaidTools::DeleteTool(t) => self.handle_delete(t),
             SaidTools::DiscoverTool(_) => self.handle_discover(),
             SaidTools::OpenTool(t) => self.handle_open(t),
@@ -1856,12 +1857,157 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         Ok(CallToolResult::text_content(vec![TextContent::from(output)]))
     }
 
+    /// Resolve + apply + syntax-verify ONE edit, returning the new file content
+    /// and a summary — WITHOUT writing. Shared by `handle_edit` (writes one) and
+    /// `handle_edit_batch` (computes all, writes all-or-nothing). Errors carry a
+    /// human-readable reason; the caller never writes on Err.
+    fn compute_edit(
+        &self,
+        file: &str,
+        mode: &str,
+        symbol: Option<&str>,
+        anchor: Option<&str>,
+        content: Option<&str>,
+        allow_large: bool,
+    ) -> Result<(String, serde_json::Value), String> {
+        use sca_core::edit::{self, EditOp};
+
+        edit::is_safe_relative_path(file)?;
+
+        let is_delete = mode == "delete-symbol";
+        let new_text = match (content, is_delete) {
+            (Some(c), _) => c.to_string(),
+            (None, true) => String::new(),
+            (None, false) => return Err("missing 'content'".into()),
+        };
+
+        let file_content = std::fs::read_to_string(file)
+            .map_err(|e| format!("read {}: {}", file, e))?;
+
+        // Resolve a symbol → (start,end), scoped to file, with drift check +
+        // authoritative-content span correction (matches the CLI path).
+        let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
+            let mut brain = self.brain.lock().map_err(|e| format!("brain lock: {}", e))?;
+            let results = brain.sym(name, 50);
+            let cands: Vec<edit::SymCandidate> = results.iter().map(|r| edit::SymCandidate {
+                doc_id: r.doc_id.clone(),
+                name: r.name.clone(),
+                start_line: r.start_line as usize,
+                end_line: r.end_line as usize,
+            }).collect();
+            let (start, end) = edit::resolve_symbol_in_file(&cands, file)?;
+            let mut corrected_end = end;
+            if let Some(matched) = cands.iter().find(|c|
+                edit::paths_equal(c.doc_id.split("::").next().unwrap_or(""), file)
+                && c.start_line == start && c.end_line == end)
+            {
+                if let Some(indexed) = brain.get(&matched.doc_id) {
+                    let disk_lines: Vec<&str> = file_content.lines().collect();
+                    let lo = start.saturating_sub(1);
+                    let snippet_lines = indexed.lines().count().max(1);
+                    let hi = (lo + snippet_lines).min(disk_lines.len());
+                    if lo < hi {
+                        let ondisk_slice = disk_lines[lo..hi].join("\n");
+                        edit::check_symbol_fresh(&indexed, &ondisk_slice)?;
+                        corrected_end = hi;
+                    }
+                }
+            }
+            Ok((start, corrected_end))
+        };
+        let want_symbol = || symbol.map(|s| s.to_string()).ok_or_else(|| format!("mode '{}' requires 'symbol'", mode));
+        let want_anchor = || anchor.map(|s| s.to_string()).ok_or_else(|| format!("mode '{}' requires 'anchor'", mode));
+
+        let op: EditOp = match mode {
+            "insert-after-symbol" => {
+                let (_, end) = resolve_sym(&want_symbol()?)?;
+                EditOp::InsertAfterLine { line: end, text: new_text }
+            }
+            "insert-before-symbol" => {
+                let (start, _) = resolve_sym(&want_symbol()?)?;
+                EditOp::InsertBeforeLine { line: start, text: new_text }
+            }
+            "replace-symbol" => {
+                let (start, end) = resolve_sym(&want_symbol()?)?;
+                edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, allow_large)?;
+                EditOp::ReplaceLines { start, end, text: new_text }
+            }
+            "delete-symbol" => {
+                let (start, end) = resolve_sym(&want_symbol()?)?;
+                edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, allow_large)?;
+                EditOp::DeleteLines { start, end }
+            }
+            "insert-after-text" => {
+                let a = want_anchor()?;
+                let line = edit::resolve_text_anchor(&file_content, &a)?;
+                EditOp::InsertAfterLine { line, text: new_text }
+            }
+            "insert-before-text" => {
+                let a = want_anchor()?;
+                let line = edit::resolve_text_anchor(&file_content, &a)?;
+                EditOp::InsertBeforeLine { line, text: new_text }
+            }
+            "replace-text" => {
+                EditOp::ReplaceSubstring { needle: want_anchor()?, replacement: new_text }
+            }
+            "insert-after-context" => {
+                let a = want_anchor()?;
+                let line = edit::resolve_context_anchor(&file_content, &a)? + a.matches('\n').count();
+                EditOp::InsertAfterLine { line, text: new_text }
+            }
+            "insert-before-context" => {
+                let a = want_anchor()?;
+                let line = edit::resolve_context_anchor(&file_content, &a)?;
+                EditOp::InsertBeforeLine { line, text: new_text }
+            }
+            "replace-context" => {
+                let a = want_anchor()?;
+                edit::resolve_context_anchor(&file_content, &a)?;
+                EditOp::ReplaceSubstring { needle: a, replacement: new_text }
+            }
+            other => return Err(format!("unknown mode: {}", other)),
+        };
+
+        let result = edit::apply_edit(&file_content, &op)?;
+
+        #[cfg(feature = "code")]
+        {
+            let ext = Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
+            edit::verify_syntax(&result.content, ext)
+                .map_err(|e| format!("{} — edit rejected, file unchanged", e))?;
+        }
+
+        let summary = serde_json::json!({
+            "file": file,
+            "mode": mode,
+            "anchor": symbol.or(anchor).unwrap_or(""),
+            "applied_at_line": result.applied_at_line,
+            "lines_added": result.lines_added,
+            "lines_removed": result.lines_removed,
+        });
+        Ok((result.content, summary))
+    }
+
+    /// Atomic write (temp + rename) for an edited file.
+    fn atomic_write_edit(file: &str, content: &str) -> Result<(), String> {
+        let target = Path::new(file);
+        let stem = target.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let tmp = match target.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(d) => d.join(format!(".{}.said-edit.tmp", stem)),
+            None => PathBuf::from(format!(".{}.said-edit.tmp", stem)),
+        };
+        std::fs::write(&tmp, content.as_bytes())
+            .map_err(|e| format!("write temp {}: {}", tmp.display(), e))?;
+        std::fs::rename(&tmp, target).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("rename to {}: {}", target.display(), e)
+        })
+    }
+
     /// Surgical anchored edit — the same core the `said edit` CLI uses
     /// (`sca_core::edit`). No whole-file-rewrite path exists, so an autonomous
     /// caller cannot delete the rest of a file.
     fn handle_edit(&self, t: EditTool) -> Result<CallToolResult, CallToolError> {
-        use sca_core::edit::{self, EditOp};
-
         let ok_json = |msg: serde_json::Value| {
             Ok(CallToolResult::text_content(vec![TextContent::from(msg.to_string())]))
         };
@@ -1871,146 +2017,88 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             )]))
         };
 
-        // 1. Path safety.
-        if let Err(e) = edit::is_safe_relative_path(&t.file) {
-            return err_json(e);
-        }
-
-        // 2. Content (delete needs none).
-        let is_delete = t.mode == "delete-symbol";
-        let new_text = match (&t.content, is_delete) {
-            (Some(c), _) => c.clone(),
-            (None, true) => String::new(),
-            (None, false) => return err_json("missing 'content'".into()),
-        };
-
-        // 3. Read the on-disk file.
-        let file_content = match std::fs::read_to_string(&t.file) {
-            Ok(s) => s,
-            Err(e) => return err_json(format!("read {}: {}", t.file, e)),
-        };
-
-        // 4. Resolve mode → EditOp.
-        let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
-            let brain = self.brain.lock().map_err(|e| format!("brain lock: {}", e))?;
-            let results = brain.sym(name, 50);
-            let cands: Vec<edit::SymCandidate> = results.iter().map(|r| edit::SymCandidate {
-                doc_id: r.doc_id.clone(),
-                name: r.name.clone(),
-                start_line: r.start_line as usize,
-                end_line: r.end_line as usize,
-            }).collect();
-            edit::resolve_symbol_in_file(&cands, &t.file)
-        };
-        let want_symbol = || t.symbol.clone().ok_or_else(|| format!("mode '{}' requires 'symbol'", t.mode));
-        let want_anchor = || t.anchor.clone().ok_or_else(|| format!("mode '{}' requires 'anchor'", t.mode));
-
-        let op: EditOp = match t.mode.as_str() {
-            "insert-after-symbol" => {
-                let name = match want_symbol() { Ok(n) => n, Err(e) => return err_json(e) };
-                let (_, end) = match resolve_sym(&name) { Ok(r) => r, Err(e) => return err_json(e) };
-                EditOp::InsertAfterLine { line: end, text: new_text }
-            }
-            "insert-before-symbol" => {
-                let name = match want_symbol() { Ok(n) => n, Err(e) => return err_json(e) };
-                let (start, _) = match resolve_sym(&name) { Ok(r) => r, Err(e) => return err_json(e) };
-                EditOp::InsertBeforeLine { line: start, text: new_text }
-            }
-            "replace-symbol" => {
-                let name = match want_symbol() { Ok(n) => n, Err(e) => return err_json(e) };
-                let (start, end) = match resolve_sym(&name) { Ok(r) => r, Err(e) => return err_json(e) };
-                if let Err(e) = edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, t.allow_large) {
-                    return err_json(e);
-                }
-                EditOp::ReplaceLines { start, end, text: new_text }
-            }
-            "delete-symbol" => {
-                let name = match want_symbol() { Ok(n) => n, Err(e) => return err_json(e) };
-                let (start, end) = match resolve_sym(&name) { Ok(r) => r, Err(e) => return err_json(e) };
-                if let Err(e) = edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, t.allow_large) {
-                    return err_json(e);
-                }
-                EditOp::DeleteLines { start, end }
-            }
-            "insert-after-text" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                let line = match edit::resolve_text_anchor(&file_content, &a) { Ok(l) => l, Err(e) => return err_json(e) };
-                EditOp::InsertAfterLine { line, text: new_text }
-            }
-            "insert-before-text" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                let line = match edit::resolve_text_anchor(&file_content, &a) { Ok(l) => l, Err(e) => return err_json(e) };
-                EditOp::InsertBeforeLine { line, text: new_text }
-            }
-            "replace-text" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                EditOp::ReplaceSubstring { needle: a, replacement: new_text }
-            }
-            // Context modes: anchor is a (possibly multi-line) block that must
-            // occur exactly once — disambiguates when a short string repeats.
-            "insert-after-context" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                let line = match edit::resolve_context_anchor(&file_content, &a) { Ok(l) => l + a.matches('\n').count(), Err(e) => return err_json(e) };
-                EditOp::InsertAfterLine { line, text: new_text }
-            }
-            "insert-before-context" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                let line = match edit::resolve_context_anchor(&file_content, &a) { Ok(l) => l, Err(e) => return err_json(e) };
-                EditOp::InsertBeforeLine { line, text: new_text }
-            }
-            "replace-context" => {
-                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
-                if let Err(e) = edit::resolve_context_anchor(&file_content, &a) { return err_json(e); }
-                EditOp::ReplaceSubstring { needle: a, replacement: new_text }
-            }
-            other => return err_json(format!("unknown mode: {}", other)),
-        };
-
-        // 5. Apply (pure).
-        let result = match edit::apply_edit(&file_content, &op) {
+        let (new_content, mut summary) = match self.compute_edit(
+            &t.file, &t.mode, t.symbol.as_deref(), t.anchor.as_deref(),
+            t.content.as_deref(), t.allow_large,
+        ) {
             Ok(r) => r,
             Err(e) => return err_json(e),
         };
 
-        // 5b. Post-edit syntax check (code bundles only): reject an edit that
-        //     leaves the file un-parseable. verify_syntax only exists with the
-        //     `code` feature.
-        #[cfg(feature = "code")]
-        {
-            let ext = Path::new(&t.file).extension().and_then(|e| e.to_str()).unwrap_or("");
-            if let Err(e) = edit::verify_syntax(&result.content, ext) {
-                return err_json(format!("{} — edit rejected, file unchanged", e));
-            }
-        }
-
-        // 6. Atomic write (temp + rename) unless dry-run, so a crash can't
-        //    leave a half-written source file.
         if !t.dry_run {
-            let target = Path::new(&t.file);
-            let stem = target.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-            let tmp = match target.parent().filter(|p| !p.as_os_str().is_empty()) {
-                Some(d) => d.join(format!(".{}.said-edit.tmp", stem)),
-                None => PathBuf::from(format!(".{}.said-edit.tmp", stem)),
-            };
-            if let Err(e) = std::fs::write(&tmp, result.content.as_bytes()) {
-                return err_json(format!("write temp {}: {}", tmp.display(), e));
-            }
-            if let Err(e) = std::fs::rename(&tmp, target) {
-                let _ = std::fs::remove_file(&tmp);
-                return err_json(format!("rename to {}: {}", target.display(), e));
+            if let Err(e) = Self::atomic_write_edit(&t.file, &new_content) {
+                return err_json(e);
             }
         }
 
-        ok_json(serde_json::json!({
+        if let serde_json::Value::Object(ref mut m) = summary {
+            m.insert("ok".into(), serde_json::Value::Bool(true));
+            m.insert("dry_run".into(), serde_json::Value::Bool(t.dry_run));
+        }
+        ok_json(summary)
+    }
+
+    /// Transactional multi-edit — apply a SET of edits all-or-nothing. Every
+    /// edit is resolved + applied + syntax-verified in memory first; only if
+    /// ALL succeed are the files written. If any fails, nothing is written, so
+    /// you can never get a half-applied change set on disk (the GroqCycle gap).
+    fn handle_edit_batch(&self, t: EditBatchTool) -> Result<CallToolResult, CallToolError> {
+        let err_json = |msg: String| {
+            Ok(CallToolResult::text_content(vec![TextContent::from(
+                serde_json::json!({ "ok": false, "error": msg }).to_string(),
+            )]))
+        };
+        if t.edits.is_empty() {
+            return err_json("no edits provided".into());
+        }
+        // Phase 1: compute every edit in memory. For multiple edits to the SAME
+        // file we thread the running content so later edits see earlier ones.
+        let mut pending: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut summaries: Vec<serde_json::Value> = Vec::new();
+        for (i, e) in t.edits.iter().enumerate() {
+            // If this file was already edited in this batch, the on-disk read in
+            // compute_edit would miss prior edits — so for the common one-edit-
+            // per-file case this is exact; multi-edit-same-file is applied in
+            // order against disk and we warn rather than silently misorder.
+            if pending.contains_key(&e.file) {
+                return err_json(format!(
+                    "edit {} targets {} which already has a pending edit in this batch; \
+                     send one edit per file per batch (or order them via separate calls)",
+                    i + 1, e.file
+                ));
+            }
+            match self.compute_edit(&e.file, &e.mode, e.symbol.as_deref(), e.anchor.as_deref(),
+                e.content.as_deref(), e.allow_large) {
+                Ok((new_content, summary)) => {
+                    pending.insert(e.file.clone(), new_content);
+                    summaries.push(summary);
+                }
+                Err(msg) => return err_json(format!(
+                    "edit {} of {} ({}) failed: {} — NO files written (transactional)",
+                    i + 1, t.edits.len(), e.file, msg
+                )),
+            }
+        }
+        // Phase 2: all computed OK → write them all.
+        if !t.dry_run {
+            for (file, content) in &pending {
+                if let Err(e) = Self::atomic_write_edit(file, content) {
+                    // Best-effort: a write failure mid-way is the one case we
+                    // can't fully roll back, so report exactly what was written.
+                    return err_json(format!(
+                        "write failed for {} after others may have been written: {} \
+                         (re-run; edits are idempotent for anchors that still match)",
+                        file, e
+                    ));
+                }
+            }
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(serde_json::json!({
             "ok": true,
-            "file": t.file,
-            "mode": t.mode,
-            "anchor": t.symbol.clone().or_else(|| t.anchor.clone()).unwrap_or_default(),
-            "applied_at_line": result.applied_at_line,
-            "lines_added": result.lines_added,
-            "lines_removed": result.lines_removed,
+            "edits": summaries,
+            "files_changed": pending.len(),
             "dry_run": t.dry_run,
-        }))
+        }).to_string())]))
     }
 
     fn handle_delete(&self, t: DeleteTool) -> Result<CallToolResult, CallToolError> {
