@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optiona
 
 # Cross-platform config dir lookup (used on non-Windows in resolve.rs).
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-dirs_next = "2"
+dirs-next = "2"
 
 [features]
 default = []
