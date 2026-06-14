@@ -189,8 +189,9 @@ Branch the repair loop on the **exit code** (non-zero = failed), then read
 
 ## 4. How the Groq cycle should use it (the change to GroqCycle.cs)
 
-**Stop asking the LLM for full file content.** Instead ask for a structured edit
-set and apply each via `said edit` in the cloned repo:
+**Stop asking the LLM for full file content.** Ask for a structured edit set
+using the **0.6.0 recommended modes** (see §4 recommendation below), and apply
+them transactionally. Example — add an endpoint + its test:
 
 ```json
 {
@@ -198,22 +199,38 @@ set and apply each via `said edit` in the cloned repo:
   "edits": [
     { "file": "src/Advisory.Api/Program.cs",
       "mode": "insert-after-text",
-      "anchor": "app.MapGet(\"/api/pid\"",
-      "content": "app.MapGet(\"/api/host\", () => Results.Ok(new { host = Environment.MachineName })).AllowAnonymous();" }
+      "anchor": "app.MapGet(\"/api/pid\", () => Results.Ok(pid));",
+      "content": "app.MapGet(\"/api/host\", () => Results.Ok(new { host = Environment.MachineName })).AllowAnonymous();" },
+    { "file": "tests/Advisory.Tests/HealthTests.cs",
+      "mode": "append-into-symbol",
+      "symbol": "HealthTests",
+      "content": "[Fact]\npublic async Task Host_returns_200() { /* ... */ }" }
   ]
 }
 ```
 
-For each edit, run in the clone's working dir:
-```bash
-said edit --path <clone>/Advisory.said --file <edit.file> <edit.mode> \
-  (--symbol <s> | --anchor <a>) --content-file <tmp> --json
-```
-If any edit returns `ok:false`, **abort the whole change set** (don't open a
-partial PR). Optionally `said reindex <file>` after to refresh the clone's brain.
+Notes on the example:
+- **Endpoint = `insert-after-text`** — fine for a single, clearly-unique line.
+  The `anchor` must be a **complete line** (the full `app.MapGet(...);` statement,
+  not a prefix) so the new line lands *after* it, never inside it. If the line
+  might repeat, use `insert-after-context` with a unique multi-line block.
+- **Test = `append-into-symbol --symbol HealthTests`** — adds the `[Fact]` method
+  at class scope, auto-indented, so it can never nest inside another method
+  (the CS0106 class of failures is impossible here by construction).
 
-**Net effect:** the LLM can only insert/replace at a named anchor — it physically
-cannot delete the rest of a file.
+Apply the set **all-or-nothing**. Two equivalent ways:
+- **MCP:** call the `edit_batch` tool with the `edits` array — it computes +
+  syntax-verifies every edit in memory and writes only if all pass.
+- **CLI:** run `said edit ... --json` per edit; on any `ok:false` (non-zero exit)
+  **abort the whole set** and don't open a PR. On a rejection, read `valid_anchors`
+  from the error and retry that edit once with a suggested move. Use `--explain`
+  first if unsure where a member should go.
+
+After applying, optionally `said reindex <file>` to refresh the clone's brain.
+
+**Net effect:** the LLM can only insert/replace at a named anchor or append into
+a named scope — it physically cannot delete the rest of a file or nest a member
+inside another method.
 
 ### Recommendation (0.6.0) — the patterns that maximize first-try success
 
