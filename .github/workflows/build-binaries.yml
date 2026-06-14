@@ -20,13 +20,14 @@ on:
 
 jobs:
   build:
-    name: ${{ matrix.bundle }}-${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.bundle }}-${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.os }}
     strategy:
       fail-fast: false
       matrix:
+        # Two real axes → full cross-product = 4 bundles × 3 OSes = 12 jobs.
         bundle: [brain, coding, coding-plus, full]
-        include:
+        target:
           - { name: linux-x64,   os: ubuntu-22.04,   cli: said,     mcp: said-mcp }
           - { name: windows-x64, os: windows-latest, cli: said.exe, mcp: said-mcp.exe }
           - { name: macos-arm64, os: macos-14,       cli: said,     mcp: said-mcp }
@@ -56,13 +57,13 @@ jobs:
         run: cargo build --release -p said-mcp --no-default-features --features "${{ matrix.bundle }}"
       - name: Smoke test (CLI runs)
         shell: bash
-        run: ./target/release/${{ matrix.cli }} --version
+        run: ./target/release/${{ matrix.target.cli }} --version
       - name: Stage
         shell: bash
-        run: mkdir -p dist && cp "target/release/${{ matrix.cli }}" "target/release/${{ matrix.mcp }}" dist/ && ls -la dist
+        run: mkdir -p dist && cp "target/release/${{ matrix.target.cli }}" "target/release/${{ matrix.target.mcp }}" dist/ && ls -la dist
       - uses: actions/upload-artifact@v5
         with:
-          name: said-${{ matrix.bundle }}-${{ matrix.name }}
+          name: said-${{ matrix.bundle }}-${{ matrix.target.name }}
           path: dist/*
           if-no-files-found: error
 
