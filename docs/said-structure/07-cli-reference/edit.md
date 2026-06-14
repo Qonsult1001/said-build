@@ -28,6 +28,17 @@ said edit --file <relative/path> <MODE> [--symbol <name> | --anchor <text>] \
 | `insert-after-text`    | `--anchor` | Insert after the first line containing the exact anchor substring. |
 | `insert-before-text`   | `--anchor` | Insert before the first line containing the anchor. |
 | `replace-text`         | `--anchor` | Replace only the matched substring (first occurrence). |
+| `insert-after-context` | `--anchor` | `--anchor` is a (multi-line) block that must occur **exactly once**; insert after it. |
+| `insert-before-context`| `--anchor` | Same uniqueness rule; insert before the block. |
+| `replace-context`      | `--anchor` | Replace the unique block. Errors on 0 or >1 matches. |
+
+**Context vs text anchors:** `*-text` uses the *first* line containing the substring;
+`*-context` requires the (possibly multi-line) anchor to be **unique** and errors if it
+repeats. Prefer `*-context` for autonomous edits where a short string might appear twice.
+
+**Syntax verification:** after every edit, code files are re-parsed with tree-sitter; an
+edit that would introduce a syntax error is **rejected and the file is left unchanged**.
+Pass `--no-verify` to skip. Unknown file types skip the check automatically.
 
 Provide new content with `--content <inline>` or `--content-file <path>` (preferred for multi-line code).
 `delete-symbol` needs neither.

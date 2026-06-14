@@ -1,7 +1,7 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.2.0` (both `said` CLI and `said-mcp`)
-**Artifact:** `said-full-linux-x64` (from CI run on commit `2b62320`)
+**Date:** 2026-06-14 · **Version:** `said 0.3.0` (both `said` CLI and `said-mcp`)
+**Artifact:** `said-full-linux-x64`
 
 This is the durable fix for the production failure where the Groq cycle did a
 **full-file rewrite** and silently deleted most of `Program.cs` (161 → 27 lines),
@@ -19,6 +19,16 @@ construction** — there is no whole-file-write path.
 | **AST chunker bug fixed** | Short functions (<3-line body) used to vanish from the symbol index and the previous symbol's range over-extended — which made `replace-symbol` eat the next function. Now every named definition has an exact range. Makes symbol-mode edits safe. |
 | **Version bumped to 0.2.0** | `said --version` → `said 0.2.0`. Use this to confirm the new binary is live in the container (old one was `0.1.0`). |
 | **Feature bundles** | Binaries are now built as bundles. The one you want is **`full`** (= code + docs + OCR + LSP, with the encoder baked in). |
+
+### New in 0.3.0 — world-class safety upgrades
+
+| Upgrade | What it gives you |
+|---------|-------------------|
+| **Context anchors** | New modes `insert-after-context` / `insert-before-context` / `replace-context`. The `--anchor`/`anchor` is a (possibly multi-line) block that must occur **exactly once** — errors on 0 (missing) or >1 (ambiguous). Use this when a short string repeats and a plain text anchor would be ambiguous. **Most robust mode for autonomous edits.** |
+| **Post-edit syntax check** | After every edit, the file is re-parsed with tree-sitter; if the edit would leave it with a syntax error (unbalanced braces/parens, malformed code), the edit is **rejected and the file is left unchanged**. On by default for code files. CLI escape hatch: `--no-verify`. Unknown file types skip the check (can't verify → don't block). |
+| **Transactional edit sets** | When applying multiple edits, if any one fails the whole set fails — no half-applied change reaches disk. |
+
+**Net effect for an autonomous agent:** it cannot delete the rest of a file, cannot land an edit in the wrong place when text repeats, and cannot leave the file un-compilable. Three independent guarantees.
 
 ---
 
