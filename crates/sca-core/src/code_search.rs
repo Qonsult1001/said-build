@@ -46,6 +46,68 @@ pub struct CodeChunk {
 // TREE-SITTER AST CHUNKING
 // =========================================================================
 
+/// Map a file extension to its tree-sitter `Language`, if we have a grammar.
+/// `None` means "no grammar bundled" (caller should skip syntax-aware work).
+/// SQL is intentionally `None` here — it uses the custom GO-batch parser, not
+/// tree-sitter, so we cannot syntax-verify it this way.
+#[cfg(feature = "code")]
+fn language_for_ext(extension: &str) -> Option<tree_sitter::Language> {
+    Some(match extension {
+        "rs" => tree_sitter_rust::LANGUAGE.into(),
+        "py" => tree_sitter_python::LANGUAGE.into(),
+        "js" | "jsx" | "mjs" => tree_sitter_javascript::LANGUAGE.into(),
+        "ts" | "tsx" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        "go" => tree_sitter_go::LANGUAGE.into(),
+        "java" => tree_sitter_java::LANGUAGE.into(),
+        "cs" => tree_sitter_c_sharp::LANGUAGE.into(),
+        _ => return None,
+    })
+}
+
+/// Verify that `source` parses without syntax errors under the grammar for
+/// `extension`. Returns `Ok(())` when the file is syntactically valid OR when
+/// we have no grammar for that extension (can't verify → don't block).
+/// Returns `Err` only when we DO have a grammar and the parse contains an
+/// ERROR or missing node — i.e. the edit left the file un-parseable.
+#[cfg(feature = "code")]
+pub fn verify_syntax(source: &str, extension: &str) -> Result<(), String> {
+    use tree_sitter::Parser;
+    let language = match language_for_ext(extension) {
+        Some(l) => l,
+        None => return Ok(()), // no grammar → cannot verify, allow
+    };
+    let mut parser = Parser::new();
+    if parser.set_language(&language).is_err() {
+        return Ok(()); // grammar load failed → don't block the edit
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return Err("parse failed entirely".to_string()),
+    };
+    if node_has_error(tree.root_node()) {
+        return Err(format!(
+            "edit would leave {} with a syntax error (unbalanced braces/parens or malformed code)",
+            extension
+        ));
+    }
+    Ok(())
+}
+
+/// Recursively check whether any node in the tree is an ERROR or is missing.
+#[cfg(feature = "code")]
+fn node_has_error(node: tree_sitter::Node) -> bool {
+    if node.is_error() || node.is_missing() {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if node_has_error(child) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Chunk code by AST boundaries using tree-sitter.
 /// Each function/class/struct/impl becomes one chunk.
 #[cfg(feature = "code")]

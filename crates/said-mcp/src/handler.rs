@@ -1946,6 +1946,23 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
                 EditOp::ReplaceSubstring { needle: a, replacement: new_text }
             }
+            // Context modes: anchor is a (possibly multi-line) block that must
+            // occur exactly once — disambiguates when a short string repeats.
+            "insert-after-context" => {
+                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
+                let line = match edit::resolve_context_anchor(&file_content, &a) { Ok(l) => l + a.matches('\n').count(), Err(e) => return err_json(e) };
+                EditOp::InsertAfterLine { line, text: new_text }
+            }
+            "insert-before-context" => {
+                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
+                let line = match edit::resolve_context_anchor(&file_content, &a) { Ok(l) => l, Err(e) => return err_json(e) };
+                EditOp::InsertBeforeLine { line, text: new_text }
+            }
+            "replace-context" => {
+                let a = match want_anchor() { Ok(a) => a, Err(e) => return err_json(e) };
+                if let Err(e) = edit::resolve_context_anchor(&file_content, &a) { return err_json(e); }
+                EditOp::ReplaceSubstring { needle: a, replacement: new_text }
+            }
             other => return err_json(format!("unknown mode: {}", other)),
         };
 
@@ -1954,6 +1971,17 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             Ok(r) => r,
             Err(e) => return err_json(e),
         };
+
+        // 5b. Post-edit syntax check (code bundles only): reject an edit that
+        //     leaves the file un-parseable. verify_syntax only exists with the
+        //     `code` feature.
+        #[cfg(feature = "code")]
+        {
+            let ext = Path::new(&t.file).extension().and_then(|e| e.to_str()).unwrap_or("");
+            if let Err(e) = edit::verify_syntax(&result.content, ext) {
+                return err_json(format!("{} — edit rejected, file unchanged", e));
+            }
+        }
 
         // 6. Atomic write (temp + rename) unless dry-run, so a crash can't
         //    leave a half-written source file.

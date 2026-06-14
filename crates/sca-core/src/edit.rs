@@ -150,6 +150,25 @@ pub fn apply_edit(content: &str, op: &EditOp) -> Result<EditResult, String> {
     }
 }
 
+/// Apply a sequence of edits transactionally to `content`. Each op sees the
+/// result of the previous one. If ANY op fails, the whole call returns `Err`
+/// and the returned string is never the partially-edited content — the caller
+/// writes nothing, so no half-applied change reaches disk.
+///
+/// Note: ops are applied in the given order against shifting line numbers, so
+/// callers passing line-based ops should order them bottom-to-top or use
+/// text/context anchors (which re-resolve against the current content). The
+/// transactional guarantee holds regardless of ordering.
+pub fn apply_all(content: &str, ops: &[EditOp]) -> Result<String, String> {
+    let mut current = content.to_string();
+    for (i, op) in ops.iter().enumerate() {
+        let r = apply_edit(&current, op)
+            .map_err(|e| format!("edit {} of {} failed: {}", i + 1, ops.len(), e))?;
+        current = r.content;
+    }
+    Ok(current)
+}
+
 /// Validate an inclusive 1-based line range against the file's line count.
 fn check_range(start: usize, end: usize, total: usize) -> Result<(), String> {
     if start == 0 || end == 0 {
@@ -248,6 +267,46 @@ pub fn is_safe_relative_path(file: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Verify that `content` is still syntactically valid for the given file
+/// `extension` after an edit, using tree-sitter (only when the `code` feature
+/// is enabled). Returns `Ok(())` if valid or if no grammar is available; `Err`
+/// if the edit left the file un-parseable. Without the `code` feature this is
+/// always `Ok` (no grammars compiled in).
+#[cfg(feature = "code")]
+pub fn verify_syntax(content: &str, extension: &str) -> Result<(), String> {
+    crate::code_search::verify_syntax(content, extension)
+}
+
+/// Resolve a (possibly multi-line) context block to the 1-based line number
+/// where it starts. Unlike [`resolve_text_anchor`], this requires the block to
+/// occur **exactly once** — errors on 0 (missing) or >1 (ambiguous) so an edit
+/// can never land in the wrong place when a short string repeats.
+pub fn resolve_context_anchor(content: &str, block: &str) -> Result<usize, String> {
+    // Count occurrences of the exact block.
+    let mut count = 0usize;
+    let mut first_pos: Option<usize> = None;
+    let mut search_from = 0usize;
+    while let Some(rel) = content[search_from..].find(block) {
+        let pos = search_from + rel;
+        if first_pos.is_none() {
+            first_pos = Some(pos);
+        }
+        count += 1;
+        search_from = pos + block.len().max(1);
+    }
+    match count {
+        0 => Err(format!("context block not found: {:?}", block)),
+        1 => {
+            let pos = first_pos.unwrap();
+            Ok(content[..pos].matches('\n').count() + 1)
+        }
+        n => Err(format!(
+            "ambiguous: context block occurs {} times; add more surrounding lines to make it unique",
+            n
+        )),
+    }
 }
 
 /// Resolve an exact-substring anchor to the 1-based line number of the first
@@ -448,5 +507,81 @@ mod tests {
         // Brain may store paths with forward slashes even on Windows.
         let cands = vec![cand("src/a/Program.cs::Foo::method:5", "Foo", 5, 8)];
         assert!(resolve_symbol_in_file(&cands, "src\\a\\Program.cs").is_ok());
+    }
+
+    // ---- multi-line context anchor (disambiguation) --------------------
+
+    #[test]
+    fn context_anchor_resolves_unique_multiline_block() {
+        let src = "fn a() {\n    let x = 1;\n    return x;\n}\nfn b() {\n    let x = 1;\n    return x + 1;\n}\n";
+        // "let x = 1;\n    return x;" is unique (only in fn a). 1-based start line.
+        let line = resolve_context_anchor(src, "let x = 1;\n    return x;").unwrap();
+        assert_eq!(line, 2);
+    }
+
+    #[test]
+    fn context_anchor_ambiguous_block_errors() {
+        // "let x = 1;" alone appears twice → ambiguous, must error not guess.
+        let src = "fn a() {\n    let x = 1;\n}\nfn b() {\n    let x = 1;\n}\n";
+        let err = resolve_context_anchor(src, "    let x = 1;").unwrap_err();
+        assert!(err.to_lowercase().contains("ambiguous") || err.contains("2"));
+    }
+
+    #[test]
+    fn context_anchor_missing_errors() {
+        let src = "fn a() {}\n";
+        assert!(resolve_context_anchor(src, "no such block").is_err());
+    }
+
+    // ---- post-edit syntax verification (code feature only) -------------
+
+    #[cfg(feature = "code")]
+    #[test]
+    fn valid_rust_passes_syntax_check() {
+        assert!(verify_syntax("fn a() { let x = 1; }\n", "rs").is_ok());
+    }
+
+    #[cfg(feature = "code")]
+    #[test]
+    fn broken_rust_fails_syntax_check() {
+        // Unbalanced brace — tree-sitter produces an ERROR node.
+        assert!(verify_syntax("fn a() { let x = 1;\n", "rs").is_err());
+    }
+
+    #[cfg(feature = "code")]
+    #[test]
+    fn unknown_extension_skips_check_returns_ok() {
+        // No grammar for this extension → we can't verify, so don't block.
+        assert!(verify_syntax("anything at all }{", "zzz").is_ok());
+    }
+
+    // ---- transactional multi-edit (all-or-nothing) --------------------
+
+    #[test]
+    fn apply_all_applies_every_op_in_sequence() {
+        let src = "line1\nANCHOR_A\nline3\nANCHOR_B\n";
+        let ops = vec![
+            EditOp::InsertAfterLine { line: 2, text: "added_after_A".to_string() },
+            EditOp::ReplaceSubstring { needle: "ANCHOR_B".to_string(), replacement: "REPLACED_B".to_string() },
+        ];
+        let out = apply_all(src, &ops).unwrap();
+        assert!(out.contains("added_after_A"));
+        assert!(out.contains("REPLACED_B"));
+        assert!(out.contains("line1") && out.contains("line3"));
+    }
+
+    #[test]
+    fn apply_all_rolls_back_if_any_op_fails() {
+        let src = "only\ntwo\n";
+        let ops = vec![
+            EditOp::InsertAfterLine { line: 1, text: "ok_insert".to_string() }, // valid
+            EditOp::InsertAfterLine { line: 999, text: "boom".to_string() },     // out of range → fails
+        ];
+        let result = apply_all(src, &ops);
+        assert!(result.is_err(), "the set must fail as a whole");
+        // apply_all returns Err on any failure, so the caller writes nothing
+        // (no partial application reaches disk). Confirm it carries the failure.
+        let err = result.unwrap_err();
+        assert!(err.contains("999") || err.to_lowercase().contains("range"));
     }
 }

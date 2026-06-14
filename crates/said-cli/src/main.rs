@@ -208,6 +208,10 @@ enum Commands {
         /// Allow a replace/delete that spans more than the default max lines.
         #[arg(long)]
         allow_large: bool,
+        /// Skip the post-edit syntax check (code bundles verify the edited file
+        /// still parses via tree-sitter and reject syntax-breaking edits).
+        #[arg(long)]
+        no_verify: bool,
     },
     /// Show cognitive lineage for a symbol or doc_id — a "semantic git log".
     /// Walks the tombstone chain and shows each version with its delta.
@@ -1168,10 +1172,10 @@ fn main() {
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, ref anchor, ref content, ref content_file,
-            dry_run, allow_large,
+            dry_run, allow_large, no_verify,
         } => cmd_edit(
             cli.path.as_deref(), file, mode, symbol.as_deref(), anchor.as_deref(),
-            content.as_deref(), content_file.as_deref(), dry_run, allow_large, cli.json,
+            content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, cli.json,
         ),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
@@ -5915,6 +5919,7 @@ fn cmd_edit(
     content_file: Option<&str>,
     dry_run: bool,
     allow_large: bool,
+    no_verify: bool,
     json: bool,
 ) -> Result<(), String> {
     use edit::EditOp;
@@ -6025,6 +6030,32 @@ fn cmd_edit(
             let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
             EditOp::ReplaceSubstring { needle: a.to_string(), replacement: new_text }
         }
+        // Context modes: --anchor is a (possibly multi-line) block that must
+        // occur EXACTLY ONCE — disambiguates when a short string repeats.
+        "insert-after-context" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            let line = match edit::resolve_context_anchor(&file_content, a) {
+                Ok(l) => l + a.matches('\n').count(), // after the LAST line of the block
+                Err(e) => return fail(e),
+            };
+            EditOp::InsertAfterLine { line, text: new_text }
+        }
+        "insert-before-context" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            let line = match edit::resolve_context_anchor(&file_content, a) {
+                Ok(l) => l,
+                Err(e) => return fail(e),
+            };
+            EditOp::InsertBeforeLine { line, text: new_text }
+        }
+        "replace-context" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            // Confirm uniqueness first (errors on 0 or >1), then replace the block.
+            if let Err(e) = edit::resolve_context_anchor(&file_content, a) {
+                return fail(e);
+            }
+            EditOp::ReplaceSubstring { needle: a.to_string(), replacement: new_text }
+        }
         other => return fail(format!("unknown mode: {}", other)),
     };
 
@@ -6033,6 +6064,20 @@ fn cmd_edit(
         Ok(r) => r,
         Err(e) => return fail(e),
     };
+
+    // 5b. Post-edit syntax check (code bundles only): reject an edit that
+    //     would leave the file un-parseable, so a bad edit can't land. The
+    //     verify_syntax fn only exists when built with the `code` feature.
+    #[cfg(feature = "code")]
+    if !no_verify {
+        let ext = std::path::Path::new(file)
+            .extension().and_then(|e| e.to_str()).unwrap_or("");
+        if let Err(e) = edit::verify_syntax(&result.content, ext) {
+            return fail(format!("{} — edit rejected, file unchanged", e));
+        }
+    }
+    #[cfg(not(feature = "code"))]
+    let _ = no_verify;
 
     // 6. Write atomically (temp + rename) unless this is a dry run.
     if !dry_run {
