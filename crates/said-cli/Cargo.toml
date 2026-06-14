@@ -43,3 +43,18 @@ forge-sql-verify = ["forge", "said-forge/forge-sql-verify"]
 # Use `cargo build --release --features release` to produce the ship-ready
 # `said` binary (code intel + docs + video + model + LSP + forge).
 release = ["code", "docs", "ocr", "whisper", "embed-model", "lsp", "forge", "forge-xlsx", "forge-docs"]
+
+# ---------------------------------------------------------------------------
+# Shipping bundles. Every bundle bakes the said-lam encoder into the binary
+# (embed-model) so each variant is a self-contained, single-file portable
+# brain — no external model folder required.
+#
+#   brain        portable brain only (semantic memory over text you give it)
+#   coding       brain + code intelligence (24 languages)
+#   coding-plus  coding + LSP cross-file intelligence
+#   full         everything readable: code + docs (PDF/DOCX) + OCR + LSP
+# ---------------------------------------------------------------------------
+brain = ["embed-model"]
+coding = ["embed-model", "code"]
+coding-plus = ["embed-model", "code", "lsp"]
+full = ["embed-model", "code", "docs", "ocr", "lsp"]

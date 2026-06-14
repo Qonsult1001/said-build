@@ -1,8 +1,17 @@
 name: build-binaries
 
-# Builds `said` (CLI) + `said-mcp` for Linux / Windows / macOS.
-# The encoder model is committed in this repo (SAID-LAM-private/said-lam-static),
-# so NO secrets/tokens are needed. Runs on tag push (v*) or manual dispatch.
+# Builds `said` (CLI) + `said-mcp` for Linux / Windows / macOS in four
+# feature bundles. The encoder model is committed in this repo
+# (SAID-LAM-private/said-lam-static) AND baked into every binary via the
+# `embed-model` feature, so each artifact is a self-contained portable brain.
+#
+#   brain        portable brain only (embed-model)
+#   coding       brain + code intelligence            (embed-model, code)
+#   coding-plus  coding + LSP                          (embed-model, code, lsp)
+#   full         code + docs + OCR + LSP               (embed-model, code, docs, ocr, lsp)
+#
+# Built with --no-default-features so each bundle is exactly its feature set.
+# Runs on tag push (v*) or manual dispatch. No secrets/tokens needed.
 
 on:
   push:
@@ -11,17 +20,18 @@ on:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.bundle }}-${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        bundle: [brain, coding, coding-plus, full]
         include:
           - { name: linux-x64,   os: ubuntu-22.04,   cli: said,     mcp: said-mcp }
           - { name: windows-x64, os: windows-latest, cli: said.exe, mcp: said-mcp.exe }
           - { name: macos-arm64, os: macos-14,       cli: said,     mcp: said-mcp }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Verify encoder present (real bytes)
         shell: bash
         run: |
@@ -29,25 +39,30 @@ jobs:
           test -f "$f" && test "$(wc -c < "$f")" -gt 1000000 || { echo "::error::encoder missing/pointer"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.bundle }}
       - name: Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake clang libssl-dev
       - name: macOS deps
         if: runner.os == 'macOS'
         run: brew install cmake
-      - name: Build said CLI
-        run: cargo build --release -p said-cli --features "code,docs"
-      - name: Build said-mcp
-        run: cargo build --release -p said-mcp --features "code"
+      - name: Windows deps (cmake for OCR)
+        if: runner.os == 'Windows'
+        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+      - name: Build said CLI (${{ matrix.bundle }})
+        run: cargo build --release -p said-cli --no-default-features --features "${{ matrix.bundle }}"
+      - name: Build said-mcp (${{ matrix.bundle }})
+        run: cargo build --release -p said-mcp --no-default-features --features "${{ matrix.bundle }}"
       - name: Smoke test (CLI runs)
         shell: bash
         run: ./target/release/${{ matrix.cli }} --version
       - name: Stage
         shell: bash
         run: mkdir -p dist && cp "target/release/${{ matrix.cli }}" "target/release/${{ matrix.mcp }}" dist/ && ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
-          name: said-${{ matrix.name }}
+          name: said-${{ matrix.bundle }}-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
@@ -57,7 +72,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions: { contents: write }
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with: { path: artifacts }
       - run: cd artifacts && for d in */; do (cd "$d" && zip -r "../${d%/}.zip" .); done
       - uses: softprops/action-gh-release@v2
