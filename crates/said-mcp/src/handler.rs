@@ -112,6 +112,20 @@ fn detect_lsp_server(file_path: &str) -> &'static str {
     }
 }
 
+/// Build the JSON error payload for an edit failure. If `msg` is itself a JSON
+/// object (a structured error from `compute_edit` carrying `valid_anchors`),
+/// merge `ok:false` into it so the repair menu surfaces at the top level.
+/// Otherwise wrap the plain string as `{ ok:false, error: msg }`.
+fn edit_error_payload(msg: &str) -> serde_json::Value {
+    if let Ok(serde_json::Value::Object(mut m)) = serde_json::from_str::<serde_json::Value>(msg) {
+        if m.contains_key("error") {
+            m.insert("ok".into(), serde_json::Value::Bool(false));
+            return serde_json::Value::Object(m);
+        }
+    }
+    serde_json::json!({ "ok": false, "error": msg })
+}
+
 impl SaidServerHandler {
     /// Snapshot the currently-attached brain path. Cloning a short string
     /// under lock is cheap and releases the mutex immediately.
@@ -1937,6 +1951,12 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, allow_large)?;
                 EditOp::DeleteLines { start, end }
             }
+            // Scope-aware: insert just before the named scope's closing brace,
+            // so a new member lands at the right (class) scope, never nested.
+            "append-into-symbol" => {
+                let (_, end) = resolve_sym(&want_symbol()?)?;
+                EditOp::InsertBeforeLine { line: end, text: new_text }
+            }
             "insert-after-text" => {
                 let a = want_anchor()?;
                 let line = edit::resolve_text_anchor(&file_content, &a)?;
@@ -1973,8 +1993,21 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         #[cfg(feature = "code")]
         {
             let ext = Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
-            edit::verify_syntax(&result.content, ext)
-                .map_err(|e| format!("{} — edit rejected, file unchanged", e))?;
+            if let Err(e) = edit::verify_syntax(&result.content, ext) {
+                // Attach a structured, model-agnostic repair menu (copy-paste
+                // ready said-edit moves) computed live from the AST at the
+                // landing line. Encoded as JSON in the error so callers can
+                // parse `valid_anchors` for one-shot correction.
+                let suggestions = sca_core::code_search::suggest_anchors(
+                    &file_content, ext, result.applied_at_line);
+                let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
+                    "mode": s.mode, "symbol": s.symbol, "note": s.note,
+                })).collect();
+                return Err(serde_json::json!({
+                    "error": format!("{} — edit rejected, file unchanged", e),
+                    "valid_anchors": valid,
+                }).to_string());
+            }
         }
 
         let summary = serde_json::json!({
@@ -2012,9 +2045,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             Ok(CallToolResult::text_content(vec![TextContent::from(msg.to_string())]))
         };
         let err_json = |msg: String| {
-            Ok(CallToolResult::text_content(vec![TextContent::from(
-                serde_json::json!({ "ok": false, "error": msg }).to_string(),
-            )]))
+            Ok(CallToolResult::text_content(vec![TextContent::from(edit_error_payload(&msg).to_string())]))
         };
 
         let (new_content, mut summary) = match self.compute_edit(
@@ -2044,9 +2075,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
     /// you can never get a half-applied change set on disk (the GroqCycle gap).
     fn handle_edit_batch(&self, t: EditBatchTool) -> Result<CallToolResult, CallToolError> {
         let err_json = |msg: String| {
-            Ok(CallToolResult::text_content(vec![TextContent::from(
-                serde_json::json!({ "ok": false, "error": msg }).to_string(),
-            )]))
+            Ok(CallToolResult::text_content(vec![TextContent::from(edit_error_payload(&msg).to_string())]))
         };
         if t.edits.is_empty() {
             return err_json("no edits provided".into());
@@ -2073,10 +2102,19 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                     pending.insert(e.file.clone(), new_content);
                     summaries.push(summary);
                 }
-                Err(msg) => return err_json(format!(
-                    "edit {} of {} ({}) failed: {} — NO files written (transactional)",
-                    i + 1, t.edits.len(), e.file, msg
-                )),
+                Err(msg) => {
+                    // Preserve a structured error (with valid_anchors) if compute_edit
+                    // produced one, adding batch context; else wrap the plain string.
+                    let mut payload = edit_error_payload(&msg);
+                    if let serde_json::Value::Object(ref mut m) = payload {
+                        m.insert("failed_edit".into(), serde_json::json!({
+                            "index": i + 1, "of": t.edits.len(), "file": e.file,
+                        }));
+                        m.insert("note".into(), serde_json::Value::String(
+                            "NO files written (transactional)".into()));
+                    }
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(payload.to_string())]));
+                }
             }
         }
         // Phase 2: all computed OK → write them all.

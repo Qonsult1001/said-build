@@ -1,6 +1,6 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.4.0` (both `said` CLI and `said-mcp`)
+**Date:** 2026-06-14 · **Version:** `said 0.5.0` (both `said` CLI and `said-mcp`)
 **Artifact:** `said-full-linux-x64`
 
 This is the durable fix for the production failure where the Groq cycle did a
@@ -40,6 +40,33 @@ construction** — there is no whole-file-write path.
 | **`edit_batch` (MCP)** | Apply a SET of edits **all-or-nothing**. Every edit is resolved+applied+syntax-verified in memory first; files are written only if every edit succeeds. If any fails, nothing is written — no half-applied change set on disk. Use for multi-file changes (endpoint + its test) so they land together or not at all. |
 
 > **For the Groq cycle:** prefer the MCP `edit_batch` tool for a multi-file change set — it gives the cross-file all-or-nothing guarantee the loop-and-abort approach lacked. Still: this catches *parse* breakage, not *type/compile* errors — the in-clone `dotnet build`/`test` (SDK in the container) remains the required backstop before a PR is mergeable. Do not auto-merge drafts that haven't built in-clone.
+
+### New in 0.5.0 — scope-aware editing + structured repair menus
+
+| Upgrade | What it gives you |
+|---------|-------------------|
+| **`append-into-symbol` mode** | Insert a new member at the END of a named scope's body (just before its closing brace). "Add a test method to this class" always lands at class scope — it **cannot** nest inside an existing method. This is the by-construction fix for the CS0106 ("'public' not valid here") class of failures. |
+| **Structured repair menus** | When an edit is rejected (syntax-break), the error now carries a `valid_anchors` array of **copy-paste-ready** `said edit` argument sets, computed live from the AST at the landing line. Model-agnostic, all 24 languages. A repair loop parses these and feeds the LLM a one-shot correction instead of prose. |
+
+Rejection payload shape (CLI `--json` and MCP both):
+
+```json
+{
+  "ok": false,
+  "error": "edit would leave cs with a syntax error — edit rejected, file unchanged",
+  "valid_anchors": [
+    { "mode": "append-into-symbol", "symbol": "HealthTests",
+      "note": "add a sibling member at the end of `HealthTests`'s body (class scope)" },
+    { "mode": "insert-after-symbol", "symbol": "Pid_test",
+      "note": "insert after `Pid_test` (same scope as that method)" }
+  ]
+}
+```
+
+**For the repair loop:** on a rejection, read `valid_anchors`, pick one (the
+`append-into-symbol` entry is the safe default for "add a member"), and re-issue
+the edit with those exact args. One-shot correction, no prose to interpret. The
+menu is derived from the real AST, so it works for any LLM and any language.
 
 ### Known boundary (honest)
 

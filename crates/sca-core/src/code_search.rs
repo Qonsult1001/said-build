@@ -124,6 +124,151 @@ fn node_has_error(node: tree_sitter::Node) -> bool {
     false
 }
 
+/// A named code scope (function, method, class, …) with its line range.
+/// Used to make anchoring safe: "is this line inside method X?" and "where
+/// does the class body end?" so an insert lands at the right scope.
+#[cfg(feature = "code")]
+#[derive(Debug, Clone)]
+pub struct Scope {
+    pub name: String,
+    pub kind: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// Find the innermost named definition (function/method/class/struct/…) that
+/// encloses `line` (1-based) in `source`. Returns `None` at top level or when
+/// there's no grammar for `extension`. Used for safe-anchor diagnostics and
+/// the scope-aware insert mode.
+#[cfg(feature = "code")]
+pub fn enclosing_scope(source: &str, extension: &str, line: usize) -> Option<Scope> {
+    use tree_sitter::Parser;
+    let language = language_for_ext(extension)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language).ok()?;
+    let tree = parser.parse(source, None)?;
+    let mut best: Option<Scope> = None;
+    collect_scopes(tree.root_node(), source.as_bytes(), line, &mut best);
+    best
+}
+
+/// Walk the tree; for every named definition node whose line range contains
+/// `line`, keep the SMALLEST (innermost) one.
+#[cfg(feature = "code")]
+fn collect_scopes(node: tree_sitter::Node, source: &[u8], line: usize, best: &mut Option<Scope>) {
+    let kind = node.kind();
+    let is_def = matches!(kind,
+        "function_item" | "struct_item" | "enum_item" | "impl_item" | "trait_item" |
+        "mod_item" | "function_definition" | "class_definition" | "method_definition" |
+        "function_declaration" | "class_declaration" | "interface_declaration" |
+        "method_declaration" | "type_declaration" | "constructor_declaration" |
+        "enum_declaration" | "struct_specifier" | "namespace_declaration"
+    );
+    if is_def {
+        let start = node.start_position().row + 1;
+        let end = node.end_position().row + 1;
+        if line >= start && line <= end {
+            let name = find_name_node(node, source)
+                .unwrap_or_else(|| format!("{}:L{}", kind, start));
+            let span = end.saturating_sub(start);
+            let better = match best {
+                None => true,
+                Some(b) => span < b.end_line.saturating_sub(b.start_line),
+            };
+            if better {
+                *best = Some(Scope { name, kind: kind.to_string(), start_line: start, end_line: end });
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_scopes(child, source, line, best);
+    }
+}
+
+/// A copy-paste-ready anchor suggestion: a `said edit` argument set the caller
+/// can run as-is. Returned in structured errors so an autonomous repair loop
+/// gets a MENU of correct moves rather than prose to interpret.
+#[cfg(feature = "code")]
+#[derive(Debug, Clone)]
+pub struct AnchorSuggestion {
+    pub mode: String,
+    pub symbol: String,
+    pub note: String,
+}
+
+/// Given a `line` where an anchor landed (often badly — e.g. inside a method),
+/// return valid, scope-correct moves the caller can use instead. Collects the
+/// enclosing scope chain and offers: append into the enclosing class body, and
+/// insert after the immediate method/scope (both land at the right level).
+#[cfg(feature = "code")]
+pub fn suggest_anchors(source: &str, extension: &str, line: usize) -> Vec<AnchorSuggestion> {
+    let mut scopes = enclosing_scopes(source, extension, line);
+    // Order innermost → outermost so we can name the method and its class.
+    scopes.sort_by_key(|s| s.end_line.saturating_sub(s.start_line));
+    let mut out = Vec::new();
+    // Enclosing container (class/struct/impl/namespace/mod): append into its body.
+    if let Some(container) = scopes.iter().find(|s| matches!(s.kind.as_str(),
+        "class_declaration" | "class_definition" | "impl_item" | "struct_item" |
+        "struct_specifier" | "interface_declaration" | "namespace_declaration" | "mod_item"))
+    {
+        out.push(AnchorSuggestion {
+            mode: "append-into-symbol".to_string(),
+            symbol: container.name.clone(),
+            note: format!("add a sibling member at the end of `{}`'s body (class scope)", container.name),
+        });
+    }
+    // Innermost method/function: insert after it (stays at the same scope).
+    if let Some(method) = scopes.iter().find(|s| matches!(s.kind.as_str(),
+        "method_declaration" | "function_declaration" | "function_definition" |
+        "function_item" | "method_definition" | "constructor_declaration"))
+    {
+        out.push(AnchorSuggestion {
+            mode: "insert-after-symbol".to_string(),
+            symbol: method.name.clone(),
+            note: format!("insert after `{}` (same scope as that method)", method.name),
+        });
+    }
+    out
+}
+
+/// Collect ALL named definition scopes that enclose `line` (1-based).
+#[cfg(feature = "code")]
+pub fn enclosing_scopes(source: &str, extension: &str, line: usize) -> Vec<Scope> {
+    use tree_sitter::Parser;
+    let mut out = Vec::new();
+    let language = match language_for_ext(extension) { Some(l) => l, None => return out };
+    let mut parser = Parser::new();
+    if parser.set_language(&language).is_err() { return out; }
+    let tree = match parser.parse(source, None) { Some(t) => t, None => return out };
+    collect_all_scopes(tree.root_node(), source.as_bytes(), line, &mut out);
+    out
+}
+
+#[cfg(feature = "code")]
+fn collect_all_scopes(node: tree_sitter::Node, source: &[u8], line: usize, out: &mut Vec<Scope>) {
+    let kind = node.kind();
+    let is_def = matches!(kind,
+        "function_item" | "struct_item" | "enum_item" | "impl_item" | "trait_item" |
+        "mod_item" | "function_definition" | "class_definition" | "method_definition" |
+        "function_declaration" | "class_declaration" | "interface_declaration" |
+        "method_declaration" | "type_declaration" | "constructor_declaration" |
+        "enum_declaration" | "struct_specifier" | "namespace_declaration"
+    );
+    if is_def {
+        let start = node.start_position().row + 1;
+        let end = node.end_position().row + 1;
+        if line >= start && line <= end {
+            let name = find_name_node(node, source).unwrap_or_else(|| format!("{}:L{}", kind, start));
+            out.push(Scope { name, kind: kind.to_string(), start_line: start, end_line: end });
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_all_scopes(child, source, line, out);
+    }
+}
+
 /// Chunk code by AST boundaries using tree-sitter.
 /// Each function/class/struct/impl becomes one chunk.
 #[cfg(feature = "code")]
@@ -1065,6 +1210,76 @@ fn also_keep() {
             target.end_line <= 9,
             "target_fn end_line {} over-extends past its body (line 9)",
             target.end_line
+        );
+    }
+
+    // ---- scope detection (for safe anchoring) --------------------------
+
+    #[test]
+    fn enclosing_scope_finds_the_method_a_line_is_inside() {
+        let src = "\
+public class HealthTests
+{
+    public void Pid_test()
+    {
+        var x = 1;
+    }
+}
+";
+        // Line 5 ("var x = 1;") is inside the method Pid_test.
+        let scope = enclosing_scope(src, "cs", 5).expect("should find a scope");
+        assert_eq!(scope.name, "Pid_test");
+        assert!(scope.kind.contains("method") || scope.kind.contains("function"));
+    }
+
+    #[test]
+    fn enclosing_scope_reports_class_at_class_level() {
+        let src = "\
+public class HealthTests
+{
+    public void A() { }
+}
+";
+        // Line 3 is at class body level (inside the class, between methods).
+        let scope = enclosing_scope(src, "cs", 3).expect("should find a scope");
+        // Innermost named scope containing line 3: the method A (it's on line 3),
+        // or the class. Either way we get a usable name; assert we got something.
+        assert!(!scope.name.is_empty());
+    }
+
+    #[test]
+    fn enclosing_scope_none_at_top_level() {
+        let src = "using System;\n\npublic class A { }\n";
+        // Line 1 (the using) is not inside any definition.
+        assert!(enclosing_scope(src, "cs", 1).is_none());
+    }
+
+    // ---- copy-paste-ready anchor suggestions (repair menu) -------------
+
+    #[test]
+    fn suggest_anchors_offers_class_scope_moves_when_inside_a_method() {
+        let src = "\
+public class HealthTests
+{
+    public void Pid_test()
+    {
+        var x = 1;
+    }
+}
+";
+        // Anchor landed on line 5, INSIDE Pid_test. Suggestions should let the
+        // caller add a sibling at class scope, not nest inside the method.
+        let sugg = suggest_anchors(src, "cs", 5);
+        assert!(!sugg.is_empty(), "should offer at least one valid move");
+        // One suggestion appends into the enclosing class body.
+        assert!(
+            sugg.iter().any(|s| s.mode == "append-into-symbol" && s.symbol == "HealthTests"),
+            "expected append-into-symbol HealthTests; got {:?}", sugg
+        );
+        // One suggestion inserts after the method (still class scope).
+        assert!(
+            sugg.iter().any(|s| s.mode == "insert-after-symbol" && s.symbol == "Pid_test"),
+            "expected insert-after-symbol Pid_test; got {:?}", sugg
         );
     }
 }

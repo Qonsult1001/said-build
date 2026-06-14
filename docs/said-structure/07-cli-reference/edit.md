@@ -31,6 +31,19 @@ said edit --file <relative/path> <MODE> [--symbol <name> | --anchor <text>] \
 | `insert-after-context` | `--anchor` | `--anchor` is a (multi-line) block that must occur **exactly once**; insert after it. |
 | `insert-before-context`| `--anchor` | Same uniqueness rule; insert before the block. |
 | `replace-context`      | `--anchor` | Replace the unique block. Errors on 0 or >1 matches. |
+| `append-into-symbol`   | `--symbol` | Insert at the END of the named scope's body (before its closing brace). "Add a member to this class" lands at class scope, never nested inside another method. |
+
+**Structured repair menu:** when an edit is rejected by the syntax check, the
+`--json` error carries a `valid_anchors` array of copy-paste-ready `said edit`
+argument sets (computed live from the AST at the landing line) — so an
+autonomous caller can pick a correct move and retry in one shot:
+
+```json
+{ "ok": false, "error": "...syntax error — edit rejected, file unchanged",
+  "valid_anchors": [
+    { "mode": "append-into-symbol", "symbol": "HealthTests", "note": "...class scope" },
+    { "mode": "insert-after-symbol", "symbol": "Pid_test", "note": "...same scope" } ] }
+```
 
 **Context vs text anchors:** `*-text` uses the *first* line containing the substring;
 `*-context` requires the (possibly multi-line) anchor to be **unique** and errors if it

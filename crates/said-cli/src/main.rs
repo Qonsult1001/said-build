@@ -6035,6 +6035,16 @@ fn cmd_edit(
             }
             EditOp::DeleteLines { start, end }
         }
+        // Scope-aware: insert at the END of a named scope's body, just before
+        // its closing brace. "Add a method to this class" always lands at class
+        // scope — prevents the new member nesting inside an existing method.
+        "append-into-symbol" => {
+            let (_, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+                .map_err(|e| { let _ = fail(e.clone()); e })?;
+            // `end` is the symbol's closing-brace line (corrected span); insert
+            // the new member just before it.
+            EditOp::InsertBeforeLine { line: end, text: new_text }
+        }
         "insert-after-text" => {
             let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
             let line = match edit::resolve_text_anchor(&file_content, a) {
@@ -6098,7 +6108,21 @@ fn cmd_edit(
         let ext = std::path::Path::new(file)
             .extension().and_then(|e| e.to_str()).unwrap_or("");
         if let Err(e) = edit::verify_syntax(&result.content, ext) {
-            return fail(format!("{} — edit rejected, file unchanged", e));
+            // Structured, model-agnostic repair menu: compute valid scope-correct
+            // anchors at the landing line so any caller (LLM or human) gets
+            // copy-paste-ready `said edit` moves instead of just an error string.
+            let suggestions = sca_core::code_search::suggest_anchors(
+                &file_content, ext, result.applied_at_line);
+            let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
+                "mode": s.mode, "symbol": s.symbol, "note": s.note,
+            })).collect();
+            let msg = format!("{} — edit rejected, file unchanged", e);
+            if json {
+                println!("{}", serde_json::json!({
+                    "ok": false, "error": msg, "valid_anchors": valid,
+                }));
+            }
+            return Err(msg);
         }
     }
     #[cfg(not(feature = "code"))]
