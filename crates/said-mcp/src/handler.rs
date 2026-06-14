@@ -3475,7 +3475,7 @@ Common fixes:
             "UPDATE ", "DELETE FROM ", "MERGE INTO ",
         ];
 
-        let mut scan_body = |caller_label: &str, body: &str,
+        let scan_body = |caller_label: &str, body: &str,
                              missing: &mut std::collections::BTreeMap<String, std::collections::BTreeSet<String>>| {
             let stripped = strip_sql_noise_for_refs(body);
             let upper = stripped.to_uppercase();

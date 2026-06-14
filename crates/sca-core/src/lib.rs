@@ -30,10 +30,13 @@ pub mod audit;
 pub mod brain;
 pub mod migrate;
 pub mod plugin;
+#[cfg(feature = "code")]
 pub mod code_search;
+#[cfg(feature = "code")]
 pub mod grammars;
 pub mod crystalline;
 pub mod frames;
+#[cfg(feature = "lsp")]
 pub mod lsp_client;
 pub mod said_file;
 pub mod engine;

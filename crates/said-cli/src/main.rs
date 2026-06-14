@@ -5559,6 +5559,8 @@ fn cmd_ingest(
     }
 
     let total_files = files.len();
+    // Mutated only inside docs-gated ingest blocks below; lean bundles don't.
+    #[allow(unused_mut)]
     let mut total_frames = 0u64;
     let mut total_skipped = 0u64;
     let mut all_reports: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -5890,6 +5892,8 @@ fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String>
     // For simplicity v1: tombstone all matches and re-add the whole file as one frame.
     // The AST pipeline in cmd_init is what gives us per-symbol lineage; for targeted
     // reindex we replace the whole file and each chunk becomes a new tombstone.
+    // Used by the code-feature AST reindex path below; unused in lean bundles.
+    #[cfg_attr(not(feature = "code"), allow(unused_variables))]
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let mut updates: Vec<(String, f32)> = Vec::new();
 
@@ -6143,6 +6147,8 @@ fn cmd_checkout(
                 std::fs::write(&abs, restored.as_bytes())
                     .map_err(|e| format!("Write {} failed: {}", abs.display(), e))?;
             }
+            // `sym` is consumed only by the code-feature AST splice path below.
+            #[cfg_attr(not(feature = "code"), allow(unused_variables))]
             Some(sym) => {
                 #[cfg(feature = "code")]
                 {

@@ -8,8 +8,6 @@
 //! Our implementation does the same + caches results in the .said brain.
 
 #[cfg(feature = "lsp")]
-use lsp_types::*;
-#[cfg(feature = "lsp")]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(feature = "lsp")]
 use std::process::{Child, Command, Stdio};
@@ -29,7 +27,7 @@ impl LspClient {
     /// Connect to a language server by command name.
     /// Common servers: "rust-analyzer", "typescript-language-server", "pyright"
     pub fn connect(server_cmd: &str, workspace: &str) -> Result<Self, String> {
-        let mut process = Command::new(server_cmd)
+        let process = Command::new(server_cmd)
             .current_dir(workspace) // CRITICAL: must run from project root
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
