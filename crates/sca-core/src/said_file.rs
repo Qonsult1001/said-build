@@ -69,8 +69,6 @@ const HEADER_SIZE_V7: usize = 48;
 ///   [60..68] refs_offset u64   — reference edges (0 = absent)
 ///   [68..72] reserved u32
 const HEADER_SIZE_V7_1: usize = 72;
-/// Current header size for newly written files.
-const HEADER_SIZE: usize = HEADER_SIZE_V7_1;
 
 /// Header flag bit 0: extended v7_1 header present. v7_1 contains:
 ///   trgm_offset (trigram index) + syms_offset (symbol table) + refs_offset (ref edges)
@@ -1204,27 +1202,6 @@ impl SaidFile {
         results
     }
 
-    /// Split text into overlapping word-based chunks.
-    fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<String> {
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.len() <= chunk_words {
-            return vec![text.to_string()];
-        }
-
-        let step = chunk_words - overlap_words;
-        let mut chunks = Vec::new();
-        let mut start = 0;
-
-        while start < words.len() {
-            let end = (start + chunk_words).min(words.len());
-            chunks.push(words[start..end].join(" "));
-            if end >= words.len() { break; }
-            start += step;
-        }
-
-        chunks
-    }
-
     /// Add a document with full taxonomy (internal/advanced use).
     pub fn put(&mut self, doc_id: &str, content: &str, title: Option<&str>) -> u64 {
         let frame_id = self.frames.put(doc_id, content.as_bytes(), title);
@@ -1313,31 +1290,6 @@ impl SaidFile {
         let end = start + passage_count * bpp;
         if end > matrix.len() { return None; }
         Some(matrix[start..end].to_vec())
-    }
-
-    /// Patch the freshest frame's `semantic_delta` based on how much its
-    /// SCA fingerprint differs from the previously-Active frame for the
-    /// same doc_id (now a Tombstone).
-    ///
-    /// Called internally by `replace_frame` after the SCA index has been
-    /// rebuilt so both fingerprints are available.
-    fn compute_and_store_semantic_delta(&mut self, doc_id: &str, new_frame_id: u64, old_frame_id: Option<u64>) {
-        let Some(old_id) = old_frame_id else { return; };
-        // Read old fingerprint BEFORE we rebuild the index — it should still
-        // be there because the tombstone's content exists in the frame data.
-        // After a full build_index() the matrix only contains Active frames,
-        // so this lookup happens during replace_frame's transient window.
-        let old_fp_opt: Option<Vec<u8>> = {
-            // We need to find the tombstone's SCA fingerprint. After the new
-            // build_index(), matrix_quantized ONLY contains Active frames —
-            // tombstones are excluded. So we can't simply look up the old
-            // fingerprint post-rebuild. Instead, we'll compute the new
-            // fingerprint from the new content and compare to a pre-captured
-            // old fingerprint that replace_frame saved for us.
-            let _ = old_id;
-            None // see replace_frame: it passes old_fp directly
-        };
-        let _ = (doc_id, new_frame_id, old_fp_opt);
     }
 
     /// Replace the Active frame for `doc_id` with new content, automatically

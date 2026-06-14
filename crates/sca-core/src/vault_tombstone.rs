@@ -85,10 +85,6 @@ impl VaultTombstoneStore {
         self.dirty
     }
 
-    pub(crate) fn mark_clean(&mut self) {
-        self.dirty = false;
-    }
-
     /// Serialize the section for inclusion in a .said file. The section body
     /// (all entries, sorted by doc_id) is zstd block-compressed so cross-
     /// document redundancy is captured. Layout:

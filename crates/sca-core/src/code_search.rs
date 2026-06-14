@@ -148,14 +148,14 @@ fn collect_chunks(
         "trait_item" | "mod_item" | "type_item" | "const_item" | "static_item" |
         // Python
         "function_definition" | "class_definition" | "decorated_definition" |
-        // JavaScript/TypeScript
+        // JavaScript/TypeScript (function_declaration/class_declaration/
+        // interface_declaration are shared with Go and Java/C# below)
         "function_declaration" | "class_declaration" | "interface_declaration" |
         "method_definition" | "arrow_function" | "export_statement" |
         "lexical_declaration" |
-        // Go
-        "function_declaration" | "method_declaration" | "type_declaration" |
+        // Go (method_declaration/type_declaration also cover Java/C#)
+        "method_declaration" | "type_declaration" |
         // Java/C#
-        "method_declaration" | "class_declaration" | "interface_declaration" |
         "constructor_declaration" | "enum_declaration" |
         // SQL / T-SQL — each statement is a business logic unit
         "create_table" | "alter_table" | "drop_table" |

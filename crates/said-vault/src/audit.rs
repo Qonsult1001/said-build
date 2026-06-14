@@ -79,11 +79,6 @@ pub fn list(brain: &mut SaidFile) -> Vec<AuditEvent> {
     out
 }
 
-/// The next sequence number = current event count.
-fn next_seq(brain: &mut SaidFile) -> u64 {
-    list(brain).len() as u64
-}
-
 /// Append an event to the chain. Computes `seq` and `prev_hash` from the
 /// existing log, stamps `at` from the wall clock, and writes one frame.
 /// Returns the appended event.
