@@ -25,12 +25,20 @@ repo. A **bad/partial brain** is the #1 cause of "recall returns nothing":
 - **Windows:** `tools/said/said.exe` (used by the local worker on the host).
 - **Linux:** `tools/said/said-linux` → baked into the API image as `/app/said` (the in-container Groq
   cycle uses this; the Windows `.exe` CANNOT run in the Linux container).
-- Source of binaries: `G:\development\said-build\dist-binaries\` (`said-linux-x64/said`,
-  `said-windows-x64/said.exe`, …). Built from `SAID-ECHO/crates` with:
+- Source of binaries: `G:\development\said-build\dist-binaries\` (`said-coding-linux-x64/said`,
+  `said-full-windows-x64/said.exe`, …). Built from `said-build/crates` using **feature bundles**
+  (each bundle bakes the encoder in via `embed-model`, so the binary is self-contained):
   ```
-  cargo build --release -p said-cli --features "code,docs"   # the 'code' feature = AST chunking (REQUIRED)
+  # Pick the bundle for the job (all build with --no-default-features):
+  cargo build --release -p said-cli --no-default-features --features coding       # code intel (AST chunking)
+  cargo build --release -p said-cli --no-default-features --features coding-plus  # + LSP
+  cargo build --release -p said-cli --no-default-features --features full         # + docs (PDF/DOCX) + OCR + LSP
+  cargo build --release -p said-cli --no-default-features --features brain        # memory only (no code/docs)
   ```
-  **Without `code`, `said init` won't AST-chunk source and the symbol table stays empty.**
+  **For a code brain you MUST use a bundle that includes `code` (`coding`, `coding-plus`, or `full`).**
+  **Without `code`, `said init` won't AST-chunk source and the symbol table stays empty** (`grep`/`get`
+  return `[]`, stats show `index_docs:0`). The CI matrix in `.github/workflows/build-binaries.yml` ships
+  all four bundles × Linux/macOS/Windows as artifacts named `said-<bundle>-<os>`.
 
 ### Step-by-step rebuild (the way that works 100%)
 

@@ -112,10 +112,19 @@ pub fn ast_chunk(source: &str, extension: &str) -> Vec<CodeChunk> {
         }];
     }
 
-    // Merge tiny chunks (< 3 lines) into previous
-    let mut merged = Vec::new();
+    // Each chunk from collect_chunks is a *named definition* (function, struct,
+    // method, …). A short body does NOT make it mergeable — folding it into the
+    // previous chunk made short functions vanish from the symbol index and made
+    // the predecessor's end_line over-extend, which let `said edit replace-symbol`
+    // destroy the short neighbor. So we keep every named definition distinct and
+    // only fold anonymous fragments (no real name) into their predecessor.
+    let mut merged: Vec<CodeChunk> = Vec::new();
     for chunk in chunks {
-        if chunk.end_line.saturating_sub(chunk.start_line) < 3 && !merged.is_empty() {
+        let is_anonymous = chunk.name.is_empty() || chunk.name.starts_with(&format!("{}:L", chunk.kind));
+        if is_anonymous
+            && chunk.end_line.saturating_sub(chunk.start_line) < 3
+            && !merged.is_empty()
+        {
             let last: &mut CodeChunk = merged.last_mut().unwrap();
             last.content.push('\n');
             last.content.push_str(&chunk.content);
@@ -932,5 +941,52 @@ impl CodeSearch {
             }
         }
         None
+    }
+}
+
+#[cfg(all(test, feature = "code"))]
+mod chunk_tests {
+    use super::*;
+
+    /// Three real functions, the last with a short (<3-line) body, must remain
+    /// THREE distinct chunks. Regression for the merge bug where a short
+    /// function was folded into its predecessor — vanishing from the symbol
+    /// index and over-extending the previous symbol's end_line (which made
+    /// `said edit replace-symbol` destroy the short neighbor).
+    #[test]
+    fn short_adjacent_functions_stay_distinct() {
+        let src = "\
+fn keep_me() {
+    println!(\"keep\");
+}
+
+fn target_fn() {
+    let a = 1;
+    let b = 2;
+    println!(\"{}\", a + b);
+}
+
+fn also_keep() {
+    println!(\"end\");
+}
+";
+        let chunks = ast_chunk(src, "rs");
+        let names: Vec<&str> = chunks.iter().map(|c| c.name.as_str()).collect();
+
+        assert!(names.contains(&"keep_me"), "keep_me missing: {:?}", names);
+        assert!(names.contains(&"target_fn"), "target_fn missing: {:?}", names);
+        assert!(
+            names.contains(&"also_keep"),
+            "also_keep vanished (merged away): {:?}",
+            names
+        );
+
+        // target_fn must NOT over-extend into also_keep (body ends at line 9).
+        let target = chunks.iter().find(|c| c.name == "target_fn").unwrap();
+        assert!(
+            target.end_line <= 9,
+            "target_fn end_line {} over-extends past its body (line 9)",
+            target.end_line
+        );
     }
 }

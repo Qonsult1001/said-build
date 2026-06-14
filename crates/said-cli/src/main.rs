@@ -3,6 +3,7 @@
 //! Drop-in replacement for ChromaDB/Pinecone: `said add`, `said query`, `said get`.
 
 mod resolve;
+mod edit;
 
 use clap::{Parser, Subcommand};
 use sca_core::said_file::SaidFile;
@@ -170,6 +171,43 @@ enum Commands {
     Reindex {
         /// File to reindex
         file: String,
+    },
+    /// Surgical, anchored edit of a source file on disk — insert/replace/delete
+    /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
+    /// path, so an autonomous caller cannot delete the rest of a file.
+    ///
+    /// Modes: insert-after-symbol | insert-before-symbol | replace-symbol |
+    ///        delete-symbol | insert-after-text | insert-before-text | replace-text
+    ///
+    /// Examples:
+    ///   said edit --file src/Program.cs insert-after-text \
+    ///     --anchor 'app.MapGet("/api/pid"' --content '<new line>' --dry-run
+    ///   said edit --file src/Program.cs replace-symbol --symbol Configure \
+    ///     --content-file new_configure.txt
+    Edit {
+        /// Repo-relative path of the source file to change (e.g. src/Program.cs)
+        #[arg(long)]
+        file: String,
+        /// Edit mode (see command help for the list)
+        mode: String,
+        /// Symbol name (for *-symbol modes); resolved scoped to --file
+        #[arg(long)]
+        symbol: Option<String>,
+        /// Exact substring anchor (for *-text modes)
+        #[arg(long)]
+        anchor: Option<String>,
+        /// New content (inline). Mutually exclusive with --content-file.
+        #[arg(long)]
+        content: Option<String>,
+        /// New content read from a file (preferred for multi-line code).
+        #[arg(long)]
+        content_file: Option<String>,
+        /// Resolve + compute the change and report it, but do NOT write.
+        #[arg(long)]
+        dry_run: bool,
+        /// Allow a replace/delete that spans more than the default max lines.
+        #[arg(long)]
+        allow_large: bool,
     },
     /// Show cognitive lineage for a symbol or doc_id — a "semantic git log".
     /// Walks the tombstone chain and shows each version with its delta.
@@ -1128,6 +1166,13 @@ fn main() {
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
+        Commands::Edit {
+            ref file, ref mode, ref symbol, ref anchor, ref content, ref content_file,
+            dry_run, allow_large,
+        } => cmd_edit(
+            cli.path.as_deref(), file, mode, symbol.as_deref(), anchor.as_deref(),
+            content.as_deref(), content_file.as_deref(), dry_run, allow_large, cli.json,
+        ),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats => cmd_stats(cli.path.as_deref(), cli.json),
@@ -5853,6 +5898,203 @@ fn cmd_lsp_symbols(path: Option<&str>, query: &str, json: bool) -> Result<(), St
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `said edit` — surgical anchored edit (no whole-file rewrite path)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_edit(
+    path: Option<&str>,
+    file: &str,
+    mode: &str,
+    symbol: Option<&str>,
+    anchor: Option<&str>,
+    content: Option<&str>,
+    content_file: Option<&str>,
+    dry_run: bool,
+    allow_large: bool,
+    json: bool,
+) -> Result<(), String> {
+    use edit::EditOp;
+
+    // Helper: emit a failure in the JSON/text shape the spec defines, then
+    // return a non-zero exit via Err.
+    let fail = |msg: String| -> Result<(), String> {
+        if json {
+            println!("{}", serde_json::json!({ "ok": false, "error": msg }));
+        }
+        Err(msg)
+    };
+
+    // 1. Path safety — reject absolute / `..` paths before touching anything.
+    if let Err(e) = edit::is_safe_relative_path(file) {
+        return fail(e);
+    }
+
+    // 2. Resolve the new content (inline or from a file). Delete modes need none.
+    let is_delete = mode == "delete-symbol";
+    let new_text: String = match (content, content_file) {
+        (Some(_), Some(_)) => return fail("pass only one of --content / --content-file".into()),
+        (Some(c), None) => c.to_string(),
+        (None, Some(f)) => match std::fs::read_to_string(f) {
+            Ok(s) => s,
+            Err(e) => return fail(format!("read --content-file {}: {}", f, e)),
+        },
+        (None, None) if is_delete => String::new(),
+        (None, None) => return fail("missing --content or --content-file".into()),
+    };
+
+    // 3. Read the on-disk file (the bytes we actually edit).
+    let on_disk = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => return fail(format!("read {}: {}", file, e)),
+    };
+    let file_content = match decode_text(&on_disk) {
+        Some(s) => s,
+        None => return fail(format!("{} is not valid UTF-8/UTF-16 text", file)),
+    };
+
+    // 4. Build the resolved EditOp based on mode + anchor.
+    let want_symbol = |m: &str| -> Result<&str, String> {
+        symbol.ok_or_else(|| format!("mode '{}' requires --symbol", m))
+    };
+    let want_anchor = |m: &str| -> Result<&str, String> {
+        anchor.ok_or_else(|| format!("mode '{}' requires --anchor", m))
+    };
+
+    // Resolve a symbol → (start,end) line range, scoped to --file, via the
+    // same lookup `said sym` uses.
+    let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
+        let brain = open_brain(path)?;
+        let results = brain.sym(name, 50);
+        let cands: Vec<edit::SymCandidate> = results.iter().map(|r| edit::SymCandidate {
+            doc_id: r.doc_id.clone(),
+            name: r.name.clone(),
+            start_line: r.start_line as usize,
+            end_line: r.end_line as usize,
+        }).collect();
+        edit::resolve_symbol_in_file(&cands, file)
+    };
+
+    let op: EditOp = match mode {
+        "insert-after-symbol" => {
+            let (_, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+                .map_err(|e| { let _ = fail(e.clone()); e })?;
+            EditOp::InsertAfterLine { line: end, text: new_text }
+        }
+        "insert-before-symbol" => {
+            let (start, _) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+                .map_err(|e| { let _ = fail(e.clone()); e })?;
+            EditOp::InsertBeforeLine { line: start, text: new_text }
+        }
+        "replace-symbol" => {
+            let (start, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+                .map_err(|e| { let _ = fail(e.clone()); e })?;
+            if let Err(e) = edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, allow_large) {
+                return fail(e);
+            }
+            EditOp::ReplaceLines { start, end, text: new_text }
+        }
+        "delete-symbol" => {
+            let (start, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+                .map_err(|e| { let _ = fail(e.clone()); e })?;
+            if let Err(e) = edit::check_span(end - start + 1, edit::DEFAULT_MAX_SPAN, allow_large) {
+                return fail(e);
+            }
+            EditOp::DeleteLines { start, end }
+        }
+        "insert-after-text" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            let line = match edit::resolve_text_anchor(&file_content, a) {
+                Ok(l) => l,
+                Err(e) => return fail(e),
+            };
+            EditOp::InsertAfterLine { line, text: new_text }
+        }
+        "insert-before-text" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            let line = match edit::resolve_text_anchor(&file_content, a) {
+                Ok(l) => l,
+                Err(e) => return fail(e),
+            };
+            EditOp::InsertBeforeLine { line, text: new_text }
+        }
+        "replace-text" => {
+            let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
+            EditOp::ReplaceSubstring { needle: a.to_string(), replacement: new_text }
+        }
+        other => return fail(format!("unknown mode: {}", other)),
+    };
+
+    // 5. Apply the edit (pure) — produces the new content + summary.
+    let result = match edit::apply_edit(&file_content, &op) {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
+
+    // 6. Write atomically (temp + rename) unless this is a dry run.
+    if !dry_run {
+        if let Err(e) = atomic_write(file, &result.content) {
+            return fail(e);
+        }
+    }
+
+    // 7. Report.
+    if json {
+        println!("{}", serde_json::json!({
+            "ok": true,
+            "file": file,
+            "mode": mode,
+            "anchor": symbol.or(anchor).unwrap_or(""),
+            "applied_at_line": result.applied_at_line,
+            "lines_added": result.lines_added,
+            "lines_removed": result.lines_removed,
+            "dry_run": dry_run,
+        }));
+    } else if dry_run {
+        println!(
+            "DRY RUN — would apply {} at line {} (+{} / -{} lines). No file written.",
+            mode, result.applied_at_line, result.lines_added, result.lines_removed
+        );
+    } else {
+        println!(
+            "Edited {} — {} at line {} (+{} / -{} lines).",
+            file, mode, result.applied_at_line, result.lines_added, result.lines_removed
+        );
+    }
+    Ok(())
+}
+
+/// Write `content` to `file` atomically: write a sibling temp file, then rename
+/// over the target so a crash can never leave a half-written source file.
+fn atomic_write(file: &str, content: &str) -> Result<(), String> {
+    let target = Path::new(file);
+    let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
+    let mut tmp = match dir {
+        Some(d) => d.join(format!(".{}.said-edit.tmp", file_stem_or(target))),
+        None => PathBuf::from(format!(".{}.said-edit.tmp", file_stem_or(target))),
+    };
+    // Avoid clobbering an existing tmp from a concurrent edit.
+    let mut n = 0;
+    while tmp.exists() {
+        n += 1;
+        let name = format!(".{}.said-edit.{}.tmp", file_stem_or(target), n);
+        tmp = match dir {
+            Some(d) => d.join(name),
+            None => PathBuf::from(name),
+        };
+    }
+    std::fs::write(&tmp, content.as_bytes())
+        .map_err(|e| format!("write temp {}: {}", tmp.display(), e))?;
+    std::fs::rename(&tmp, target)
+        .map_err(|e| format!("rename {} -> {}: {}", tmp.display(), target.display(), e))?;
+    Ok(())
+}
+
+fn file_stem_or(p: &Path) -> String {
+    p.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string()
 }
 
 // ---------------------------------------------------------------------------

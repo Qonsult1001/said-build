@@ -34,6 +34,7 @@ said [--path <file.said>] [--json] <subcommand> [args]
 - [ingest](ingest.md) — single file or folder with `--pointer` for Enterprise
 - [import](import.md) — migrate from mem0 / memvid
 - [checkout](checkout.md) — restore a past version as the new HEAD
+- [edit](edit.md) — surgical anchored insert/replace/delete on a source file (no whole-file rewrite)
 
 ## Admin (enterprise ops)
 
@@ -64,9 +65,12 @@ said [--path <file.said>] [--json] <subcommand> [args]
 ## Binary build
 
 ```
-cargo build --release -p said-cli --features "static-embed docs ocr whisper code"
+# Feature bundles (all build with --no-default-features; each bakes the encoder in):
+cargo build --release -p said-cli --no-default-features --features coding   # code intel
+cargo build --release -p said-cli --no-default-features --features full     # code + docs + OCR + LSP
 ```
 
+Bundles: `brain` (memory only) · `coding` (+code) · `coding-plus` (+lsp) · `full` (+docs/ocr/lsp).
 See [Cargo feature flags](../09-cargo-features.md) for what each feature brings in.
 
 ## Full command list
@@ -85,6 +89,7 @@ Commands:
   get           Read a frame by doc_id
   history       Lineage for a symbol or doc_id
   checkout      Restore a past version
+  edit          Surgical anchored edit of a source file (insert/replace/delete)
   delete        Soft-delete a frame
   stats         File + brain stats
   discover      Detect modules in a codebase
