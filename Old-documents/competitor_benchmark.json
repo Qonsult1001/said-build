@@ -1,0 +1,156 @@
+{
+  "benchmarks": {
+    "locomo_f1": "F1 on LoCoMo conv-26 (20 QAs, Claude Opus 4.7 reader)",
+    "mteb_needle": "MTEB LEMBNeedleRetrieval NDCG@10",
+    "mteb_qmsum": "MTEB LEMBQMSumRetrieval NDCG@10",
+    "mteb_summscreenfd": "MTEB LEMBSummScreenFDRetrieval NDCG@10",
+    "mteb_wikimqa": "MTEB LEMBWikimQARetrieval NDCG@10"
+  },
+  "generated_at": 1776867547,
+  "rows": [
+    {
+      "implementation": "Rust — 1-bit SCA fingerprints + BM25 + graph fan-out",
+      "ingest_calls_llm": false,
+      "locomo_f1": 0.8555,
+      "mteb_needle": 1.0,
+      "mteb_qmsum": 0.89,
+      "mteb_summscreenfd": 0.98,
+      "mteb_wikimqa": 1.0,
+      "name": "SAID-ECHO",
+      "notes": "Single-file portable brain; LLM optional at caller-side read time only.",
+      "offline": true
+    },
+    {
+      "implementation": "Python — OpenAI embeddings + SQLite + LLM extraction",
+      "ingest_calls_llm": true,
+      "locomo_f1": 0.669,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "mem0 (OSS)",
+      "notes": "Published LoCoMo F1 (no-graph): 0.669. Requires OpenAI API at ingest.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — adds graph edges on top of OSS",
+      "ingest_calls_llm": true,
+      "locomo_f1": 0.684,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "mem0 (with-graph)",
+      "notes": "Published LoCoMo F1: 0.684.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — Redis + transformer reranker",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "Zep",
+      "notes": "Benchmark pending; their published numbers use session-scoped retrieval.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — LangChain memory primitives",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "LangMem",
+      "notes": "Benchmark pending.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — hierarchical memory + paging",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "Letta (MemGPT)",
+      "notes": "Benchmark pending.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — QR-encoded video frames",
+      "ingest_calls_llm": false,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "memvid",
+      "notes": "Closest kin on single-file portable; no CLS pillars.",
+      "offline": true
+    },
+    {
+      "implementation": "Postgres extension — sentence-transformers",
+      "ingest_calls_llm": false,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "pgvector",
+      "notes": "Baseline RAG. Benchmark pending.",
+      "offline": true
+    },
+    {
+      "implementation": "Python — DuckDB + transformer embeddings",
+      "ingest_calls_llm": false,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "ChromaDB",
+      "notes": "Baseline RAG. Benchmark pending.",
+      "offline": true
+    },
+    {
+      "implementation": "Python — OpenIE + PageRank",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "HippoRAG",
+      "notes": "Strong on multi-hop; benchmark pending.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — dual-level graph retrieval",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "LightRAG",
+      "notes": "Benchmark pending.",
+      "offline": false
+    },
+    {
+      "implementation": "Python — graph + vector memory",
+      "ingest_calls_llm": true,
+      "locomo_f1": null,
+      "mteb_needle": null,
+      "mteb_qmsum": null,
+      "mteb_summscreenfd": null,
+      "mteb_wikimqa": null,
+      "name": "Cognee",
+      "notes": "Benchmark pending.",
+      "offline": false
+    }
+  ]
+}

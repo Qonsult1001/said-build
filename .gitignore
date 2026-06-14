@@ -10,3 +10,7 @@ node_modules
 # Editor / tooling
 /.vscode/
 /.claude/
+
+# Old reference material — kept locally for lookup, NOT pushed.
+# (old vault-rust prototype, bench corpora, etc.)
+/reference/
