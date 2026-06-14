@@ -14,3 +14,7 @@ node_modules
 # Old reference material — kept locally for lookup, NOT pushed.
 # (old vault-rust prototype, bench corpora, etc.)
 /reference/
+
+# Local brain files + vault DB — kept locally for testing, NOT pushed.
+*.said
+/vault.db
