@@ -188,7 +188,8 @@ enum Commands {
         /// Repo-relative path of the source file to change (e.g. src/Program.cs)
         #[arg(long)]
         file: String,
-        /// Edit mode (see command help for the list)
+        /// Edit mode (see command help for the list). Optional only with --explain.
+        #[arg(default_value = "")]
         mode: String,
         /// Symbol name (for *-symbol modes); resolved scoped to --file
         #[arg(long)]
@@ -212,6 +213,11 @@ enum Commands {
         /// still parses via tree-sitter and reject syntax-breaking edits).
         #[arg(long)]
         no_verify: bool,
+        /// Pre-validate only: do NOT edit. Returns the valid scope-correct
+        /// anchors (a `valid_anchors` menu) for `--symbol` or `--anchor` so a
+        /// caller can pick the right move up front. Implies no file write.
+        #[arg(long)]
+        explain: bool,
     },
     /// Show cognitive lineage for a symbol or doc_id — a "semantic git log".
     /// Walks the tombstone chain and shows each version with its delta.
@@ -1172,10 +1178,10 @@ fn main() {
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, ref anchor, ref content, ref content_file,
-            dry_run, allow_large, no_verify,
+            dry_run, allow_large, no_verify, explain,
         } => cmd_edit(
             cli.path.as_deref(), file, mode, symbol.as_deref(), anchor.as_deref(),
-            content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, cli.json,
+            content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
@@ -5920,6 +5926,7 @@ fn cmd_edit(
     dry_run: bool,
     allow_large: bool,
     no_verify: bool,
+    explain: bool,
     json: bool,
 ) -> Result<(), String> {
     use edit::EditOp;
@@ -5936,6 +5943,49 @@ fn cmd_edit(
     // 1. Path safety — reject absolute / `..` paths before touching anything.
     if let Err(e) = edit::is_safe_relative_path(file) {
         return fail(e);
+    }
+
+    // --explain: pre-validate only. Resolve the target location (--symbol via
+    // the brain, or --anchor in the file) and return the valid scope-correct
+    // anchors as a menu, WITHOUT editing. Lets a caller pick the right move up
+    // front instead of learning it from a failed edit. (code feature only.)
+    #[cfg(feature = "code")]
+    if explain {
+        let on_disk = std::fs::read(file).map_err(|e| { let _ = fail(format!("read {}: {}", file, e)); format!("read {}: {}", file, e) })?;
+        let fc = decode_text(&on_disk).ok_or_else(|| { let m = format!("{} is not valid UTF-8/UTF-16 text", file); let _ = fail(m.clone()); m })?;
+        let ext = std::path::Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
+        // Determine the line to explain: a symbol's location, or an anchor's line.
+        let line = if let Some(name) = symbol {
+            let brain = open_brain(path)?;
+            let results = brain.sym(name, 50);
+            results.iter()
+                .find(|r| edit::paths_equal(r.doc_id.split("::").next().unwrap_or(""), file))
+                .map(|r| r.start_line as usize)
+                .unwrap_or(1)
+        } else if let Some(a) = anchor {
+            edit::resolve_text_anchor(&fc, a).unwrap_or(1)
+        } else { 1 };
+        let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
+        let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
+            "mode": s.mode, "symbol": s.symbol, "note": s.note,
+        })).collect();
+        if json {
+            println!("{}", serde_json::json!({
+                "ok": true, "explain": true, "file": file, "at_line": line,
+                "valid_anchors": valid,
+            }));
+        } else {
+            println!("Valid anchors at {}:{} —", file, line);
+            for s in &suggestions { println!("  {} --symbol {}  ({})", s.mode, s.symbol, s.note); }
+        }
+        return Ok(());
+    }
+    #[cfg(not(feature = "code"))]
+    let _ = explain;
+
+    // A real edit needs a mode (mode is optional only to allow --explain).
+    if mode.is_empty() {
+        return fail("a MODE is required (or use --explain to just see valid anchors)".into());
     }
 
     // 2. Resolve the new content (inline or from a file). Delete modes need none.
@@ -6039,11 +6089,22 @@ fn cmd_edit(
         // its closing brace. "Add a method to this class" always lands at class
         // scope — prevents the new member nesting inside an existing method.
         "append-into-symbol" => {
-            let (_, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
+            let (start, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
                 .map_err(|e| { let _ = fail(e.clone()); e })?;
-            // `end` is the symbol's closing-brace line (corrected span); insert
-            // the new member just before it.
-            EditOp::InsertBeforeLine { line: end, text: new_text }
+            // Auto-indent the new member to match sibling indentation: use the
+            // indent of the first body line if present, else the closing-brace
+            // line's indent + 4 spaces. Keeps inserted members visually correct.
+            let disk_lines: Vec<&str> = file_content.lines().collect();
+            let body_indent = disk_lines.get(start) // line after the opening line
+                .map(|l| edit::indent_of(l).to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    let close_indent = disk_lines.get(end.saturating_sub(1))
+                        .map(|l| edit::indent_of(l).to_string()).unwrap_or_default();
+                    format!("{}    ", close_indent)
+                });
+            let indented = edit::reindent_block(&new_text, &body_indent);
+            EditOp::InsertBeforeLine { line: end, text: indented }
         }
         "insert-after-text" => {
             let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;

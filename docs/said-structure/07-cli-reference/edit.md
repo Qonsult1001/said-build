@@ -31,7 +31,11 @@ said edit --file <relative/path> <MODE> [--symbol <name> | --anchor <text>] \
 | `insert-after-context` | `--anchor` | `--anchor` is a (multi-line) block that must occur **exactly once**; insert after it. |
 | `insert-before-context`| `--anchor` | Same uniqueness rule; insert before the block. |
 | `replace-context`      | `--anchor` | Replace the unique block. Errors on 0 or >1 matches. |
-| `append-into-symbol`   | `--symbol` | Insert at the END of the named scope's body (before its closing brace). "Add a member to this class" lands at class scope, never nested inside another method. |
+| `append-into-symbol`   | `--symbol` | Insert at the END of the named scope's body (before its closing brace), auto-indented to match siblings. "Add a member to this class" lands at class scope, never nested inside another method. |
+
+**`--explain` (pre-validate):** `said edit --file X --explain (--symbol S | --anchor A) --json`
+returns the `valid_anchors` menu for that location **without editing** (exit 0,
+no write), so a caller picks the right move up front. `mode` is optional with `--explain`.
 
 **Structured repair menu:** when an edit is rejected by the syntax check, the
 `--json` error carries a `valid_anchors` array of copy-paste-ready `said edit`

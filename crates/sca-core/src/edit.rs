@@ -299,6 +299,38 @@ pub fn is_safe_relative_path(file: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Leading whitespace (indent) of a line.
+pub fn indent_of(line: &str) -> &str {
+    let end = line.find(|c: char| !c.is_whitespace()).unwrap_or(line.len());
+    &line[..end]
+}
+
+/// Re-indent a (possibly multi-line) content block to a `base` indent, while
+/// preserving the block's own relative nesting. Strips the block's common
+/// leading indent first so a block authored at column 0 OR already indented
+/// both land correctly at `base`. Blank lines stay blank.
+pub fn reindent_block(content: &str, base: &str) -> String {
+    let lines: Vec<&str> = content.split('\n').collect();
+    // Common leading whitespace across all non-blank lines.
+    let common = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| indent_of(l).len())
+        .min()
+        .unwrap_or(0);
+    lines
+        .iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                String::new()
+            } else {
+                format!("{}{}", base, &l[common..])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Verify that `content` is still syntactically valid for the given file
 /// `extension` after an edit, using tree-sitter (only when the `code` feature
 /// is enabled). Returns `Ok(())` if valid or if no grammar is available; `Err`
@@ -622,6 +654,28 @@ mod tests {
         let indexed = "fn target() {\n    do_thing();\n}";
         let ondisk = "fn target() {\r\n    do_thing();  \r\n}";
         assert!(check_symbol_fresh(indexed, ondisk).is_ok());
+    }
+
+    #[test]
+    fn auto_indent_applies_base_indent_to_each_line() {
+        // Content authored at column 0; reindent to a 4-space base.
+        let content = "public void Added()\n{\n    var y = 2;\n}";
+        let out = reindent_block(content, "    ");
+        assert_eq!(out, "    public void Added()\n    {\n        var y = 2;\n    }");
+    }
+
+    #[test]
+    fn auto_indent_noop_when_already_indented_to_base() {
+        // A single line already at the right indent stays put (no double-indent).
+        let out = reindent_block("public void X() { }", "    ");
+        assert_eq!(out, "    public void X() { }");
+    }
+
+    #[test]
+    fn indent_of_reads_leading_whitespace() {
+        assert_eq!(indent_of("    public void M()"), "    ");
+        assert_eq!(indent_of("\t\tcode"), "\t\t");
+        assert_eq!(indent_of("no_indent"), "");
     }
 
     #[test]

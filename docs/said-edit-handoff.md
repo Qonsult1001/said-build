@@ -1,7 +1,10 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.5.0` (both `said` CLI and `said-mcp`)
+**Date:** 2026-06-14 · **Version:** `said 0.6.0` (both `said` CLI and `said-mcp`)
 **Artifact:** `said-full-linux-x64`
+
+> **Live-binary check:** `said --version` must print **`said 0.6.0`**. If it
+> prints anything lower, the old binary is still baked in — rebuild the image.
 
 This is the durable fix for the production failure where the Groq cycle did a
 **full-file rewrite** and silently deleted most of `Program.cs` (161 → 27 lines),
@@ -17,7 +20,7 @@ construction** — there is no whole-file-write path.
 | **New `said edit` subcommand** | Surgical, anchored insert/replace/delete on a source file. No mode can rewrite a whole file. |
 | **New MCP `edit` tool** | Same capability exposed to MCP clients (Claude/Groq via the MCP server). Identical behavior + safety. |
 | **AST chunker bug fixed** | Short functions (<3-line body) used to vanish from the symbol index and the previous symbol's range over-extended — which made `replace-symbol` eat the next function. Now every named definition has an exact range. Makes symbol-mode edits safe. |
-| **Version bumped to 0.2.0** | `said --version` → `said 0.2.0`. Use this to confirm the new binary is live in the container (old one was `0.1.0`). |
+| **Version** | `said --version` → `said 0.6.0` (current). Use this to confirm the new binary is live in the container. |
 | **Feature bundles** | Binaries are now built as bundles. The one you want is **`full`** (= code + docs + OCR + LSP, with the encoder baked in). |
 
 ### New in 0.3.0 — world-class safety upgrades
@@ -68,6 +71,34 @@ Rejection payload shape (CLI `--json` and MCP both):
 the edit with those exact args. One-shot correction, no prose to interpret. The
 menu is derived from the real AST, so it works for any LLM and any language.
 
+### New in 0.6.0 — pre-validate + ergonomics (integration feedback)
+
+| Upgrade | What it gives you |
+|---------|-------------------|
+| **`said edit --explain`** | Pre-validate WITHOUT editing: returns the `valid_anchors` menu for a `--symbol` or `--anchor` up front, so the LLM picks the right move on the FIRST try (not after a failed edit). `mode` is optional with `--explain`. CLI and MCP (`"explain": true`). |
+| **Auto-indent** | `append-into-symbol` now indents the inserted member to match the scope's existing body indentation — a method added to a class lands at the siblings' indent, not column 0. |
+
+**`--explain` payload** (CLI `--json`):
+
+```json
+{ "ok": true, "explain": true, "file": "src/HealthTests.cs", "at_line": 1,
+  "valid_anchors": [
+    { "mode": "append-into-symbol", "symbol": "HealthTests",
+      "note": "add a sibling member at the end of `HealthTests`'s body (class scope)" } ] }
+```
+
+**Exit-code contract (confirmed):**
+- Success (`"ok": true`) → exit **0**.
+- Any failure including a syntax-reject-with-`valid_anchors` (`"ok": false`) → exit **non-zero (1)**.
+- `--explain` always succeeds (exit 0) — it's a query, not an edit.
+
+So: branch your repair loop on the exit code (non-zero = failed), then read
+`valid_anchors` from the JSON to construct the one-shot retry.
+
+**Ambiguous symbols (confirmed):** `--symbol` is resolved **scoped to `--file`**.
+If the same symbol name exists in multiple files, `--file` disambiguates; if it
+appears more than once *within the same file*, the edit errors (never guesses).
+
 ### Known boundary (honest)
 
 `said edit` syntax-verify catches **structural/parse** breakage (the PR-#93 class). It does **not** catch **type/semantic** errors (wrong type, missing `using`, undefined symbol) — those parse fine but don't compile. A real compiler (dotnet/cargo/tsc) is still needed for that, and that belongs in the cycle's in-clone build step, not in `.said`.
@@ -86,9 +117,9 @@ menu is derived from the real AST, so it works for any LLM and any language.
    ```
 4. Confirm the new binary is live:
    ```bash
-   /app/said --version          # must print: said 0.2.0
+   /app/said --version          # must print: said 0.6.0
    ```
-   If it still says `0.1.0`, the old binary is still baked in — rebuild the image.
+   If it says anything below `0.6.0`, the old binary is still baked in — rebuild the image.
 
 > **Shell note (carried over from build.md):** under Git Bash, prefix
 > `docker exec` calls with `MSYS_NO_PATHCONV=1` or `/app/said` gets rewritten to
@@ -101,30 +132,49 @@ menu is derived from the real AST, so it works for any LLM and any language.
 ```
 said edit --path <Advisory.said> --file <relative/path> <MODE> \
           [--symbol <name> | --anchor <exact text>] \
-          [--content <text> | --content-file <f>] [--json] [--dry-run] [--allow-large]
+          [--content <text> | --content-file <f>] [--json] [--dry-run] [--allow-large] [--no-verify]
+
+# Pre-validate (no edit) — get the valid moves up front:
+said edit --path <Advisory.said> --file <relative/path> --explain (--symbol <name> | --anchor <text>) --json
 ```
 
 `.said` resolves *where* (a symbol's exact line range, or the first line
 containing an exact substring); the bytes are written to the **real file on
 disk** in the caller's working dir (the clone), NOT into the `.said` store.
+`--symbol` is always resolved **scoped to `--file`** (errors on >1 match in that
+file; `--file` disambiguates a name shared across files).
 
-### Modes
+### Modes (exact CLI arg form)
 
-| Mode | Anchor | Effect |
-|------|--------|--------|
-| `insert-after-symbol`  | `--symbol` | Insert after the symbol's last line. |
-| `insert-before-symbol` | `--symbol` | Insert before the symbol's first line. |
-| `replace-symbol`       | `--symbol` | Replace the symbol's whole line range. |
-| `delete-symbol`        | `--symbol` | Remove the symbol's line range. |
-| `insert-after-text`    | `--anchor` | Insert after the first line containing the exact text. |
-| `insert-before-text`   | `--anchor` | Insert before that line. |
-| `replace-text`         | `--anchor` | Replace only the matched substring (first occurrence). |
+| Mode | Required arg | Effect |
+|------|--------------|--------|
+| `insert-after-symbol`   | `--symbol <name>` | Insert after the symbol's last line. |
+| `insert-before-symbol`  | `--symbol <name>` | Insert before the symbol's first line. |
+| `replace-symbol`        | `--symbol <name>` | Replace the symbol's whole line range. |
+| `delete-symbol`         | `--symbol <name>` | Remove the symbol's line range (no `--content`). |
+| `append-into-symbol`    | `--symbol <name>` | **Insert a new member at the END of the scope's body** (before its closing brace), auto-indented to match siblings. Use for "add a method/test to this class" — cannot nest inside another method. |
+| `insert-after-text`     | `--anchor <text>` | Insert after the first line containing the exact text. |
+| `insert-before-text`    | `--anchor <text>` | Insert before that line. |
+| `replace-text`          | `--anchor <text>` | Replace only the matched substring (first occurrence). |
+| `insert-after-context`  | `--anchor <block>` | `--anchor` is a (multi-line) block that must occur **exactly once**; insert after it. Errors if 0 or >1. |
+| `insert-before-context` | `--anchor <block>` | Same uniqueness rule; insert before the block. |
+| `replace-context`       | `--anchor <block>` | Replace the unique block. |
 
-### Output
+Exact example (the common "add a test" case):
+```
+said edit --path Advisory.said --file tests/HealthTests.cs \
+  append-into-symbol --symbol HealthTests --content-file new_test.txt --json
+```
 
-- `--json` success: `{"ok":true,"file","mode","anchor","applied_at_line","lines_added","lines_removed","dry_run"}`
-- `--json` failure: `{"ok":false,"error":"..."}` + **non-zero exit code**, file untouched.
+### Output & exit codes
+
+- `--json` success: `{"ok":true,"file","mode","anchor","applied_at_line","lines_added","lines_removed","dry_run"}` → **exit 0**.
+- `--json` failure (incl. syntax-reject): `{"ok":false,"error":"...","valid_anchors":[...]}` → **exit non-zero (1)**, file untouched.
+- `--explain`: `{"ok":true,"explain":true,"file","at_line","valid_anchors":[...]}` → **exit 0**, no write.
 - `--dry-run`: resolve + report the target line, but **write nothing**.
+
+Branch the repair loop on the **exit code** (non-zero = failed), then read
+`valid_anchors` from the JSON for a one-shot retry.
 
 ### Safety guarantees (the point of the feature)
 
@@ -165,14 +215,29 @@ partial PR). Optionally `said reindex <file>` after to refresh the clone's brain
 **Net effect:** the LLM can only insert/replace at a named anchor — it physically
 cannot delete the rest of a file.
 
-### Recommendation: prefer **text anchors** over symbol modes for autonomous use
+### Recommendation (0.6.0) — the patterns that maximize first-try success
 
-`replace-symbol`/`delete-symbol` depend on the symbol index's line ranges. The
-chunker fix makes these accurate now, but text anchors (`insert-after-text`,
-`replace-text`) don't depend on the index at all — they match the exact bytes in
-the on-disk file. For an autonomous code-changer, text anchors are the most
-robust. The C#/Groq consumer passes args programmatically, so it is unaffected by
-shell quote-stripping (which can mangle `"`-containing anchors on the command line).
+Updated guidance. In priority order for an autonomous cycle:
+
+1. **Adding a new member (method/test/field) → use `append-into-symbol`** with
+   the enclosing class/scope name. It always lands at the right scope (never
+   nested inside another method) and auto-indents. This is the single biggest
+   first-try-success win and removes the CS0106 class of failures entirely.
+2. **Pre-validate with `--explain`** before a non-obvious edit: ask "where can I
+   add to class X?" and get the `valid_anchors` menu up front, so the cycle picks
+   the correct move on the first attempt rather than learning it from a failure.
+3. **Editing an existing region → context anchors** (`insert-after-context` /
+   `replace-context`): a unique multi-line block, so the edit can't land in the
+   wrong place when a short string repeats. Plain `*-text` is fine for a clearly
+   unique single line.
+4. **On any rejection** (`ok:false`, non-zero exit): read `valid_anchors` from the
+   error and re-issue with those exact args — one-shot correction, no prose.
+
+`replace-symbol`/`delete-symbol` are safe (drift-checked + authoritative span),
+but for *adding* members, `append-into-symbol` is strictly better. The C#/Groq
+consumer passes args programmatically, so it's unaffected by shell
+quote-stripping (which can mangle `"`-containing anchors on a raw command line) —
+prefer `--content-file` for multi-line content regardless.
 
 ---
 

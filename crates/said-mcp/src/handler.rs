@@ -1953,9 +1953,20 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             }
             // Scope-aware: insert just before the named scope's closing brace,
             // so a new member lands at the right (class) scope, never nested.
+            // Auto-indent the member to match sibling indentation.
             "append-into-symbol" => {
-                let (_, end) = resolve_sym(&want_symbol()?)?;
-                EditOp::InsertBeforeLine { line: end, text: new_text }
+                let (start, end) = resolve_sym(&want_symbol()?)?;
+                let disk_lines: Vec<&str> = file_content.lines().collect();
+                let body_indent = disk_lines.get(start)
+                    .map(|l| edit::indent_of(l).to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        let close_indent = disk_lines.get(end.saturating_sub(1))
+                            .map(|l| edit::indent_of(l).to_string()).unwrap_or_default();
+                        format!("{}    ", close_indent)
+                    });
+                let indented = edit::reindent_block(&new_text, &body_indent);
+                EditOp::InsertBeforeLine { line: end, text: indented }
             }
             "insert-after-text" => {
                 let a = want_anchor()?;
@@ -2047,6 +2058,31 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         let err_json = |msg: String| {
             Ok(CallToolResult::text_content(vec![TextContent::from(edit_error_payload(&msg).to_string())]))
         };
+
+        // explain: pre-validate only — return valid_anchors without editing.
+        #[cfg(feature = "code")]
+        if t.explain {
+            if let Err(e) = sca_core::edit::is_safe_relative_path(&t.file) { return err_json(e); }
+            let fc = match std::fs::read_to_string(&t.file) {
+                Ok(s) => s, Err(e) => return err_json(format!("read {}: {}", t.file, e)),
+            };
+            let ext = Path::new(&t.file).extension().and_then(|e| e.to_str()).unwrap_or("");
+            let line = if let Some(ref name) = t.symbol {
+                let brain = self.brain.lock().map_err(|e| CallToolError::from_message(format!("brain lock: {}", e)))?;
+                brain.sym(name, 50).iter()
+                    .find(|r| sca_core::edit::paths_equal(r.doc_id.split("::").next().unwrap_or(""), &t.file))
+                    .map(|r| r.start_line as usize).unwrap_or(1)
+            } else if let Some(ref a) = t.anchor {
+                sca_core::edit::resolve_text_anchor(&fc, a).unwrap_or(1)
+            } else { 1 };
+            let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
+            let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
+                "mode": s.mode, "symbol": s.symbol, "note": s.note,
+            })).collect();
+            return ok_json(serde_json::json!({
+                "ok": true, "explain": true, "file": t.file, "at_line": line, "valid_anchors": valid,
+            }));
+        }
 
         let (new_content, mut summary) = match self.compute_edit(
             &t.file, &t.mode, t.symbol.as_deref(), t.anchor.as_deref(),

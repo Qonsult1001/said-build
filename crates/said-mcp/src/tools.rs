@@ -245,7 +245,10 @@ pub struct EditTool {
     /// Repo-relative path of the source file to change (e.g. src/Program.cs).
     pub file: String,
     /// Edit mode: insert-after-symbol | insert-before-symbol | replace-symbol |
-    /// delete-symbol | insert-after-text | insert-before-text | replace-text
+    /// delete-symbol | append-into-symbol | insert-after-text | insert-before-text |
+    /// replace-text | insert-after-context | insert-before-context | replace-context.
+    /// Optional only when `explain` is true.
+    #[serde(default)]
     pub mode: String,
     /// Symbol name for *-symbol modes (resolved scoped to `file`).
     #[serde(default)]
@@ -262,6 +265,11 @@ pub struct EditTool {
     /// Allow a replace/delete spanning more than the default max lines.
     #[serde(default)]
     pub allow_large: bool,
+    /// Pre-validate only: return the valid scope-correct anchors for `symbol`
+    /// or `anchor` (a `valid_anchors` menu) WITHOUT editing. Pick the right
+    /// move up front. `mode` may be omitted when explain is true.
+    #[serde(default)]
+    pub explain: bool,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
