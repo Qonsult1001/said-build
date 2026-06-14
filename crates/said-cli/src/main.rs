@@ -5970,9 +5970,11 @@ fn cmd_edit(
     };
 
     // Resolve a symbol → (start,end) line range, scoped to --file, via the
-    // same lookup `said sym` uses.
+    // same lookup `said sym` uses. Also runs an anchor-drift check: the file on
+    // disk must still match what the brain indexed for that symbol, else the
+    // range is stale and we refuse (recall correctness).
     let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
-        let brain = open_brain(path)?;
+        let mut brain = open_brain(path)?;
         let results = brain.sym(name, 50);
         let cands: Vec<edit::SymCandidate> = results.iter().map(|r| edit::SymCandidate {
             doc_id: r.doc_id.clone(),
@@ -5980,7 +5982,30 @@ fn cmd_edit(
             start_line: r.start_line as usize,
             end_line: r.end_line as usize,
         }).collect();
-        edit::resolve_symbol_in_file(&cands, file)
+        let (start, end) = edit::resolve_symbol_in_file(&cands, file)?;
+        // The symbol index's end_line can be off-by-one on the closing brace.
+        // The brain's stored *content* for the symbol is authoritative, so we
+        // derive the true end from its line count and (a) drift-check against
+        // the matching on-disk slice, (b) return the corrected range so an
+        // edit replaces the whole construct (incl. the closing brace).
+        let mut corrected_end = end;
+        if let Some(matched) = cands.iter().find(|c|
+            edit::paths_equal(c.doc_id.split("::").next().unwrap_or(""), file)
+            && c.start_line == start && c.end_line == end)
+        {
+            if let Some(indexed) = brain.get(&matched.doc_id) {
+                let disk_lines: Vec<&str> = file_content.lines().collect();
+                let lo = start.saturating_sub(1);
+                let snippet_lines = indexed.lines().count().max(1);
+                let hi = (lo + snippet_lines).min(disk_lines.len());
+                if lo < hi {
+                    let ondisk_slice = disk_lines[lo..hi].join("\n");
+                    edit::check_symbol_fresh(&indexed, &ondisk_slice)?;
+                    corrected_end = hi; // 1-based inclusive end == hi (lo+count)
+                }
+            }
+        }
+        Ok((start, corrected_end))
     };
 
     let op: EditOp = match mode {

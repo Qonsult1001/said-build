@@ -150,6 +150,36 @@ pub fn apply_edit(content: &str, op: &EditOp) -> Result<EditResult, String> {
     }
 }
 
+/// Anchor-drift / freshness check for symbol-mode edits (recall correctness).
+///
+/// The brain stores what a symbol looked like when it was indexed. Before we
+/// edit by symbol line-range, confirm the file on disk still matches what the
+/// brain indexed — otherwise the range is stale (the file changed since the
+/// last `said init`/`reindex`) and the edit could land on the wrong lines.
+///
+/// Comparison is whitespace-insensitive (LF/CRLF, trailing spaces, blank-line
+/// runs don't count as drift) so cosmetic formatting differences never block a
+/// legitimate edit. Returns `Err` only on a real content divergence, with a
+/// message telling the caller to reindex.
+pub fn check_symbol_fresh(indexed: &str, ondisk: &str) -> Result<(), String> {
+    if normalize_for_compare(indexed) == normalize_for_compare(ondisk) {
+        Ok(())
+    } else {
+        Err("stale anchor: the file changed since it was indexed — run `said reindex <file>` and retry (refusing to edit against an out-of-date brain)".to_string())
+    }
+}
+
+/// Normalize text for drift comparison: unify newlines, trim trailing
+/// whitespace per line, and drop blank lines so formatting noise isn't drift.
+fn normalize_for_compare(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .lines()
+        .map(|l| l.trim_end())
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Apply a sequence of edits transactionally to `content`. Each op sees the
 /// result of the previous one. If ANY op fails, the whole call returns `Err`
 /// and the returned string is never the partially-edited content — the caller
@@ -202,7 +232,7 @@ fn doc_id_file(doc_id: &str) -> &str {
 }
 
 /// Compare two repo-relative paths ignoring separator style (`/` vs `\`).
-fn paths_equal(a: &str, b: &str) -> bool {
+pub fn paths_equal(a: &str, b: &str) -> bool {
     a.replace('\\', "/") == b.replace('\\', "/")
 }
 
@@ -553,6 +583,54 @@ mod tests {
     fn unknown_extension_skips_check_returns_ok() {
         // No grammar for this extension → we can't verify, so don't block.
         assert!(verify_syntax("anything at all }{", "zzz").is_ok());
+    }
+
+    #[cfg(feature = "code")]
+    #[test]
+    fn parse_check_covers_many_languages() {
+        // Layer 1 must verify ALL bundled grammars, not just rs/py/js/ts/go/java/cs.
+        // Valid snippets pass:
+        assert!(verify_syntax("def f():\n    return 1\n", "py").is_ok());
+        assert!(verify_syntax("package main\nfunc f() {}\n", "go").is_ok());
+        assert!(verify_syntax("int main() { return 0; }\n", "c").is_ok());
+        assert!(verify_syntax("class A { public: int x; };\n", "cpp").is_ok());
+        assert!(verify_syntax("def m\n  1\nend\n", "rb").is_ok());
+        assert!(verify_syntax("echo hello\n", "sh").is_ok());
+        assert!(verify_syntax("{\"a\": 1}\n", "json").is_ok());
+    }
+
+    #[cfg(feature = "code")]
+    #[test]
+    fn parse_check_rejects_broken_in_more_languages() {
+        // Broken snippets are caught for newly-wired languages:
+        assert!(verify_syntax("int main( { return 0; }\n", "c").is_err());      // bad paren
+        assert!(verify_syntax("{\"a\": }\n", "json").is_err());                 // bad json
+    }
+
+    // ---- anchor drift detection (recall correctness) -------------------
+
+    #[test]
+    fn fresh_anchor_when_disk_matches_index() {
+        let indexed = "fn target() {\n    do_thing();\n}";
+        let ondisk = "fn target() {\n    do_thing();\n}";
+        assert!(check_symbol_fresh(indexed, ondisk).is_ok());
+    }
+
+    #[test]
+    fn fresh_anchor_tolerates_whitespace_only_difference() {
+        // Trailing whitespace / CRLF vs LF shouldn't count as drift.
+        let indexed = "fn target() {\n    do_thing();\n}";
+        let ondisk = "fn target() {\r\n    do_thing();  \r\n}";
+        assert!(check_symbol_fresh(indexed, ondisk).is_ok());
+    }
+
+    #[test]
+    fn stale_anchor_when_disk_diverged_errors() {
+        // The function at this range was changed on disk since indexing.
+        let indexed = "fn target() {\n    do_thing();\n}";
+        let ondisk = "fn target() {\n    do_something_completely_different();\n}";
+        let err = check_symbol_fresh(indexed, ondisk).unwrap_err();
+        assert!(err.to_lowercase().contains("stale") || err.to_lowercase().contains("reindex"));
     }
 
     // ---- transactional multi-edit (all-or-nothing) --------------------
