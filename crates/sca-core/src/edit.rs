@@ -236,33 +236,75 @@ pub fn paths_equal(a: &str, b: &str) -> bool {
     a.replace('\\', "/") == b.replace('\\', "/")
 }
 
-/// Resolve a symbol to its `(start_line, end_line)` **scoped to `file`**.
-/// Errors if zero candidates match the file (not found) or more than one
-/// (ambiguous — never guesses), per the spec's resolution rules.
+/// Strict resolve: errors on 0 or >1 matches. Backward-compatible wrapper over
+/// [`resolve_symbol_ex`] with no line filter and no largest-span preference.
 pub fn resolve_symbol_in_file(
     candidates: &[SymCandidate],
     file: &str,
+) -> Result<(usize, usize), String> {
+    resolve_symbol_ex(candidates, file, None, false)
+}
+
+/// Resolve a symbol to its `(start_line, end_line)` **scoped to `file`**, with
+/// disambiguation options for the C# class/ctor name-clash (and similar):
+///
+/// - `line = Some(N)` → select the candidate whose `start_line == N` (the error
+///   message lists candidate start lines, so a caller can pass one back).
+/// - `prefer_largest = true` → when multiple candidates match, pick the one with
+///   the **largest span** (the enclosing class, not its 1-line constructor).
+///   Used by `append-into-symbol`, where "add a member to ClassName" means the
+///   class body.
+/// - otherwise multiple matches → error listing the candidate start lines.
+pub fn resolve_symbol_ex(
+    candidates: &[SymCandidate],
+    file: &str,
+    line: Option<usize>,
+    prefer_largest: bool,
 ) -> Result<(usize, usize), String> {
     let matches: Vec<&SymCandidate> = candidates
         .iter()
         .filter(|c| paths_equal(doc_id_file(&c.doc_id), file))
         .collect();
-    match matches.len() {
-        0 => Err(format!("symbol not found in {}", file)),
-        1 => Ok((matches[0].start_line, matches[0].end_line)),
-        n => {
-            let lines: Vec<String> = matches
-                .iter()
-                .map(|c| format!("{}:{}-{}", c.name, c.start_line, c.end_line))
-                .collect();
-            Err(format!(
-                "ambiguous: {} symbols match in {} ({}); disambiguate by line",
-                n,
-                file,
-                lines.join(", ")
-            ))
-        }
+    if matches.is_empty() {
+        return Err(format!("symbol not found in {}", file));
     }
+    // Explicit line wins.
+    if let Some(n) = line {
+        return match matches.iter().find(|c| c.start_line == n) {
+            Some(c) => Ok((c.start_line, c.end_line)),
+            None => {
+                let starts: Vec<String> = matches.iter().map(|c| c.start_line.to_string()).collect();
+                Err(format!(
+                    "no symbol starts at line {} in {} (candidates start at: {})",
+                    n, file, starts.join(", ")
+                ))
+            }
+        };
+    }
+    if matches.len() == 1 {
+        return Ok((matches[0].start_line, matches[0].end_line));
+    }
+    // Multiple matches.
+    if prefer_largest {
+        let best = matches.iter().max_by_key(|c| c.end_line.saturating_sub(c.start_line)).unwrap();
+        return Ok((best.start_line, best.end_line));
+    }
+    let listed: Vec<String> = matches
+        .iter()
+        .map(|c| format!("{}:{}-{} ({})", c.name, c.start_line, c.end_line, doc_id_kind(&c.doc_id)))
+        .collect();
+    let starts: Vec<String> = matches.iter().map(|c| c.start_line.to_string()).collect();
+    Err(format!(
+        "ambiguous: {} symbols match in {} ({}); disambiguate with --line <N> (one of: {})",
+        matches.len(), file, listed.join(", "), starts.join(", ")
+    ))
+}
+
+/// Extract the kind (third `::`-segment, before the trailing `:line`) from a doc_id.
+fn doc_id_kind(doc_id: &str) -> &str {
+    doc_id.split("::").nth(2)
+        .map(|s| s.split(':').next().unwrap_or(s))
+        .unwrap_or("?")
 }
 
 /// Guard a replace/delete against accidentally selecting a huge range.
@@ -569,6 +611,56 @@ mod tests {
         // Brain may store paths with forward slashes even on Windows.
         let cands = vec![cand("src/a/Program.cs::Foo::method:5", "Foo", 5, 8)];
         assert!(resolve_symbol_in_file(&cands, "src\\a\\Program.cs").is_ok());
+    }
+
+    // ---- C# class/ctor name-clash disambiguation (FIX 1) ---------------
+
+    fn cs_class_and_ctor() -> Vec<SymCandidate> {
+        // Real C# shape: class HealthTests (10-124) + ctor HealthTests (13-13).
+        vec![
+            cand("tests/HealthTests.cs::HealthTests::class_declaration:10", "HealthTests", 10, 124),
+            cand("tests/HealthTests.cs::HealthTests::constructor_declaration:13", "HealthTests", 13, 13),
+        ]
+    }
+
+    #[test]
+    fn disambiguate_by_line_picks_the_matching_span() {
+        let cands = cs_class_and_ctor();
+        // --line 10 selects the class.
+        let (s, e) = resolve_symbol_ex(&cands, "tests/HealthTests.cs", Some(10), false).unwrap();
+        assert_eq!((s, e), (10, 124));
+        // --line 13 selects the constructor.
+        let (s, e) = resolve_symbol_ex(&cands, "tests/HealthTests.cs", Some(13), false).unwrap();
+        assert_eq!((s, e), (13, 13));
+    }
+
+    #[test]
+    fn disambiguate_by_line_errors_when_no_span_starts_there() {
+        let cands = cs_class_and_ctor();
+        assert!(resolve_symbol_ex(&cands, "tests/HealthTests.cs", Some(999), false).is_err());
+    }
+
+    #[test]
+    fn prefer_largest_picks_the_class_over_the_constructor() {
+        let cands = cs_class_and_ctor();
+        // append-into-symbol uses prefer_largest=true → the class body (10-124).
+        let (s, e) = resolve_symbol_ex(&cands, "tests/HealthTests.cs", None, true).unwrap();
+        assert_eq!((s, e), (10, 124), "should pick the enclosing class, not the 1-line ctor");
+    }
+
+    #[test]
+    fn ambiguous_still_errors_without_line_or_prefer_largest() {
+        let cands = cs_class_and_ctor();
+        let err = resolve_symbol_ex(&cands, "tests/HealthTests.cs", None, false).unwrap_err();
+        assert!(err.to_lowercase().contains("ambiguous"));
+        // The error must list the candidate START lines so the caller can pass --line.
+        assert!(err.contains("10") && err.contains("13"));
+    }
+
+    #[test]
+    fn old_resolve_still_errors_on_ambiguity() {
+        // Backward-compat wrapper: no line, no prefer → still strict.
+        assert!(resolve_symbol_in_file(&cs_class_and_ctor(), "tests/HealthTests.cs").is_err());
     }
 
     // ---- multi-line context anchor (disambiguation) --------------------

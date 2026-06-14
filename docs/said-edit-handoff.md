@@ -1,10 +1,27 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.6.0` (both `said` CLI and `said-mcp`)
+**Date:** 2026-06-14 · **Version:** `said 0.7.0` (both `said` CLI and `said-mcp`)
 **Artifact:** `said-full-linux-x64`
 
-> **Live-binary check:** `said --version` must print **`said 0.6.0`**. If it
+> **Live-binary check:** `said --version` must print **`said 0.7.0`**. If it
 > prints anything lower, the old binary is still baked in — rebuild the image.
+
+### New in 0.7.0 — C# class/ctor disambiguation (resolves the live blocker)
+
+In C# every class shares its name with its constructor, so
+`append-into-symbol --symbol <Class>` was ambiguous for essentially every real
+class. Fixed three ways:
+
+| Fix | Behavior |
+|-----|----------|
+| **`--line <N>`** | When a `--symbol` matches multiple spans in `--file`, `--line N` selects the span starting at line N. The ambiguity error and `--explain` both list the candidate start lines. |
+| **`append-into-symbol` defaults to the largest span** | When ambiguous, it picks the **enclosing class** (not the 1-line constructor) automatically — so "add a member to ClassName" works with **no extra args**. `--line` overrides. |
+| **`--explain` returns `line` + `kind`** | Each `valid_anchors` entry now includes `"line": 10, "kind": "class_declaration"`, so the menu is directly actionable: read it, issue `append-into-symbol --symbol X --line 10` (or just rely on the largest-span default). |
+| **`--help` lists all 11 modes** | `append-into-symbol` + the three `*-context` modes are now in the `--help` Modes line and usage. |
+
+Verified end-to-end on a real C# class+constructor name clash: `append-into-symbol`
+with no `--line` lands the member at class scope (valid C#); explicit `--line`
+selects the exact span; `--explain` returns the actionable line/kind.
 
 This is the durable fix for the production failure where the Groq cycle did a
 **full-file rewrite** and silently deleted most of `Program.cs` (161 → 27 lines),
@@ -20,7 +37,7 @@ construction** — there is no whole-file-write path.
 | **New `said edit` subcommand** | Surgical, anchored insert/replace/delete on a source file. No mode can rewrite a whole file. |
 | **New MCP `edit` tool** | Same capability exposed to MCP clients (Claude/Groq via the MCP server). Identical behavior + safety. |
 | **AST chunker bug fixed** | Short functions (<3-line body) used to vanish from the symbol index and the previous symbol's range over-extended — which made `replace-symbol` eat the next function. Now every named definition has an exact range. Makes symbol-mode edits safe. |
-| **Version** | `said --version` → `said 0.6.0` (current). Use this to confirm the new binary is live in the container. |
+| **Version** | `said --version` → `said 0.7.0` (current). Use this to confirm the new binary is live in the container. |
 | **Feature bundles** | Binaries are now built as bundles. The one you want is **`full`** (= code + docs + OCR + LSP, with the encoder baked in). |
 
 ### New in 0.3.0 — world-class safety upgrades
@@ -117,9 +134,9 @@ appears more than once *within the same file*, the edit errors (never guesses).
    ```
 4. Confirm the new binary is live:
    ```bash
-   /app/said --version          # must print: said 0.6.0
+   /app/said --version          # must print: said 0.7.0
    ```
-   If it says anything below `0.6.0`, the old binary is still baked in — rebuild the image.
+   If it says anything below `0.7.0`, the old binary is still baked in — rebuild the image.
 
 > **Shell note (carried over from build.md):** under Git Bash, prefix
 > `docker exec` calls with `MSYS_NO_PATHCONV=1` or `/app/said` gets rewritten to

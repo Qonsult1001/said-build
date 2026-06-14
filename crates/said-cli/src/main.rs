@@ -1,4 +1,4 @@
-//! `said` — CLI for .said portable brain files.
+﻿//! `said` â€” CLI for .said portable brain files.
 //!
 //! Drop-in replacement for ChromaDB/Pinecone: `said add`, `said query`, `said get`.
 
@@ -10,9 +10,9 @@ use sca_core::said_file::SaidFile;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// said — portable brain files. Vector DB in a single file.
+/// said â€” portable brain files. Vector DB in a single file.
 #[derive(Parser)]
-#[command(name = "said", version, about = "Portable brain files — add, query, get in one binary")]
+#[command(name = "said", version, about = "Portable brain files â€” add, query, get in one binary")]
 struct Cli {
     /// Path to .said file (auto-detects if omitted)
     #[arg(long, global = true)]
@@ -56,7 +56,7 @@ enum Commands {
         #[arg(long)]
         title: Option<String>,
     },
-    /// Semantic search — find similar documents
+    /// Semantic search â€” find similar documents
     Query {
         /// Search query
         query: String,
@@ -91,15 +91,15 @@ enum Commands {
         /// Maximum results
         #[arg(long, default_value_t = 10)]
         max: usize,
-        /// Prefix browse mode — lists all symbols whose name starts with `name`
+        /// Prefix browse mode â€” lists all symbols whose name starts with `name`
         #[arg(long)]
         list: bool,
     },
-    /// Ask the brain a question — the smart router.
+    /// Ask the brain a question â€” the smart router.
     ///
     /// Tries symbol lookup, trigram grep, and SCA semantic search in parallel,
     /// merges results by confidence, and returns only matches above a threshold.
-    /// If the brain has no confident answer, returns empty — never fake results.
+    /// If the brain has no confident answer, returns empty â€” never fake results.
     ///
     /// The brain learns from every ask: query embeddings accumulate for the
     /// next dream cycle, and recall weights on returned docs get strengthened.
@@ -111,12 +111,12 @@ enum Commands {
     Ask {
         /// Natural language question
         query: String,
-        /// Maximum results. Default 10 — proven by MTEB that the correct
-        /// answer is always in top-10 (NDCG@10 ≥ 0.89 across all tasks).
+        /// Maximum results. Default 10 â€” proven by MTEB that the correct
+        /// answer is always in top-10 (NDCG@10 â‰¥ 0.89 across all tasks).
         #[arg(long, default_value_t = 10)]
         top: usize,
         /// Deep mode: return ALL relevant chunks (no top-K cap).
-        /// Use for full cross-document narrative synthesis — "tell me
+        /// Use for full cross-document narrative synthesis â€” "tell me
         /// everything about X from start to finish". Returns every chunk
         /// above the relative threshold instead of capping at --top.
         #[arg(long)]
@@ -124,7 +124,7 @@ enum Commands {
         /// Retrieval engine. `current` (default) = our existing 3-engine
         /// pipeline (sym + grep + SCA semantic with multi-tier ranking).
         /// `semble` = Rust port of MinishLab semble's BM25 + dense + RRF
-        /// + 3-boost algorithm — for A/B comparison and head-to-head.
+        /// + 3-boost algorithm â€” for A/B comparison and head-to-head.
         #[arg(long, default_value = "current")]
         engine: String,
     },
@@ -135,7 +135,7 @@ enum Commands {
     /// the bytes they hold.
     Compact {
         /// Enable tombstone purge. Requires --all or --keep N to specify
-        /// the scope (refuses to run otherwise — protects against accidental
+        /// the scope (refuses to run otherwise â€” protects against accidental
         /// full wipes).
         #[arg(long)]
         drop_history: bool,
@@ -172,18 +172,25 @@ enum Commands {
         /// File to reindex
         file: String,
     },
-    /// Surgical, anchored edit of a source file on disk — insert/replace/delete
+    /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
     ///
     /// Modes: insert-after-symbol | insert-before-symbol | replace-symbol |
-    ///        delete-symbol | insert-after-text | insert-before-text | replace-text
+    ///        delete-symbol | append-into-symbol | insert-after-text |
+    ///        insert-before-text | replace-text | insert-after-context |
+    ///        insert-before-context | replace-context
+    ///
+    /// When a --symbol name matches more than one span in --file (e.g. a C#
+    /// class and its same-named constructor), pass --line <N> to pick the span
+    /// that starts at line N. `append-into-symbol` defaults to the largest
+    /// (enclosing) span â€” the class body â€” when ambiguous.
     ///
     /// Examples:
     ///   said edit --file src/Program.cs insert-after-text \
     ///     --anchor 'app.MapGet("/api/pid"' --content '<new line>' --dry-run
-    ///   said edit --file src/Program.cs replace-symbol --symbol Configure \
-    ///     --content-file new_configure.txt
+    ///   said edit --file tests/HealthTests.cs append-into-symbol \
+    ///     --symbol HealthTests --line 10 --content-file new_test.txt --json
     Edit {
         /// Repo-relative path of the source file to change (e.g. src/Program.cs)
         #[arg(long)]
@@ -194,6 +201,10 @@ enum Commands {
         /// Symbol name (for *-symbol modes); resolved scoped to --file
         #[arg(long)]
         symbol: Option<String>,
+        /// Disambiguator: when --symbol matches multiple spans in --file, pick
+        /// the one whose start line == this value (from the error/--explain).
+        #[arg(long)]
+        line: Option<usize>,
         /// Exact substring anchor (for *-text modes)
         #[arg(long)]
         anchor: Option<String>,
@@ -219,17 +230,17 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
-    /// Show cognitive lineage for a symbol or doc_id — a "semantic git log".
+    /// Show cognitive lineage for a symbol or doc_id â€” a "semantic git log".
     /// Walks the tombstone chain and shows each version with its delta.
     History {
         /// Symbol name or doc_id (e.g., "compact_block_dict" or "src/frames.rs::compact_block_dict")
         name: String,
     },
     /// Restore a past version as the new HEAD (git-style time travel).
-    /// Use `said history <name>` first to see the version list — the v0/v1/...
+    /// Use `said history <name>` first to see the version list â€” the v0/v1/...
     /// index maps to `--version`. Checkout creates a NEW frame carrying the
     /// past content; the current HEAD becomes a tombstone. History grows by
-    /// one entry on every checkout — it's a real event, not a rewind.
+    /// one entry on every checkout â€” it's a real event, not a rewind.
     Checkout {
         /// Symbol name or doc_id
         name: String,
@@ -245,11 +256,11 @@ enum Commands {
         #[arg(long)]
         write: bool,
     },
-    /// Import memories from another system (mem0, memvid, …) into this brain.
+    /// Import memories from another system (mem0, memvid, â€¦) into this brain.
     ///
     /// Each adapter reads the competitor's export format and maps records
     /// into the right `.said` pillar with source metadata preserved as tags.
-    /// Enterprise brains refuse content-embedding imports — use `--list` to
+    /// Enterprise brains refuse content-embedding imports â€” use `--list` to
     /// see the adapters registered today.
     Import {
         /// Source system: `mem0`, `memvid`. Use `--list` to see current adapters.
@@ -262,11 +273,11 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Admin operations — the enterprise Recycle Bin + compliance surface.
+    /// Admin operations â€” the enterprise Recycle Bin + compliance surface.
     ///
     /// Subcommands expose the tombstone lineage for audit, byte-exact
     /// restore (GDPR / SOX / HIPAA friendly), and legal-hold tagging that
-    /// blocks retention sweeps. All admin actions are per-brain — they
+    /// blocks retention sweeps. All admin actions are per-brain â€” they
     /// don't reach across files.
     Admin {
         #[command(subcommand)]
@@ -280,18 +291,18 @@ enum Commands {
     /// Ingest a document, video, or folder into the brain.
     ///
     /// Auto-routes by extension:
-    ///   .pdf .docx .txt .md         → document_ingest (feature: docs)
-    ///   .mp4 .mp3 .wav .m4a .flac   → whisper_ingest  (feature: whisper)
-    ///   <dir>                       → walk recursively, pick up every
+    ///   .pdf .docx .txt .md         â†’ document_ingest (feature: docs)
+    ///   .mp4 .mp3 .wav .m4a .flac   â†’ whisper_ingest  (feature: whisper)
+    ///   <dir>                       â†’ walk recursively, pick up every
     ///                                 supported file via the same routing
     ///
-    /// Streams progress live for every format — one line per page /
+    /// Streams progress live for every format â€” one line per page /
     /// paragraph / chunk / segment, same UX as `said init .`.
     Ingest {
         /// File or directory to ingest (positional)
         target: String,
 
-        /// Enterprise mode — store a searchable POINTER (URI + mime + title
+        /// Enterprise mode â€” store a searchable POINTER (URI + mime + title
         /// + summary) instead of embedding the file's content.
         ///
         /// The original file stays in its system of record (SharePoint, S3,
@@ -323,14 +334,14 @@ enum Commands {
     /// and shared boundaries between modules.
     Discover {},
 
-    /// Monolith product catalogue — lists all detected business modules
+    /// Monolith product catalogue â€” lists all detected business modules
     /// (card, account, billing, visa, fica, etc.) with confidence scores
     /// and the exact name to pass to `said snapshot`.
     ///
     /// Example:
-    ///   said overview                     — list all detected products
-    ///   said overview --check visa        — does Visa/ISO exist? show evidence
-    ///   said overview --check EFT         — probe for a specific domain term
+    ///   said overview                     â€” list all detected products
+    ///   said overview --check visa        â€” does Visa/ISO exist? show evidence
+    ///   said overview --check EFT         â€” probe for a specific domain term
     Overview {
         /// Probe the brain for a specific product/domain term. Prints whether
         /// it exists, evidence (matching tables/procs), and suggests the
@@ -349,7 +360,7 @@ enum Commands {
     /// for querying just the module.
     ///
     /// Example: said snapshot card
-    ///   → creates card.vivere/ with all card-related SQL + brain
+    ///   â†’ creates card.vivere/ with all card-related SQL + brain
     Snapshot {
         /// Module name (e.g., "card", "billing", "onboarding")
         /// The engine searches for all objects related to this term.
@@ -366,9 +377,9 @@ enum Commands {
     ///   said sandbox card +billing +fee       # card + billing + fee, one DB
     ///   said sandbox card --compare v1,v2     # two card sandboxes side-by-side
     ///
-    /// All three modules above share one 977-table schema — procs and triggers
+    /// All three modules above share one 977-table schema â€” procs and triggers
     /// from all listed modules are deployed into the SAME database so cross-
-    /// module calls (card proc → billing table, billing trigger → fee function)
+    /// module calls (card proc â†’ billing table, billing trigger â†’ fee function)
     /// run for real. That's the whole point of a sandbox.
     ///
     /// Separate containers are only used when you explicitly pass `--compare`
@@ -377,7 +388,7 @@ enum Commands {
     Sandbox {
         /// Primary module, and any "+module" additions.
         /// Example: said sandbox card +billing +fee
-        ///   → one sandbox with card, billing AND fee procs active.
+        ///   â†’ one sandbox with card, billing AND fee procs active.
         /// The "+" prefix is what marks an additional module (so the first
         /// arg is unambiguously the primary).
         #[arg(required = true, num_args = 1..)]
@@ -387,11 +398,11 @@ enum Commands {
         /// keep two unrelated sandboxes alive side-by-side.
         #[arg(short, long)]
         port: Option<u16>,
-        /// A/B compare mode — takes a comma-separated list of labels and
+        /// A/B compare mode â€” takes a comma-separated list of labels and
         /// spins up one sandbox per label for the SAME module, on adjacent
         /// ports. Useful for "does the refactor break anything?" checks.
         /// Example: said sandbox card --compare before,after
-        ///   → two `card` sandboxes on ports 1433 and 1434.
+        ///   â†’ two `card` sandboxes on ports 1433 and 1434.
         #[arg(long)]
         compare: Option<String>,
         /// Start the Docker container(s) immediately after generating files.
@@ -417,7 +428,7 @@ enum Commands {
         /// Also delete the .said-code/ master folder entirely.
         #[arg(long)]
         all: bool,
-        /// Only stop containers — do NOT delete folders.
+        /// Only stop containers â€” do NOT delete folders.
         #[arg(long)]
         containers_only: bool,
         /// Print what would be done without doing it.
@@ -425,7 +436,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Document vault — ingest, dedupe, rebuild, restore (Track B).
+    /// Document vault â€” ingest, dedupe, rebuild, restore (Track B).
     Vault {
         #[command(subcommand)]
         action: VaultAction,
@@ -465,8 +476,8 @@ enum Commands {
         verb: ForgeVerb,
     },
     /// Multi-client orchestrator. Auto-discovers clients from
-    /// `1-ground-truth/<Client>/` and runs the full ingest →
-    /// sandbox → spec pipeline for one or many at a time.
+    /// `1-ground-truth/<Client>/` and runs the full ingest â†’
+    /// sandbox â†’ spec pipeline for one or many at a time.
     #[cfg(feature = "forge")]
     Clients {
         #[command(subcommand)]
@@ -478,10 +489,10 @@ enum Commands {
         #[command(subcommand)]
         action: DevSpecAction,
     },
-    /// Step 10 — execution-level testing of the OpenAPI contract via a
+    /// Step 10 â€” execution-level testing of the OpenAPI contract via a
     /// synthetic HTTP server backed by direct stored-procedure calls.
     /// Walks the entity build order, runs L3 lifecycle per entity
-    /// (POST → GET → PUT → GET → LIST), stops at first failure.
+    /// (POST â†’ GET â†’ PUT â†’ GET â†’ LIST), stops at first failure.
     #[cfg(feature = "forge-sql-verify")]
     Test {
         /// Workspace root (default: current directory).
@@ -509,7 +520,7 @@ enum ClientsVerb {
     },
     /// For each named client (or all if omitted): bring up its
     /// sandbox, generate the OpenAPI spec, then tear the sandbox down.
-    /// Sequential by default — only one SQL Server container alive at
+    /// Sequential by default â€” only one SQL Server container alive at
     /// a time to keep memory bounded.
     Run {
         /// Specific client names to run. Omit to run all discovered clients.
@@ -524,7 +535,7 @@ enum ClientsVerb {
         /// Cap on row count for closed-set lookup detection.
         #[arg(long, default_value_t = 25)]
         max_enum_rows: usize,
-        /// Skip `forge docs` after sandbox up — useful when you only
+        /// Skip `forge docs` after sandbox up â€” useful when you only
         /// want the database deployed for manual inspection.
         #[arg(long)]
         no_docs: bool,
@@ -532,7 +543,7 @@ enum ClientsVerb {
         /// (default: tear down to free RAM for the next client).
         #[arg(long)]
         keep_running: bool,
-        /// Generate the spec from SQL alone — bypass Dev Planning.
+        /// Generate the spec from SQL alone â€” bypass Dev Planning.
         /// Produces one op per matchable proc instead of restricting
         /// to a curated `cardholder` slice. Use for clients without
         /// a written Dev Planning catalog (e.g. Vivere).
@@ -540,7 +551,7 @@ enum ClientsVerb {
         from_sql: bool,
     },
     /// Show per-client state without spinning anything up.
-    /// Reads only filesystem mtimes — no docker, no SQL.
+    /// Reads only filesystem mtimes â€” no docker, no SQL.
     Status {
         /// Workspace root (default: current directory).
         #[arg(long, value_name = "DIR")]
@@ -584,13 +595,13 @@ enum DevSpecAction {
 #[cfg(feature = "forge")]
 #[derive(Subcommand, Debug)]
 enum ForgeVerb {
-    /// Scaffold a new forge workspace — creates 4 authority folders
+    /// Scaffold a new forge workspace â€” creates 4 authority folders
     /// (1-ground-truth, 2-progress, 3-requirements, 4-expectations), a
     /// `.forge/config.toml` stub, per-folder READMEs, and an empty `.said`
     /// brain. Users drop their source content into the folders, then run
-    /// `said forge plan` → `sync` → `run`.
+    /// `said forge plan` â†’ `sync` â†’ `run`.
     Init {
-        /// Project name — becomes the `.said` filename and the workspace title.
+        /// Project name â€” becomes the `.said` filename and the workspace title.
         project: String,
         /// Target directory (default: `./$project`). Accepts absolute or
         /// relative paths. Use `--target` instead of the global `--path`
@@ -604,7 +615,7 @@ enum ForgeVerb {
         #[arg(long)]
         force: bool,
     },
-    /// Run the interactive plan phase — resolves authority + directive choice
+    /// Run the interactive plan phase â€” resolves authority + directive choice
     /// through a speckit-style six-question Q&A. Writes `.forge/config.toml`
     /// on approval. Required before `forge sync`.
     Plan {
@@ -612,12 +623,12 @@ enum ForgeVerb {
         #[arg(long, value_name = "DIR")]
         target: Option<PathBuf>,
         /// Re-run Q&A with previously-saved answers pre-filled (not yet
-        /// implemented — this just loads the existing config as a base).
+        /// implemented â€” this just loads the existing config as a base).
         #[arg(long)]
         reconfigure: bool,
     },
     /// Ingest every file in the 4 authority folders into the workspace
-    /// `.said` brain. Reads `.forge/config.toml` (required — run `forge plan`
+    /// `.said` brain. Reads `.forge/config.toml` (required â€” run `forge plan`
     /// first). Tags every frame with `authority:<level>:<scope>`. Idempotent
     /// via mtime+size+authority manifest.
     Sync {
@@ -631,7 +642,7 @@ enum ForgeVerb {
         #[arg(long)]
         force: bool,
     },
-    /// Generate `.forge/gaps.md` — cross-authority reconciliation showing
+    /// Generate `.forge/gaps.md` â€” cross-authority reconciliation showing
     /// which directive operations have ground-truth SQL support, which are
     /// partial, and which are missing. Dual-directive mode (both OpenAPI
     /// and Dev Planning chosen) additionally flags operations in one but
@@ -671,7 +682,7 @@ enum ForgeVerb {
         /// Comma-separated list of slugs.
         #[arg(long)]
         ids: Option<String>,
-        /// Filter expression — not supported in MVP CLI (use --ids).
+        /// Filter expression â€” not supported in MVP CLI (use --ids).
         #[arg(long)]
         filter: Option<String>,
         /// Re-run even if a story is already complete.
@@ -738,15 +749,15 @@ enum ForgeVerb {
         /// workspaces (legacy behavior preserved).
         #[arg(long, value_name = "NAME")]
         client: Option<String>,
-        /// Generate the OpenAPI spec from SQL alone — bypass
+        /// Generate the OpenAPI spec from SQL alone â€” bypass
         /// `4-expectations/Dev Planning/`. Verb and path are derived
         /// from each proc's name using dt conventions
-        /// (`p_<schema>_Get_<entity>` → `GET /<entity>`). Use this for
+        /// (`p_<schema>_Get_<entity>` â†’ `GET /<entity>`). Use this for
         /// clients without Dev Planning content.
         #[arg(long)]
         from_sql: bool,
     },
-    /// Forge-owned snapshot — module-only smoke test. For authoritative
+    /// Forge-owned snapshot â€” module-only smoke test. For authoritative
     /// verification, use `said sandbox dt --up` (full monolith) and
     /// `said forge docs --verify-against-sandbox` (auto-discovers it).
     Snapshot {
@@ -756,7 +767,7 @@ enum ForgeVerb {
         #[arg(long, value_name = "DIR")]
         target: Option<PathBuf>,
     },
-    /// Forge-owned sandbox — module-only smoke test. For authoritative
+    /// Forge-owned sandbox â€” module-only smoke test. For authoritative
     /// verification, use `said sandbox dt --up` (full monolith).
     Sandbox {
         /// Module substring matched against frame doc_ids.
@@ -805,7 +816,7 @@ enum ForgeVerb {
         /// and falls back to empty if absent).
         #[arg(long, value_name = "DIR")]
         from: Option<PathBuf>,
-        /// Output directory — the `<output>/.claude/skills/<name>/`
+        /// Output directory â€” the `<output>/.claude/skills/<name>/`
         /// path is created under this root. Defaults to `<target>`.
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
@@ -818,14 +829,14 @@ enum ForgeVerb {
         force: bool,
     },
     /// Apply an OpenAPI-standard rule to a string and print the result.
-    /// One source of truth for singular/plural/casing rules — Python
+    /// One source of truth for singular/plural/casing rules â€” Python
     /// tooling (`fix_bruno.py`, `seed_validation.py`, `generate_bruno.py`)
     /// shells out here instead of duplicating the logic.
     ///
     /// Examples:
-    ///   said forge rule singularise binsponsors    # → binsponsor
-    ///   said forge rule pluralise   binsponsor     # → binsponsors
-    ///   said forge rule camel       account_id     # → accountId
+    ///   said forge rule singularise binsponsors    # â†’ binsponsor
+    ///   said forge rule pluralise   binsponsor     # â†’ binsponsors
+    ///   said forge rule camel       account_id     # â†’ accountId
     Rule {
         /// Which rule to apply: `singularise` / `pluralise` / `camel`.
         rule: String,
@@ -833,7 +844,7 @@ enum ForgeVerb {
         input: String,
     },
 
-    /// Render a proc skeleton from the proc framework (additive — does not
+    /// Render a proc skeleton from the proc framework (additive â€” does not
     /// modify deployed files; writes to `<framework>/_rendered/`).
     ///
     /// Reads `<framework>/bundles/<bundle>/bundle.toml` + the matching
@@ -885,7 +896,7 @@ enum ForgeVerb {
     ///
     /// Reads every manifest + bundle row for the profile and diffs Fully
     /// regions against the deployed file. Legacy procs (no `@said-managed`
-    /// markers) are reported informationally — not as defects (Option 3
+    /// markers) are reported informationally â€” not as defects (Option 3
     /// touch-it-migrate-it model).
     ///
     /// Equivalent to the Python prototype at
@@ -915,7 +926,7 @@ enum ForgeVerb {
     /// Audit deployed C# Query classes against the proc framework's marker
     /// convention. Phase 1: classify legacy vs framework-managed via
     /// `// [SaidFully]` / `// [SaidEnd]` markers. Drift detection against
-    /// canonical (Phase 2 — full generation) is deferred.
+    /// canonical (Phase 2 â€” full generation) is deferred.
     AuditCs {
         /// Framework root, e.g. `dtcard/.forge/proc-framework`.
         #[arg(long, value_name = "DIR")]
@@ -939,12 +950,12 @@ enum ForgeVerb {
     },
 }
 
-/// Subcommands for `said admin …`. Kept separate so clap renders a clean
+/// Subcommands for `said admin â€¦`. Kept separate so clap renders a clean
 /// nested help menu and each action can grow its own flags over time.
 #[derive(Subcommand)]
 enum AdminAction {
     /// List every tombstoned / deleted frame in the brain, newest first.
-    /// The Recycle Bin analogue — nothing is physically lost; admin can
+    /// The Recycle Bin analogue â€” nothing is physically lost; admin can
     /// restore any row by doc_id.
     ListTombstones {
         /// Optional substring filter on doc_id (case-insensitive).
@@ -958,7 +969,7 @@ enum AdminAction {
         /// doc_id of the frame to restore
         doc_id: String,
     },
-    /// Show the deletion trail for a doc_id — full lineage with timestamps,
+    /// Show the deletion trail for a doc_id â€” full lineage with timestamps,
     /// superseded_by chain, and any tags (user_id:, deleted_by:, session:).
     /// This is what an audit log would show for "who deleted X".
     WhoDeleted {
@@ -966,7 +977,7 @@ enum AdminAction {
         doc_id: String,
     },
     /// Place a legal hold on every frame (active + tombstoned) with this
-    /// doc_id. Tags `legal_hold:<case_id>` — retention sweeps skip them.
+    /// doc_id. Tags `legal_hold:<case_id>` â€” retention sweeps skip them.
     LegalHoldAdd {
         /// doc_id to hold
         doc_id: String,
@@ -980,7 +991,7 @@ enum AdminAction {
         /// Case / matter identifier to lift
         case: String,
     },
-    /// Apply a retention policy — drop tombstones older than `days`, keeping
+    /// Apply a retention policy â€” drop tombstones older than `days`, keeping
     /// the most recent `keep_per_doc` per doc_id. Legal holds are honored
     /// (held frames are never touched regardless of age).
     RetentionSweep {
@@ -988,14 +999,14 @@ enum AdminAction {
         #[arg(long, default_value_t = 365)]
         older_than_days: u64,
         /// Keep the most recent N tombstones per doc_id even if older.
-        /// Default 1 — one prior version per doc stays restorable.
+        /// Default 1 â€” one prior version per doc stays restorable.
         #[arg(long, default_value_t = 1)]
         keep_per_doc: usize,
     },
-    /// Show the append-only audit log. BLAKE3-chained — tampering breaks the
+    /// Show the append-only audit log. BLAKE3-chained â€” tampering breaks the
     /// chain. Use `--verify` to just check integrity without listing entries.
     Audit {
-        /// Only verify the chain's integrity — print "ok" or the break point.
+        /// Only verify the chain's integrity â€” print "ok" or the break point.
         #[arg(long)]
         verify: bool,
         /// Filter by actor (substring match).
@@ -1007,7 +1018,7 @@ enum AdminAction {
     },
 }
 
-/// Subcommands for `said vault …`. The enterprise document vault.
+/// Subcommands for `said vault â€¦`. The enterprise document vault.
 #[derive(Subcommand)]
 enum VaultAction {
     /// Initialize a new vault file with a bootstrap admin user.
@@ -1132,7 +1143,7 @@ fn try_load_encoder(brain: &mut SaidFile) {
             }
         }
     }
-    // Not fatal — grep-only mode still works
+    // Not fatal â€” grep-only mode still works
 }
 
 /// Open an existing .said file, resolving the path.
@@ -1158,7 +1169,7 @@ fn main() {
                 if Path::new(t).is_dir() {
                     cmd_add_dir(cli.path.as_deref(), t, cli.json)
                 } else if Path::new(t).is_file() {
-                    // It's a file path — index the file
+                    // It's a file path â€” index the file
                     cmd_add(cli.path.as_deref(), None, Some(t.as_str()), id.as_deref(), title.as_deref(), cli.json)
                 } else {
                     // It's text content
@@ -1177,10 +1188,10 @@ fn main() {
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
         Commands::Edit {
-            ref file, ref mode, ref symbol, ref anchor, ref content, ref content_file,
+            ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
         } => cmd_edit(
-            cli.path.as_deref(), file, mode, symbol.as_deref(), anchor.as_deref(),
+            cli.path.as_deref(), file, mode, symbol.as_deref(), line, anchor.as_deref(),
             content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
@@ -1264,9 +1275,9 @@ fn cmd_create(file: &str, mode: &str, json: bool) -> Result<(), String> {
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────
-// said admin <action> — enterprise recycle bin + compliance surface
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// said admin <action> â€” enterprise recycle bin + compliance surface
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(), String> {
     match action {
@@ -1330,7 +1341,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                     "doc_id": doc_id,
                 }));
             } else {
-                println!("✓ Restored doc_id '{}' as frame #{}.", doc_id, restored_id);
+                println!("âœ“ Restored doc_id '{}' as frame #{}.", doc_id, restored_id);
                 if let Some(old) = displaced {
                     println!("  Previous active head (frame #{}) demoted to tombstone.", old);
                 }
@@ -1364,9 +1375,9 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                         sca_core::frames::FrameStatus::Active => "active",
                     };
                     let superseded = m.superseded_by
-                        .map(|id| format!(" → superseded by #{}", id))
+                        .map(|id| format!(" â†’ superseded by #{}", id))
                         .unwrap_or_default();
-                    // Surface user/session attribution tags if present — these
+                    // Surface user/session attribution tags if present â€” these
                     // are the closest thing we have to a "who deleted" signal
                     // until the AUDT section (step 11) ships.
                     let attribution: String = m.tags.iter()
@@ -1391,7 +1402,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
             if json {
                 println!("{}", serde_json::json!({"doc_id": doc_id, "case": case, "frames_tagged": n}));
             } else {
-                println!("✓ Placed legal hold '{}' on {} frame(s) for doc_id '{}'.", case, n, doc_id);
+                println!("âœ“ Placed legal hold '{}' on {} frame(s) for doc_id '{}'.", case, n, doc_id);
                 if n == 0 { println!("  (no frames found with that doc_id)"); }
             }
         }
@@ -1402,7 +1413,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
             if json {
                 println!("{}", serde_json::json!({"doc_id": doc_id, "case": case, "frames_released": n}));
             } else {
-                println!("✓ Released legal hold '{}' from {} frame(s) for doc_id '{}'.", case, n, doc_id);
+                println!("âœ“ Released legal hold '{}' from {} frame(s) for doc_id '{}'.", case, n, doc_id);
             }
         }
         AdminAction::Audit { verify, actor, kind } => {
@@ -1414,14 +1425,14 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                         if json {
                             println!("{}", serde_json::json!({"ok": true, "entries": log.len()}));
                         } else {
-                            println!("✓ Audit chain intact ({} entries, BLAKE3-verified).", log.len());
+                            println!("âœ“ Audit chain intact ({} entries, BLAKE3-verified).", log.len());
                         }
                     }
                     Err(e) => {
                         if json {
                             println!("{}", serde_json::json!({"ok": false, "error": e}));
                         } else {
-                            return Err(format!("✗ audit chain broken: {}", e));
+                            return Err(format!("âœ— audit chain broken: {}", e));
                         }
                     }
                 }
@@ -1499,9 +1510,9 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                     "dropped": dropped,
                 }));
             } else {
-                println!("✓ Retention sweep: dropped {} tombstones older than {} days (kept {} per doc_id).",
+                println!("âœ“ Retention sweep: dropped {} tombstones older than {} days (kept {} per doc_id).",
                     dropped, older_than_days, keep_per_doc);
-                println!("  Legal holds honored — no held frame was touched.");
+                println!("  Legal holds honored â€” no held frame was touched.");
                 println!("  Run `said compact` to physically reclaim the freed bytes.");
             }
         }
@@ -1509,9 +1520,9 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// said vault <action> — enterprise document vault (Track B)
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// said vault <action> â€” enterprise document vault (Track B)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
     match action {
@@ -1637,7 +1648,7 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
                 println!("restored paragraphs:{}", r.restored_paragraphs);
                 println!("rebuilt paragraphs: {}", r.rebuilt_paragraphs);
                 println!("text match:         {}", r.text_match);
-                println!("byte identical:     {} (false expected — rebuild re-zips)", r.byte_identical);
+                println!("byte identical:     {} (false expected â€” rebuild re-zips)", r.byte_identical);
                 for (i, a, b) in &r.first_diffs {
                     println!("  diff @ {}: restored={:?} rebuilt={:?}", i, a, b);
                 }
@@ -1647,7 +1658,7 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
         VaultAction::Stats { vault, as_user } => {
             let user = resolve_vault_user(as_user.as_deref())?;
             let (v, roles) = said_vault::SaidVault::open_as(vault, &user)?;
-            // Stats is corpus-wide and admin-facing — require the `read`
+            // Stats is corpus-wide and admin-facing â€” require the `read`
             // operation be permitted by at least one of the user's roles.
             if !said_vault::SaidVault::authorize_operation(&roles, "read") {
                 return Err(format!(
@@ -1686,12 +1697,12 @@ fn resolve_vault_user(as_flag: Option<&str>) -> Result<String, String> {
         return Ok(u.to_string());
     }
     std::env::var("SAID_VAULT_USER")
-        .map_err(|_| "no vault identity — pass --as <user> or set SAID_VAULT_USER".to_string())
+        .map_err(|_| "no vault identity â€” pass --as <user> or set SAID_VAULT_USER".to_string())
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// said import --from <adapter> --source <path> — competitor migration
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// said import --from <adapter> --source <path> â€” competitor migration
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn cmd_import(
     path: Option<&str>,
@@ -1742,7 +1753,7 @@ fn cmd_import(
             "errors": report.errors,
         }));
     } else {
-        println!("✓ Imported from {}:", report.source_system);
+        println!("âœ“ Imported from {}:", report.source_system);
         println!("  read:    {}", report.records_read);
         println!("  written: {}", report.records_written);
         if report.records_skipped > 0 {
@@ -1846,7 +1857,7 @@ const PLAIN_TEXT_EXTENSIONS: &[&str] = &[
 ];
 
 /// File-enrollment filter for `init` (which extensions get walked + ingested).
-/// Drives off the central grammar registry — adding a language to
+/// Drives off the central grammar registry â€” adding a language to
 /// `sca_core::grammars::register_languages()` automatically enables init
 /// for that extension.
 fn code_extension(ext: &str) -> bool {
@@ -1863,7 +1874,7 @@ fn text_extension(ext: &str) -> bool {
     PLAIN_TEXT_EXTENSIONS.contains(&ext)
 }
 
-/// AST-aware (chunker is invoked) — same as `code_extension` since the
+/// AST-aware (chunker is invoked) â€” same as `code_extension` since the
 /// registry only contains entries we can chunk. SQL is included via the
 /// dedicated SQL chunker.
 fn ast_extension(ext: &str) -> bool {
@@ -1872,12 +1883,12 @@ fn ast_extension(ext: &str) -> bool {
 
 /// Decode file bytes as text. Handles three common encodings:
 ///
-/// 1. **UTF-16 LE BOM** (`FF FE …`) — what SSMS exports for SQL Server
+/// 1. **UTF-16 LE BOM** (`FF FE â€¦`) â€” what SSMS exports for SQL Server
 ///    Unicode scripts. Decoded losslessly via `from_utf16_lossy`.
-/// 2. **UTF-16 BE BOM** (`FE FF …`) — rarer, but still valid SSMS output.
-/// 3. **UTF-8** with or without BOM (`EF BB BF`) — everything else.
+/// 2. **UTF-16 BE BOM** (`FE FF â€¦`) â€” rarer, but still valid SSMS output.
+/// 3. **UTF-8** with or without BOM (`EF BB BF`) â€” everything else.
 ///
-/// Returns `None` only when none of the above produce valid text — e.g.
+/// Returns `None` only when none of the above produce valid text â€” e.g.
 /// real binary like images / PDFs / `.exe`. The BOM bytes are stripped
 /// from the returned string so downstream chunkers don't see them.
 fn decode_text(bytes: &[u8]) -> Option<String> {
@@ -1924,7 +1935,7 @@ fn is_backup_dir(name: &str) -> bool {
     || lower.starts_with("_backup_")
     || lower.starts_with("backup_")
     || lower.starts_with("_old_")
-    // Suffix match: *_backup, *_old — only when segment has no spaces/dots
+    // Suffix match: *_backup, *_old â€” only when segment has no spaces/dots
     || (!lower.contains('.') && (lower.ends_with("_backup") || lower.ends_with("_old")))
 }
 
@@ -1999,7 +2010,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     let mut brain = if resolved.exists() {
         let test_brain = SaidFile::open(&resolved).map_err(|e| format!("Open error: {}", e))?;
         if test_brain.stats().active_frames == 0 {
-            // Empty .said file — create fresh (avoids mmap-on-empty-data issues)
+            // Empty .said file â€” create fresh (avoids mmap-on-empty-data issues)
             drop(test_brain);
             SaidFile::create(&resolved)
         } else {
@@ -2085,7 +2096,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                     }
                     continue;
                 }
-                // AST chunking produced nothing — fall through to whole-file mode
+                // AST chunking produced nothing â€” fall through to whole-file mode
             }
         }
 
@@ -2138,7 +2149,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     Ok(())
 }
 
-/// `said init` — initialize .said brain from the current project.
+/// `said init` â€” initialize .said brain from the current project.
 /// Reads .gitignore, indexes all source files, creates project.said.
 fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Result<(), String> {
     
@@ -2178,7 +2189,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         eprintln!("Initializing {} from {} ({} files)", said_filename, dir, total_files);
     }
 
-    // Open existing brain if present — init NEVER wipes history.
+    // Open existing brain if present â€” init NEVER wipes history.
     // Changed files get auto-tombstoned via replace_frame on doc_id collision;
     // unchanged files skip via BLAKE3 hash-tag match; deleted files get
     // tombstoned at the end. `--incremental` is now the default behavior and
@@ -2217,7 +2228,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     let mut added = 0u64;
     let mut skipped = 0u64;
 
-    // PHASE 1: Walk files → read → AST chunk → store as frames
+    // PHASE 1: Walk files â†’ read â†’ AST chunk â†’ store as frames
     let t_phase1 = std::time::Instant::now();
     for (file_idx, file_path) in files.iter().enumerate() {
         let file_bytes = match std::fs::read(file_path) {
@@ -2321,7 +2332,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                         // Record symbol for the SYMS section. Markdown
                         // headings (h1-h6) and config-file keys (JSON pair,
                         // TOML table, YAML block_mapping_pair) are content
-                        // anchors, not code declarations — keep them out of
+                        // anchors, not code declarations â€” keep them out of
                         // the symbol index so `said sym Kong` returns the
                         // actual `Kong.rewrite` function rather than the
                         // markdown changelog headers that happen to be
@@ -2352,7 +2363,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                     }
                     continue;
                 }
-                // AST chunking produced nothing — fall through to whole-file mode
+                // AST chunking produced nothing â€” fall through to whole-file mode
                 // so the file still gets indexed instead of being silently dropped.
             }
         }
@@ -2380,7 +2391,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                   total_files, total_files, added, t_phase1.elapsed().as_secs_f64());
     }
 
-    // PHASE 1b: deletion sweep — tombstone Active frames belonging to this
+    // PHASE 1b: deletion sweep â€” tombstone Active frames belonging to this
     // source whose backing file no longer exists on disk. History is
     // preserved as Tombstones; searches only see Active frames.
     let mut tombstoned_deleted = 0u64;
@@ -2439,7 +2450,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
 
     // Auto-tag new frames for any lens files (State Synchronization)
     // If card.vivere.said lens exists alongside vivere.said, new frames
-    // matching the module are automatically tagged — zero manual steps.
+    // matching the module are automatically tagged â€” zero manual steps.
     {
         let said_dir = Path::new(&said_filename).parent().unwrap_or(Path::new("."));
         if let Ok(entries) = std::fs::read_dir(said_dir) {
@@ -2571,7 +2582,7 @@ fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Ve
         Err(_) => return,
     };
 
-    // VCS directories — always excluded (same as Claude Code)
+    // VCS directories â€” always excluded (same as Claude Code)
     const VCS_DIRS: &[&str] = &[".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
 
     for entry in entries.flatten() {
@@ -2611,7 +2622,7 @@ fn cmd_query(path: Option<&str>, query: &str, top: usize, json: bool) -> Result<
     let t0 = Instant::now();
     let results = brain.query(query, top);
     let elapsed = t0.elapsed();
-    // Don't save after query — ensure_corpus_cached modifies engine state
+    // Don't save after query â€” ensure_corpus_cached modifies engine state
     // which would corrupt the block-compressed file on rewrite.
     // Brain state (query log) saved on next add/init/compact.
 
@@ -2774,25 +2785,25 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// `said ask` — smart router
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// `said ask` â€” smart router
 //
 // Runs symbol lookup, trigram grep, and SCA semantic search in parallel on
 // the user's query. Merges results by confidence, applies a threshold, and
 // returns only frames that multiple engines agree about OR that have very
 // strong literal evidence. If the brain has no confident answer, returns
-// empty — never fabricates.
+// empty â€” never fabricates.
 //
 // Confidence levels:
 //   1.00  exact symbol match (definitive)
 //   0.80  symbol prefix match
-//   0.55-0.95  grep: has ≥2 query keywords literally present
+//   0.55-0.95  grep: has â‰¥2 query keywords literally present
 //   0.40-0.55  grep: has exactly 1 query keyword literally present
 //   0.30-0.60  SCA semantic, validated by at least one literal keyword anchor
-//   dropped    SCA without any literal anchor (pure drift — discarded)
+//   dropped    SCA without any literal anchor (pure drift â€” discarded)
 //
 // Threshold: 0.40. Anything below is returned as empty (LLM shows "I don't know").
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &str, json: bool) -> Result<(), String> {
@@ -2844,14 +2855,14 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         false
     };
 
-    // 7. Persist brain state — partial save that only rewrites the BRAN
+    // 7. Persist brain state â€” partial save that only rewrites the BRAN
     //    section, leaving frames/blocks/dict/SCRM/TRGM/SYMS untouched.
     //    Safe to call after every search; no risk of frame corruption
     //    because none of the frame/block bytes are touched.
     //
-    //    This is the "brain learns from every ask" persistence layer —
+    //    This is the "brain learns from every ask" persistence layer â€”
     //    query log grows, recall weights update, s_slow tensor accumulates,
-    //    and dream cycles drift the corpus stats — all written to disk
+    //    and dream cycles drift the corpus stats â€” all written to disk
     //    incrementally with each `said ask` invocation.
     let _ = brain.save_brain_only();
 
@@ -2900,7 +2911,7 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
             }
         }
         if dreamed {
-            eprintln!("\n[brain] dream cycle complete — corpus drift toward recent query patterns");
+            eprintln!("\n[brain] dream cycle complete â€” corpus drift toward recent query patterns");
         }
     }
     Ok(())
@@ -3030,7 +3041,7 @@ fn cmd_compact(
     let (blocks, saved) = brain.compact();
     // Auto-consolidate: piggyback on compact for brain housekeeping.
     // Decays recall weights on cold (unused) docs. Users don't need to
-    // learn a separate command — `compact` is the natural "tidy up" moment.
+    // learn a separate command â€” `compact` is the natural "tidy up" moment.
     let decayed = brain.consolidate();
     brain.save()?;
     if json {
@@ -3094,7 +3105,7 @@ fn cmd_use(file: &str, json: bool) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// said ingest — unified file/folder dispatcher (Step 8)
+// said ingest â€” unified file/folder dispatcher (Step 8)
 // ---------------------------------------------------------------------------
 
 /// What kind of source this extension maps to.
@@ -3113,7 +3124,7 @@ fn ingest_kind(ext: &str) -> Option<IngestKind> {
 }
 
 // ---------------------------------------------------------------------------
-// said discover — auto-detect module boundaries in a monolithic codebase
+// said discover â€” auto-detect module boundaries in a monolithic codebase
 // ---------------------------------------------------------------------------
 
 fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
@@ -3122,16 +3133,16 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
     let doc_ids: Vec<String> = brain.frames.active_doc_ids().into_iter().map(|s| s.to_string()).collect();
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 1: Classify every frame by SQL object type
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let mut tables: HashSet<String> = HashSet::new();
     let mut procs: HashSet<String> = HashSet::new();
     let mut triggers: HashSet<String> = HashSet::new();
     let mut views: HashSet<String> = HashSet::new();
     let mut functions: HashSet<String> = HashSet::new();
 
-    // table short name (uppercase) → doc_id
+    // table short name (uppercase) â†’ doc_id
     let mut table_name_to_did: HashMap<String, String> = HashMap::new();
 
     for did in &doc_ids {
@@ -3169,20 +3180,20 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             procs.insert(did.clone()); // reuse procs for methods
         }
         if title.contains("export_statement") || title.contains("lexical_declaration") {
-            // TS/JS exports — classify as functions
+            // TS/JS exports â€” classify as functions
             functions.insert(did.clone());
         }
     }
 
     let known_table_names: HashSet<String> = table_name_to_did.keys().cloned().collect();
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 2: Build the relationship graph
-    //   - proc → tables it touches (from refs: tags OR content scan)
-    //   - table → tables it FK-links to
-    //   - trigger/view → tables they touch
-    // ─────────────────────────────────────────────────────────────
-    // obj doc_id → set of table short names (uppercase) it touches
+    //   - proc â†’ tables it touches (from refs: tags OR content scan)
+    //   - table â†’ tables it FK-links to
+    //   - trigger/view â†’ tables they touch
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // obj doc_id â†’ set of table short names (uppercase) it touches
     let mut obj_touches: HashMap<String, HashSet<String>> = HashMap::new();
 
     let code_objects: Vec<&String> = procs.iter()
@@ -3241,7 +3252,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         }
     }
 
-    // FK edges: table → tables it references
+    // FK edges: table â†’ tables it references
     let mut fk_graph: HashMap<String, HashSet<String>> = HashMap::new();
     for did in &tables {
         let tags = brain.frames.get_meta(did)
@@ -3251,7 +3262,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             .filter(|t| t.starts_with("fk:"))
             .filter_map(|t| {
                 let target = &t[3..];
-                // fk:dbo.FicaStatus.StatusCode → FICASTATUS
+                // fk:dbo.FicaStatus.StatusCode â†’ FICASTATUS
                 let parts: Vec<&str> = target.split('.').collect();
                 if parts.len() >= 2 {
                     // Take schema.table (skip column)
@@ -3275,7 +3286,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         }
     }
 
-    // Import graph: code file → modules it imports
+    // Import graph: code file â†’ modules it imports
     // Used for clustering non-SQL code (Rust, Python, JS, C#, etc.)
     let mut import_graph: HashMap<String, HashSet<String>> = HashMap::new();
     let mut all_code_files: HashSet<String> = HashSet::new();
@@ -3309,13 +3320,13 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 3: Cluster tables by FK relationships ONLY
     //   FK edges = structural relationships (table A references table B).
     //   Proc co-occurrence is used LATER for assigning procs to clusters.
     //   This prevents the "mega-cluster" problem where utility procs
     //   that touch many tables merge everything into one group.
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let table_list: Vec<String> = known_table_names.iter().cloned().collect();
     let mut table_idx: HashMap<String, usize> = HashMap::new();
     for (i, t) in table_list.iter().enumerate() {
@@ -3366,7 +3377,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         .map(|(name, _)| name.clone())
         .collect();
 
-    // ONLY union tables connected by FK — skip if either side is a hub
+    // ONLY union tables connected by FK â€” skip if either side is a hub
     for (table, fk_targets) in &fk_graph {
         if hub_tables.contains(table) { continue; }
         if let Some(&idx_a) = table_idx.get(table) {
@@ -3381,19 +3392,19 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 
     // Also cluster code files by shared imports (for non-SQL codebases)
     // Files that import from the same LOCAL module belong together.
-    // This uses a SEPARATE clustering from the SQL FK graph — code and SQL
+    // This uses a SEPARATE clustering from the SQL FK graph â€” code and SQL
     // don't share union-find. Results are merged at the output stage.
-    let mut code_clusters: HashMap<String, Vec<String>> = HashMap::new(); // module_name → files
+    let mut code_clusters: HashMap<String, Vec<String>> = HashMap::new(); // module_name â†’ files
 
     if has_code_imports {
         // Cluster by directory structure (most reliable for code)
-        // src/card/card-service.ts → module "card"
-        // src/billing/billing-service.ts → module "billing"
+        // src/card/card-service.ts â†’ module "card"
+        // src/billing/billing-service.ts â†’ module "billing"
         for file in &all_code_files {
             let parts: Vec<&str> = file.split('/').collect();
             // Find the module directory (skip "src/" prefix)
             let module_name = if parts.len() >= 3 {
-                // src/card/card-service.ts → "card"
+                // src/card/card-service.ts â†’ "card"
                 let skip = if parts[0] == "src" { 1 } else { 0 };
                 parts.get(skip).unwrap_or(&"root").to_string()
             } else if parts.len() == 2 {
@@ -3415,12 +3426,12 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         clusters.entry(root).or_default().push(item.clone());
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 4: Name each cluster using actual table names
     //   The module name = the table names people recognise.
-    //   For small clusters (≤5 tables): list all table names.
+    //   For small clusters (â‰¤5 tables): list all table names.
     //   For large clusters: show the most-referenced tables.
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     let mut module_names: HashMap<usize, String> = HashMap::new();
     for (root, cluster_tables) in &clusters {
@@ -3430,7 +3441,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             .collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Format table names for readability: CHD_CARD_HOLDER_DETAIL → Card_Holder_Detail
+        // Format table names for readability: CHD_CARD_HOLDER_DETAIL â†’ Card_Holder_Detail
         let format_table = |name: &str| -> String {
             let lower = name.to_lowercase();
             // Strip common prefix (first segment before _)
@@ -3471,12 +3482,12 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         module_names.insert(*root, name);
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 5: Assign procs/triggers/views/functions to modules
     //   An object belongs to the module of the table cluster it
     //   touches most. If it touches tables from multiple clusters,
     //   it's a "shared" object.
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     struct ModuleInfo {
         tables: Vec<String>,
         procs: Vec<String>,
@@ -3555,9 +3566,9 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
         .cloned()
         .collect();
 
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Phase 6: Output
-    // ─────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let total_objects = tables.len() + procs.len() + triggers.len() + views.len() + functions.len();
 
     if json {
@@ -3669,7 +3680,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 
             for (module_name, files) in &sorted_code {
                 let deps = code_deps.get(*module_name);
-                let dep_str = deps.map(|d| format!(" → depends on: {}", d.join(", ")))
+                let dep_str = deps.map(|d| format!(" â†’ depends on: {}", d.join(", ")))
                     .unwrap_or_default();
 
                 println!("    {} ({} files){}", module_name, files.len(), dep_str);
@@ -3706,7 +3717,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 
         if !unassigned.is_empty() && code_clusters.is_empty() {
             // Only show unassigned if there are no code clusters
-            println!("  Unassigned ({} objects — no table references detected)", unassigned.len());
+            println!("  Unassigned ({} objects â€” no table references detected)", unassigned.len());
             for did in unassigned.iter().take(5) {
                 println!("    {}", extract_short_name(did));
             }
@@ -3748,11 +3759,11 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
                 }
             }
 
-            println!("  Hub Tables — Modernization Strategy ({} tables)", hub_tables.len());
+            println!("  Hub Tables â€” Modernization Strategy ({} tables)", hub_tables.len());
             println!();
 
             if !static_kernel.is_empty() {
-                println!("    STATIC SHARED KERNEL — bake into Enums/dictionaries/Redis cache");
+                println!("    STATIC SHARED KERNEL â€” bake into Enums/dictionaries/Redis cache");
                 println!("    (rarely mutate, do NOT build APIs for these)");
                 for (tbl, count) in &static_kernel {
                     println!("      {} ({} refs)", tbl, count);
@@ -3761,8 +3772,8 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             }
 
             if !identity_apis.is_empty() {
-                println!("    IDENTITY API BOUNDARIES — Core Identity Microservice");
-                println!("    (God tables — enforce field-level scoping per consumer)");
+                println!("    IDENTITY API BOUNDARIES â€” Core Identity Microservice");
+                println!("    (God tables â€” enforce field-level scoping per consumer)");
                 for (tbl, count) in &identity_apis {
                     println!("      {} ({} refs)", tbl, count);
                 }
@@ -3770,8 +3781,8 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             }
 
             if !bottlenecks.is_empty() {
-                println!("    HIGH-CONCURRENCY BOTTLENECKS — sequence generators / message brokers");
-                println!("    (lock contention risk — replace with thread-safe APIs or Kafka/RabbitMQ)");
+                println!("    HIGH-CONCURRENCY BOTTLENECKS â€” sequence generators / message brokers");
+                println!("    (lock contention risk â€” replace with thread-safe APIs or Kafka/RabbitMQ)");
                 for (tbl, count) in &bottlenecks {
                     println!("      {} ({} refs)", tbl, count);
                 }
@@ -3779,7 +3790,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             }
 
             if !other_hubs.is_empty() {
-                println!("    OTHER SHARED — evaluate per-table");
+                println!("    OTHER SHARED â€” evaluate per-table");
                 for (tbl, count) in &other_hubs {
                     println!("      {} ({} refs)", tbl, count);
                 }
@@ -3792,7 +3803,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
             let mut sorted_shared = shared_objects.clone();
             sorted_shared.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
             for (did, mods) in sorted_shared.iter().take(10) {
-                println!("    {} → {}", extract_short_name(did), mods.join(", "));
+                println!("    {} â†’ {}", extract_short_name(did), mods.join(", "));
             }
             if shared_objects.len() > 10 {
                 println!("    ... and {} more", shared_objects.len() - 10);
@@ -3804,7 +3815,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// said overview — monolith product catalogue
+// said overview â€” monolith product catalogue
 // Lists detected business modules with confidence and snapshot-ready names.
 // Also supports `--check <term>` to probe for a specific product.
 // ---------------------------------------------------------------------------
@@ -3812,14 +3823,14 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(), String> {
     use std::collections::{BTreeMap, HashMap, HashSet};
 
-    // FAST PATH: skip the encoder load (~2s) — overview only reads frame
+    // FAST PATH: skip the encoder load (~2s) â€” overview only reads frame
     // metadata (titles, tags, short names) and compressed content. Neither
     // the SCA encoder nor the trigram index is needed.
     let resolved = resolve::resolve(path)?;
     let mut brain = SaidFile::open(&resolved)?;
     let doc_ids: Vec<String> = brain.frames.active_doc_ids().into_iter().map(|s| s.to_string()).collect();
 
-    // ─── Classify frames by SQL/code kind ───────────────────────────────────
+    // â”€â”€â”€ Classify frames by SQL/code kind â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[derive(Debug)]
     struct ObjectInfo {
         did: String,
@@ -3853,17 +3864,17 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         objects.push(ObjectInfo { did: did.clone(), short_name: short, kind });
     }
 
-    // ─── Derive the domain catalogue from the brain itself ─────────────────
+    // â”€â”€â”€ Derive the domain catalogue from the brain itself â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // No hard-coded module lists. We use prefix-dominance analysis:
     //
     //   A module candidate is an alphabetic token that appears as the FIRST
     //   meaningful token of many object names. Non-prefix tokens (words in the
     //   middle of names like STATUS, LOG, DETAIL, CHANGE) are NOT module
-    //   candidates — they're noise. Generic verb/noun stopwords are stripped.
+    //   candidates â€” they're noise. Generic verb/noun stopwords are stripped.
     //
     // Two extra quality filters:
     //   - must own at least min_objects (5 floor, scales with monolith size)
-    //   - the label must be specific (>= 4 chars OR the prefix for ≥ 10 objs)
+    //   - the label must be specific (>= 4 chars OR the prefix for â‰¥ 10 objs)
     //
     // Works for any monolith (banking, logistics, CRM) without code edits.
     let tokenize = |name: &str| -> Vec<String> {
@@ -3911,7 +3922,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         "API", "RPC", "HTTP", "HTTPS", "REQ", "RES", "RESP", "RESPONSE",
         "REQUEST", "COMMAND", "MESSAGE", "SIGNAL", "NOTIFY",
         "QUEUE", "TASK", "JOB", "BATCH", "FILE",
-        "TRAN", "TRANS", "TRANSACTION",  // too generic in banking — real modules use TRANS_*_*
+        "TRAN", "TRANS", "TRANSACTION",  // too generic in banking â€” real modules use TRANS_*_*
         "USER",  // too generic; real modules use USER_DETAIL, USER_PROFILE, etc.
         "PROCESS", "PROCESSING", "POST", "PRE",
         "CPF",  // proc-family prefix, not a module
@@ -3926,26 +3937,26 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
     // what makes the object belong to a module; we do NOT count every word.
     let mut prefix_tally: HashMap<String, usize> = HashMap::new();
     // Also track short codes like "FICA" that appear inside Vivere-style
-    // 3-char prefixed tables (e.g. FYS_FICA_STATUS_TYPES — "FICA" is the
+    // 3-char prefixed tables (e.g. FYS_FICA_STATUS_TYPES â€” "FICA" is the
     // domain word; "FYS" is just the table's 3-char tag). Any alphabetic
-    // token that's ≥4 chars and appears many times at an underscore boundary
+    // token that's â‰¥4 chars and appears many times at an underscore boundary
     // gets tallied as a secondary signal.
     let mut domain_word_tally: HashMap<String, usize> = HashMap::new();
 
-    // Helper: find the object's MODULE prefix — its first domain-meaningful
+    // Helper: find the object's MODULE prefix â€” its first domain-meaningful
     // token. Enterprise schemas often encode *affix* metadata at the start
     // (trigger events, object-family codes) that has nothing to do with the
     // business domain. We strip those and keep the first word that does.
     //
     // Rules, applied in order:
-    //   (a) Skip SQL-verb / trigger-affix stopwords (TRIG, AFTER, INS, DEL …).
-    //   (b) Skip short "owner codes" — 2-4 letter tokens that appear rarely
+    //   (a) Skip SQL-verb / trigger-affix stopwords (TRIG, AFTER, INS, DEL â€¦).
+    //   (b) Skip short "owner codes" â€” 2-4 letter tokens that appear rarely
     //       as prefixes (they're table-level tags like FCS_, ACL_, BMR_, not
-    //       business modules). A token is an "owner code" if its length ≤ 4
+    //       business modules). A token is an "owner code" if its length â‰¤ 4
     //       AND it isn't already a popular prefix elsewhere.
     //   (c) First remaining token is the module prefix.
     //
-    // Step (b) is decided AFTER one full pass over the objects — we first
+    // Step (b) is decided AFTER one full pass over the objects â€” we first
     // need to know which short tokens are "popular" (used as real prefixes)
     // vs "rare" (single-table owner codes).
     //
@@ -3962,8 +3973,8 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         }
     }
     // Any 2-4 letter token that appears as a prefix for < 10 objects is
-    // treated as an owner code and skipped over. Longer tokens (≥5 chars)
-    // are never treated as codes — domain words are usually ≥5 chars.
+    // treated as an owner code and skipped over. Longer tokens (â‰¥5 chars)
+    // are never treated as codes â€” domain words are usually â‰¥5 chars.
     let is_owner_code = |tok: &str| -> bool {
         tok.len() <= 4
             && raw_prefix_tally.get(tok).copied().unwrap_or(0) < 10
@@ -3977,21 +3988,21 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         let mut skipped_owner = false;
         for t in &toks {
             if stopwords.contains(t.as_str()) || t.len() < 2 {
-                continue;  // (a) — trigger affix / SQL verb
+                continue;  // (a) â€” trigger affix / SQL verb
             }
             if !skipped_owner && is_owner_code(t) {
                 skipped_owner = true;
-                continue;  // (b) — short owner code; try next token
+                continue;  // (b) â€” short owner code; try next token
             }
             if t.len() >= 3 {
                 prefix = Some(t.clone());
-                break;  // (c) — first domain-meaningful token
+                break;  // (c) â€” first domain-meaningful token
             }
         }
         if let Some(p) = prefix {
             *prefix_tally.entry(p).or_insert(0) += 1;
         }
-        // Domain-word signal: tokens ≥4 chars that AREN'T the first prefix.
+        // Domain-word signal: tokens â‰¥4 chars that AREN'T the first prefix.
         // Skips the first token so we don't double-count.
         for t in toks.iter().skip(1) {
             if t.len() >= 4 && !stopwords.contains(t.as_str()) {
@@ -4005,7 +4016,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
     let min_objects = ((objects.len() / 200) as usize).max(5);
 
     // Build candidate module list from PREFIX counts only. Prefix is the
-    // authoritative signal — a token that appears first in many object names.
+    // authoritative signal â€” a token that appears first in many object names.
     let mut candidates: Vec<(String, usize)> = prefix_tally.into_iter()
         .filter(|(tok, c)| {
             if *c < min_objects { return false; }
@@ -4052,7 +4063,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         .map(|(l, kws)| (l.as_str(), kws.iter().map(|s| s.as_str()).collect()))
         .collect();
 
-    // ─── Match objects against each domain ──────────────────────────────────
+    // â”€â”€â”€ Match objects against each domain â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let mut by_domain: BTreeMap<&str, Vec<&ObjectInfo>> = BTreeMap::new();
     // Track which objects matched ANY domain so we can report "uncategorised".
     let mut matched_any: HashSet<usize> = HashSet::new();
@@ -4062,12 +4073,12 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
             if keywords.iter().any(|kw: &&str| obj.short_name.contains(*kw)) {
                 by_domain.entry(*label).or_default().push(obj);
                 matched_any.insert(i);
-                break; // one domain per object (first match wins — catalogue order = priority)
+                break; // one domain per object (first match wins â€” catalogue order = priority)
             }
         }
     }
 
-    // ─── If --check, probe one or more comma-separated terms ─────────────
+    // â”€â”€â”€ If --check, probe one or more comma-separated terms â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if let Some(raw) = check {
         let terms: Vec<String> = raw.split(',')
             .map(|s| s.trim().to_string())
@@ -4077,7 +4088,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         for (idx, term) in terms.iter().enumerate() {
             if terms.len() > 1 {
                 if idx > 0 { println!(); }
-                println!("── {} ──", term);
+                println!("â”€â”€ {} â”€â”€", term);
             }
             let term_str: &str = term.as_str();
             let term_upper = term.to_uppercase();
@@ -4086,7 +4097,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
             //    (a) its label IS the term, OR
             //    (b) a boundary form of the term is in the domain's keywords.
             //   We explicitly do NOT treat "term_upper contained anywhere in
-            //   a keyword string" as a hit — that creates false positives
+            //   a keyword string" as a hit â€” that creates false positives
             //   (e.g. "fica" inside the "NOTIFICATION" keyword).
             let term_boundaries: Vec<String> = vec![
                 format!("_{}_", term_upper),
@@ -4105,7 +4116,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
                 }
             }
 
-            // 2. Free-form object-name scan — match the term only at word
+            // 2. Free-form object-name scan â€” match the term only at word
             // boundaries (underscore-delimited) so "fica" doesn't pick up
             // "notiFICAtion". Uses the same boundary forms as the catalogue.
             let matching: Vec<&ObjectInfo> = objects.iter()
@@ -4115,7 +4126,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
                 })
                 .collect();
 
-            // 3. Content scan (slower fallback — only if above found nothing)
+            // 3. Content scan (slower fallback â€” only if above found nothing)
             let mut content_hits: Vec<(String, &'static str)> = Vec::new();
             if domain_hit.is_none() && matching.is_empty() {
                 let needle = &term_upper;
@@ -4151,7 +4162,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
 
             if let Some(label) = domain_hit {
                 let objs = by_domain.get(label).map(|v| v.len()).unwrap_or(0);
-                println!("  ✓ Domain detected: `{}` ({} objects)", label, objs);
+                println!("  âœ“ Domain detected: `{}` ({} objects)", label, objs);
                 println!();
                 if let Some(list) = by_domain.get(label) {
                     let mut by_kind: BTreeMap<&str, usize> = BTreeMap::new();
@@ -4166,7 +4177,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
                 println!("  Extract with:");
                 println!("    said snapshot {} --path <brain.said>", label);
             } else if !matching.is_empty() {
-                println!("  ⚠ No named domain matches \"{}\", but {} object(s) contain that substring:",
+                println!("  âš  No named domain matches \"{}\", but {} object(s) contain that substring:",
                     term, matching.len());
                 for o in matching.iter().take(12) {
                     println!("    {:<8} {}", o.kind, o.short_name);
@@ -4179,7 +4190,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
                 println!("    said snapshot {} --path <brain.said>", term.to_lowercase());
                 println!("  (snapshot falls back to semantic recall, but results may be noisy.)");
             } else if !content_hits.is_empty() {
-                println!("  ⚠ Term \"{}\" appears inside proc/trigger bodies but no object is NAMED after it.",
+                println!("  âš  Term \"{}\" appears inside proc/trigger bodies but no object is NAMED after it.",
                     term);
                 println!("     That usually means the concept exists but under a different prefix.");
                 println!();
@@ -4188,7 +4199,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
                     println!("    {:<8} {}", k, n);
                 }
             } else {
-                println!("  ✗ \"{}\" not found — no domain match, no object name match, no content match.", term);
+                println!("  âœ— \"{}\" not found â€” no domain match, no object name match, no content match.", term);
                 println!();
                 println!("  Run `said overview` to see the full catalogue of detected products.");
             }
@@ -4196,7 +4207,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         return Ok(());
     }
 
-    // ─── Default: print the full product catalogue ─────────────────────────
+    // â”€â”€â”€ Default: print the full product catalogue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let total_objects = objects.len();
     let total_tables = objects.iter().filter(|o| o.kind == "table").count();
     let total_procs = objects.iter().filter(|o| o.kind == "proc").count();
@@ -4214,7 +4225,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
         .unwrap_or_else(|| "(unknown)".to_string());
 
     if json {
-        // Cap to top 30 in JSON output too — keeps MCP responses compact
+        // Cap to top 30 in JSON output too â€” keeps MCP responses compact
         // and the LLM focused on real modules, not single-object clusters.
         let catalogue: Vec<_> = ordered.iter().take(30).map(|(label, objs)| {
             let mut by_kind: HashMap<&str, usize> = HashMap::new();
@@ -4258,7 +4269,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
     );
     println!();
     // Cap the list to keep the output readable. Everything below the
-    // display threshold rolls up into "other small clusters" — still
+    // display threshold rolls up into "other small clusters" â€” still
     // reachable via `said overview --check <name>` if the user needs it.
     let display_limit = 20usize;
     let shown: Vec<&(&str, &Vec<&ObjectInfo>)> = ordered.iter().take(display_limit).collect();
@@ -4273,7 +4284,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
     for (label, objs) in &shown {
         let count = objs.len();
         let bar_len = ((count * 20) / max_count).max(1);
-        let bar = "█".repeat(bar_len);
+        let bar = "â–ˆ".repeat(bar_len);
         let mut by_kind: BTreeMap<&str, usize> = BTreeMap::new();
         for o in *objs { *by_kind.entry(o.kind).or_insert(0) += 1; }
         let tables = by_kind.get("table").copied().unwrap_or(0);
@@ -4283,20 +4294,20 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
     }
     if hidden > 0 {
         println!();
-        println!("  ({} more small clusters, {} objects total — use `said overview --check <name>` to inspect)",
+        println!("  ({} more small clusters, {} objects total â€” use `said overview --check <name>` to inspect)",
             hidden, hidden_objects);
     }
 
     let uncategorised = total_objects - matched_any.len();
     if uncategorised > 0 {
         println!();
-        println!("  (long-tail)                       {} objects — each a tiny cluster \
+        println!("  (long-tail)                       {} objects â€” each a tiny cluster \
                   (1-4 objects)", uncategorised);
         println!("                                    these are legitimate schema objects: \
                   lookup tables, one-off utility procs,");
         println!("                                    trigger variants, small integrations \
                   (e.g. ABSA deposits, scheduled tasks).");
-        println!("                                    They are INCLUDED in every sandbox — \
+        println!("                                    They are INCLUDED in every sandbox â€” \
                   just too small to warrant their own snapshot.");
         println!("                                    Find any of them with: said overview \
                   --check <keyword>  (e.g. ABSA, deposit, book)");
@@ -4316,11 +4327,11 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
 }
 
 // ---------------------------------------------------------------------------
-// said sandbox — spin up a test database for one or more modules
+// said sandbox â€” spin up a test database for one or more modules
 // Simple UX:
-//   said sandbox card                      → one sandbox
-//   said sandbox card +billing +fee        → one sandbox, three modules co-deployed
-//   said sandbox card --compare v1,v2      → two parallel sandboxes (A/B compare)
+//   said sandbox card                      â†’ one sandbox
+//   said sandbox card +billing +fee        â†’ one sandbox, three modules co-deployed
+//   said sandbox card --compare v1,v2      â†’ two parallel sandboxes (A/B compare)
 // ---------------------------------------------------------------------------
 
 fn cmd_sandbox(
@@ -4344,7 +4355,7 @@ fn cmd_sandbox(
         } else if primary.is_none() {
             primary = Some(a.clone());
         } else {
-            // A bare module after the primary → treat as "+module" for convenience.
+            // A bare module after the primary â†’ treat as "+module" for convenience.
             extras.push(a.clone());
         }
     }
@@ -4396,7 +4407,7 @@ fn cmd_sandbox(
         .ok_or_else(|| "can't locate said-mcp.exe".to_string())?;
     if !mcp_bin.exists() {
         return Err(format!(
-            "said-mcp.exe not found at {} — build it with `cargo build -p said-mcp --features code`",
+            "said-mcp.exe not found at {} â€” build it with `cargo build -p said-mcp --features code`",
             mcp_bin.display()
         ));
     }
@@ -4455,7 +4466,7 @@ fn cmd_sandbox(
 
     // The MCP `sandbox` tool already brought the container up and loaded
     // schema + seed data when `--up` is set (its default). A second
-    // `docker compose up -d` here would be redundant and — worse — cause
+    // `docker compose up -d` here would be redundant and â€” worse â€” cause
     // docker to recreate the live container, wiping the in-memory DB.
 
     if json {
@@ -4471,7 +4482,7 @@ fn cmd_sandbox(
 }
 
 // ---------------------------------------------------------------------------
-// said clean — tear down sandboxes and delete generated artifacts
+// said clean â€” tear down sandboxes and delete generated artifacts
 // ---------------------------------------------------------------------------
 
 fn cmd_clean(
@@ -4486,27 +4497,27 @@ fn cmd_clean(
 
     // Scope rules:
     //
-    //   clean               → cleans up sandbox containers only (safe default)
-    //   clean --all         → stops all said-sbx-* containers, deletes .said-code/
+    //   clean               â†’ cleans up sandbox containers only (safe default)
+    //   clean --all         â†’ stops all said-sbx-* containers, deletes .said-code/
     //                         entirely, AND deletes the currently-attached .said
     //                         brain file (the one `--path` points at, or auto-
     //                         detected). Does NOT touch other .said files in cwd.
-    //   clean <module>      → stops matching containers, deletes matching
+    //   clean <module>      â†’ stops matching containers, deletes matching
     //                         folders under .said-code/. Does NOT touch any
     //                         .said brain files.
-    //   clean <name>.said   → explicitly targets a brain file — deletes the
+    //   clean <name>.said   â†’ explicitly targets a brain file â€” deletes the
     //                         file + any related sandboxes/folders derived
     //                         from it. User MUST include ".said" suffix to
     //                         opt into brain deletion.
     //
-    // This keeps "clean billing" safe (billing is just a module name — its
+    // This keeps "clean billing" safe (billing is just a module name â€” its
     // brain is never touched), while giving the user a clear way to nuke a
     // specific brain with "clean willie.said" or "clean --all".
     let mut planned_containers: Vec<String> = Vec::new();
     let mut planned_folders: Vec<String> = Vec::new();
     let mut planned_brain_files: Vec<String> = Vec::new();
 
-    // Step 1 — find all said-sbx-* containers.
+    // Step 1 â€” find all said-sbx-* containers.
     let out = Command::new("docker")
         .args(["ps", "-a", "--filter", "name=said-sbx-", "--format", "{{.Names}}"])
         .output()
@@ -4514,7 +4525,7 @@ fn cmd_clean(
     let all_containers: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
 
-    // Step 2 — find all sandbox folders under .said-code/.
+    // Step 2 â€” find all sandbox folders under .said-code/.
     let workspace = std::path::Path::new(".said-code");
     let mut all_folders: Vec<String> = Vec::new();
     if workspace.is_dir() {
@@ -4529,9 +4540,9 @@ fn cmd_clean(
         }
     }
 
-    // Step 3 — decide what's in scope.
+    // Step 3 â€” decide what's in scope.
     if all {
-        // --all: sweep everything this project has generated — containers,
+        // --all: sweep everything this project has generated â€” containers,
         // workspace folders, AND every .said brain in the current directory.
         // This is the "clean slate" command, so it should actually leave
         // nothing behind. Hidden dot-prefixed placeholders (.brain.said)
@@ -4585,7 +4596,7 @@ fn cmd_clean(
                     planned_brain_files.push(t.clone());
                 }
                 // Folders derived from this brain have the form
-                // "<module>.<brain-stem>" — match on that stem.
+                // "<module>.<brain-stem>" â€” match on that stem.
                 let stem = t_path.file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
@@ -4597,7 +4608,7 @@ fn cmd_clean(
                             if !planned_folders.contains(f) { planned_folders.push(f.clone()); }
                         }
                     }
-                    // Containers derived from this brain — they follow the
+                    // Containers derived from this brain â€” they follow the
                     // `said-sbx-<combo>-<port>` shape; combo has no brain
                     // name so we match by the folder list we just built.
                     for f in &planned_folders {
@@ -4682,14 +4693,14 @@ fn cmd_clean(
         }
         if dry_run {
             println!();
-            println!("Dry-run — no changes made. Remove --dry-run to execute.");
+            println!("Dry-run â€” no changes made. Remove --dry-run to execute.");
             return Ok(());
         }
     }
 
     if dry_run { return Ok(()); }
 
-    // Step 4 — execute.
+    // Step 4 â€” execute.
     for c in &planned_containers {
         if !json { print!("  stopping {} ... ", c); }
         let _ = Command::new("docker").args(["rm", "-f", c]).output();
@@ -4700,13 +4711,13 @@ fn cmd_clean(
         for f in &planned_folders {
             let p = workspace.join(f);
             if !json { print!("  removing {} ... ", p.display()); }
-            // Retry briefly — docker may still be unmounting volumes on Windows.
+            // Retry briefly â€” docker may still be unmounting volumes on Windows.
             let mut ok = false;
             for _ in 0..3 {
                 if std::fs::remove_dir_all(&p).is_ok() { ok = true; break; }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            if !json { println!("{}", if ok { "ok" } else { "busy — retry after docker mounts release" }); }
+            if !json { println!("{}", if ok { "ok" } else { "busy â€” retry after docker mounts release" }); }
         }
         for b in &planned_brain_files {
             if !json { print!("  deleting brain {} ... ", b); }
@@ -4716,7 +4727,7 @@ fn cmd_clean(
                 }
                 Err(e) => {
                     if !json {
-                        println!("failed ({}) — if the MCP server is running it may have the file locked; restart MCP and retry", e);
+                        println!("failed ({}) â€” if the MCP server is running it may have the file locked; restart MCP and retry", e);
                     }
                 }
             }
@@ -4736,7 +4747,7 @@ fn cmd_clean(
                 .map(|mut d| d.next().is_none())
                 .unwrap_or(false);
             if empty {
-                if !json { print!("  .said-code/ is empty — removing it ... "); }
+                if !json { print!("  .said-code/ is empty â€” removing it ... "); }
                 let _ = std::fs::remove_dir(workspace);
                 if !json { println!("ok"); }
             }
@@ -4751,7 +4762,7 @@ fn cmd_clean(
 }
 
 // ---------------------------------------------------------------------------
-// said snapshot — extract a module into its own folder + lens .said
+// said snapshot â€” extract a module into its own folder + lens .said
 // ---------------------------------------------------------------------------
 
 fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bool) -> Result<(), String> {
@@ -4764,7 +4775,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         .and_then(|s| s.to_str())
         .unwrap_or("brain");
 
-    // Output directory: .said-code/card.vivere/ by default — puts all module
+    // Output directory: .said-code/card.vivere/ by default â€” puts all module
     // extracts under one master workspace folder so the project root stays
     // clean. Users can still override with --output.
     let out_dir = output.map(|s| s.to_string())
@@ -4785,7 +4796,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         "all stored procedures tables triggers views and functions related to {} management processing configuration",
         module
     );
-    let results = brain.recall(&query, 500); // deep recall — get everything
+    let results = brain.recall(&query, 500); // deep recall â€” get everything
 
     if results.is_empty() {
         return Err(format!("No objects found related to '{}'. Try a different module name.", module));
@@ -4848,7 +4859,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
         if title.contains("(table)") || title.contains("create_table") {
             if hub_tables.contains(&short.to_uppercase()) {
-                // Hub table — goes to Shared/
+                // Hub table â€” goes to Shared/
             } else {
                 module_tables.insert(did.clone());
             }
@@ -4872,7 +4883,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
     }
 
     // Step 3: Identify shared hub tables that this module touches
-    let mut shared_tables: HashMap<String, Vec<String>> = HashMap::new(); // hub table → which module procs touch it
+    let mut shared_tables: HashMap<String, Vec<String>> = HashMap::new(); // hub table â†’ which module procs touch it
 
     for did in module_procs.iter().chain(module_triggers.iter()).chain(module_views.iter()) {
         let content = brain.get(did).unwrap_or_default();
@@ -4927,9 +4938,9 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
             None
         });
 
-    // Copy module files — split between Exclusive/ and Shared/
-    // For code: files in the module's directory → Exclusive, others → Shared
-    // For SQL: non-hub tables → Exclusive, hub tables → Shared (handled separately)
+    // Copy module files â€” split between Exclusive/ and Shared/
+    // For code: files in the module's directory â†’ Exclusive, others â†’ Shared
+    // For SQL: non-hub tables â†’ Exclusive, hub tables â†’ Shared (handled separately)
     let module_lower = module.to_lowercase();
     let mut shared_code_files: Vec<(String, String)> = Vec::new(); // (file_path, which_module_dir)
 
@@ -4968,7 +4979,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
         // Two strategies to materialize the file into Exclusive/ or Shared/:
         //   1. Copy from disk if we can find the original.
-        //   2. RECONSTRUCT from brain contents — the brain has every chunk,
+        //   2. RECONSTRUCT from brain contents â€” the brain has every chunk,
         //      concatenating them rebuilds a usable file even if the original
         //      directory is gone (laptop reformatted, repo archived, etc.).
         //
@@ -5008,7 +5019,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         }
 
         // Reconstruct from brain if disk lookup failed. Concatenate every
-        // chunk whose doc_id starts with "<file_part>::" — they were split
+        // chunk whose doc_id starts with "<file_part>::" â€” they were split
         // by sql_chunk / ast_chunk so rejoining them reproduces the source.
         if !materialized {
             let prefix = format!("{}::", file_part);
@@ -5053,7 +5064,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
             let usage_path = shared_dir.join(format!("{}.{}_USAGE.md", shared_module, module.to_uppercase()));
             let mut usage = format!("# {} module's usage of '{}' (shared)\n\n", module, shared_module);
             usage.push_str(&format!("The '{}' module imports from '{}'. These files are shared.\n", module, shared_module));
-            usage.push_str("Do NOT modify these directly — create interfaces/contracts instead.\n\n");
+            usage.push_str("Do NOT modify these directly â€” create interfaces/contracts instead.\n\n");
             usage.push_str("## Files:\n");
             for f in files {
                 usage.push_str(&format!("- {}\n", f));
@@ -5095,7 +5106,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
             usage.push_str(&format!("- {}\n", proc_name));
         }
         usage.push_str(&format!("\n## Other modules also use this table\n"));
-        usage.push_str("This is a shared/hub table — it should become an API boundary.\n");
+        usage.push_str("This is a shared/hub table â€” it should become an API boundary.\n");
         usage.push_str(&format!("Do NOT move this table into the {} module.\n", module));
         usage.push_str("Instead, create an API contract for accessing it.\n");
         let _ = std::fs::write(&usage_file, usage);
@@ -5106,7 +5117,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
     // Step 7: Generate BOUNDARY.md
     let boundary_path = out_path.join("BOUNDARY.md");
-    let mut boundary = format!("# {} Module — Boundary Analysis\n\n", module);
+    let mut boundary = format!("# {} Module â€” Boundary Analysis\n\n", module);
     boundary.push_str(&format!("Extracted from: {}\n", said_filename.display()));
     boundary.push_str(&format!("Date: {}\n\n", chrono_date()));
 
@@ -5122,7 +5133,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         module_views.len() + module_functions.len()));
     boundary.push_str(&format!("| Shared hub tables | {} |\n", shared_tables.len()));
 
-    // ── Hidden Triggers Report ──
+    // â”€â”€ Hidden Triggers Report â”€â”€
     // Group triggers by their parent table (triggers defined in table files)
     boundary.push_str("\n## Hidden Triggers (business logic trapped in database tier)\n\n");
     boundary.push_str("These triggers fire automatically on INSERT/UPDATE/DELETE.\n");
@@ -5184,7 +5195,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         boundary.push_str("All of this must be moved to the application layer.\n\n");
     }
 
-    // ── Exclusive Objects ──
+    // â”€â”€ Exclusive Objects â”€â”€
     boundary.push_str("\n## Exclusive Objects (safe to extract)\n\n");
     boundary.push_str("These objects are ONLY used by this module. They can be moved to a new database/service.\n\n");
 
@@ -5205,7 +5216,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
                 .filter(|t| t.starts_with("fk:"))
                 .map(|t| t[3..].to_string())
                 .collect();
-            let fk_str = if fks.is_empty() { "—".to_string() } else { fks.join(", ") };
+            let fk_str = if fks.is_empty() { "â€”".to_string() } else { fks.join(", ") };
             boundary.push_str(&format!("| {} | {} | {} |\n", short, trig_count, fk_str));
         }
         boundary.push_str("\n");
@@ -5226,7 +5237,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
             let special: Vec<&String> = tags.iter()
                 .filter(|t| t.starts_with("dynamic_sql") || t.starts_with("refs:") || t.starts_with("check:"))
                 .collect();
-            let tag_str = if special.is_empty() { "—".to_string() }
+            let tag_str = if special.is_empty() { "â€”".to_string() }
                 else { special.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ") };
             boundary.push_str(&format!("| {} | {}-{} | {} |\n", short, start, end, tag_str));
         }
@@ -5235,7 +5246,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
     boundary.push_str("\n## Shared Hub Tables (need API contracts)\n\n");
     boundary.push_str("These tables are used by this module AND other modules.\n");
-    boundary.push_str("They should NOT be moved — instead create API boundaries.\n\n");
+    boundary.push_str("They should NOT be moved â€” instead create API boundaries.\n\n");
 
     let mut sorted_shared: Vec<_> = shared_tables.iter().collect();
     sorted_shared.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
@@ -5255,7 +5266,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
     if !shared_code_files.is_empty() {
         boundary.push_str("\n## Code Dependencies (shared modules)\n\n");
         boundary.push_str("These modules are imported by this module but owned by other teams.\n");
-        boundary.push_str("Create interfaces/contracts — do NOT modify directly.\n\n");
+        boundary.push_str("Create interfaces/contracts â€” do NOT modify directly.\n\n");
 
         let mut by_module: HashMap<String, Vec<String>> = HashMap::new();
         for (file, dir) in &shared_code_files {
@@ -5275,9 +5286,9 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
     std::fs::write(&boundary_path, boundary).map_err(|e| format!("write boundary: {}", e))?;
 
-    // Step 7b: Generate MODULE_MAP.md — complete inventory for the developer
+    // Step 7b: Generate MODULE_MAP.md â€” complete inventory for the developer
     let map_path = out_path.join("MODULE_MAP.md");
-    let mut map = format!("# {} Module — Complete Object Map\n\n", module);
+    let mut map = format!("# {} Module â€” Complete Object Map\n\n", module);
     map.push_str("Every object in this module with type, location, and line count.\n");
     map.push_str("Use this as a checklist when building/rewriting the module.\n\n");
 
@@ -5307,7 +5318,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         }
     }
 
-    // Group by type — SQL types first, then code types
+    // Group by type â€” SQL types first, then code types
     for (type_name, type_label) in &[
         // SQL types
         ("table", "Tables"), ("proc", "Stored Procedures"), ("trigger", "Triggers"),
@@ -5333,7 +5344,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         map.push_str("\n");
     }
 
-    // Code files section — list all source files with their imports
+    // Code files section â€” list all source files with their imports
     let exclusive_code: Vec<&String> = copied_files.iter()
         .filter(|f| {
             let lower = f.to_lowercase();
@@ -5351,7 +5362,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         map.push_str("## Source Files\n\n");
 
         if !exclusive_code.is_empty() {
-            map.push_str(&format!("### Exclusive ({} files — safe to extract)\n\n", exclusive_code.len()));
+            map.push_str(&format!("### Exclusive ({} files â€” safe to extract)\n\n", exclusive_code.len()));
             for f in &exclusive_code {
                 map.push_str(&format!("- {}\n", f));
             }
@@ -5359,7 +5370,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         }
 
         if !shared_code.is_empty() {
-            map.push_str(&format!("### Shared ({} files — need interfaces)\n\n", shared_code.len()));
+            map.push_str(&format!("### Shared ({} files â€” need interfaces)\n\n", shared_code.len()));
             for f in &shared_code {
                 map.push_str(&format!("- {}\n", f));
             }
@@ -5369,10 +5380,10 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
 
     std::fs::write(&map_path, map).map_err(|e| format!("write module map: {}", e))?;
 
-    // Step 8: Create lens file — a live view over the parent brain
+    // Step 8: Create lens file â€” a live view over the parent brain
     // The lens file is tiny (just metadata). It points to the parent .said file
     // and stores which frame IDs belong to this module. Queries go through the
-    // parent brain filtered by the lens. Always fresh — no manual sync.
+    // parent brain filtered by the lens. Always fresh â€” no manual sync.
     let module_said_path = out_path.join(format!("{}.{}.said", module.to_lowercase(), said_stem));
 
     // Collect all frame IDs for this module (exclusive + shared)
@@ -5403,7 +5414,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
             .unwrap_or_else(|| parent_canonical.to_string_lossy().to_string().replace('\\', "/"))
     };
 
-    // The lens stores its own frame_ids set — so the parent brain does NOT need
+    // The lens stores its own frame_ids set â€” so the parent brain does NOT need
     // to be mutated. Mutating the parent (add_tag + save) would trigger a full
     // rewrite, and save() has a known bug where pre-existing blocks-on-disk are
     // not copied forward when there are no pending block leaders (the blocks
@@ -5418,7 +5429,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
     );
     lens.save().map_err(|e| format!("save lens: {}", e))?;
 
-    // Lens file created — no frame copies needed.
+    // Lens file created â€” no frame copies needed.
     // The lens reads from the parent brain at query time.
 
     // Output
@@ -5458,7 +5469,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
         println!();
         println!("  Next steps:");
         println!("    said ask --path {} \"How does {} work?\"", module_said_path.display(), module);
-        println!("    # Only searches {} objects — fast, focused", module);
+        println!("    # Only searches {} objects â€” fast, focused", module);
     }
 
     Ok(())
@@ -5478,8 +5489,8 @@ fn chrono_date() -> String {
 /// Extract short object name from a doc_id
 fn extract_short_name(doc_id: &str) -> String {
     // Doc_id layout is either:
-    //   path::NAME::kind:line   (new — from code-AST chunks)
-    //   path::NAME              (legacy — whole-file frames)
+    //   path::NAME::kind:line   (new â€” from code-AST chunks)
+    //   path::NAME              (legacy â€” whole-file frames)
     //   path                    (no chunk suffix)
     // The chunk NAME is the first segment after the leading path (i.e. between
     // the first and second "::"). Fall back to the last path segment.
@@ -5512,7 +5523,7 @@ fn cmd_ingest(
     let mut brain = open_brain(path)?;
     try_load_encoder(&mut brain);
 
-    // ── Pointer mode (Enterprise) — skip content extraction + compression ──
+    // â”€â”€ Pointer mode (Enterprise) â€” skip content extraction + compression â”€â”€
     //
     // Store a short, searchable frame that names the resource without
     // embedding bytes. Single-file or directory (each file becomes its own
@@ -5574,7 +5585,7 @@ fn cmd_ingest(
                 "frames": n_frames,
             }));
         } else {
-            eprintln!("✓ Pointer ingest complete: {} file(s) → {} frame(s)", files.len(), n_frames);
+            eprintln!("âœ“ Pointer ingest complete: {} file(s) â†’ {} frame(s)", files.len(), n_frames);
         }
         return Ok(());
     }
@@ -5583,7 +5594,7 @@ fn cmd_ingest(
     // Users MUST use `--pointer` (handled above) or switch to portable mode.
     brain.ensure_content_ingest_allowed()?;
 
-    // Collect everything to ingest. Single file → Vec of 1. Directory →
+    // Collect everything to ingest. Single file â†’ Vec of 1. Directory â†’
     // gitignore-aware walk, same rules as cmd_init, filtered to supported
     // extensions only.
     let files: Vec<PathBuf> = if target_path.is_file() {
@@ -5665,7 +5676,7 @@ fn cmd_ingest(
                 }
                 #[cfg(not(feature = "docs"))]
                 {
-                    Err("document ingestion disabled — rebuild with --features docs".to_string())
+                    Err("document ingestion disabled â€” rebuild with --features docs".to_string())
                 }
             }
             IngestKind::Media => {
@@ -5689,7 +5700,7 @@ fn cmd_ingest(
                 }
                 #[cfg(not(feature = "whisper"))]
                 {
-                    Err("media ingestion disabled — rebuild with --features whisper".to_string())
+                    Err("media ingestion disabled â€” rebuild with --features whisper".to_string())
                 }
             }
         };
@@ -5706,7 +5717,7 @@ fn cmd_ingest(
         }
 
         // Stream checkpoint: save every 50 files so progress isn't lost on crash.
-        // Skip the SCA encoding during checkpoints (expensive) — just persist frames.
+        // Skip the SCA encoding during checkpoints (expensive) â€” just persist frames.
         if (i + 1) % 50 == 0 && i + 1 < total_files {
             if !json {
                 eprint!("\r  Checkpoint: saving {} frames...          ", brain.frames.active_doc_ids().len());
@@ -5724,7 +5735,7 @@ fn cmd_ingest(
 
     // Rebuild indexes + persist. Final encode pass must batch across all
     // newly-added frames because SCA fingerprints are whitened against the
-    // corpus mean — per-file rebuilds would rewrite every previous fingerprint
+    // corpus mean â€” per-file rebuilds would rewrite every previous fingerprint
     // every time. We DO stream progress through the batch, though, so a
     // 5000-doc bulk ingest feels responsive instead of hung.
     let json_mode = json;
@@ -5790,7 +5801,7 @@ fn cmd_ingest(
                 let name = Path::new(path).file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.clone());
-                println!("    {} — {}", name, err);
+                println!("    {} â€” {}", name, err);
             }
         }
     }
@@ -5911,7 +5922,7 @@ fn cmd_lsp_symbols(path: Option<&str>, query: &str, json: bool) -> Result<(), St
 }
 
 // ---------------------------------------------------------------------------
-// `said edit` — surgical anchored edit (no whole-file rewrite path)
+// `said edit` â€” surgical anchored edit (no whole-file rewrite path)
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
@@ -5920,6 +5931,7 @@ fn cmd_edit(
     file: &str,
     mode: &str,
     symbol: Option<&str>,
+    line: Option<usize>,
     anchor: Option<&str>,
     content: Option<&str>,
     content_file: Option<&str>,
@@ -5940,7 +5952,7 @@ fn cmd_edit(
         Err(msg)
     };
 
-    // 1. Path safety — reject absolute / `..` paths before touching anything.
+    // 1. Path safety â€” reject absolute / `..` paths before touching anything.
     if let Err(e) = edit::is_safe_relative_path(file) {
         return fail(e);
     }
@@ -5967,7 +5979,7 @@ fn cmd_edit(
         } else { 1 };
         let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
         let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
-            "mode": s.mode, "symbol": s.symbol, "note": s.note,
+            "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
         })).collect();
         if json {
             println!("{}", serde_json::json!({
@@ -5975,7 +5987,7 @@ fn cmd_edit(
                 "valid_anchors": valid,
             }));
         } else {
-            println!("Valid anchors at {}:{} —", file, line);
+            println!("Valid anchors at {}:{} â€”", file, line);
             for s in &suggestions { println!("  {} --symbol {}  ({})", s.mode, s.symbol, s.note); }
         }
         return Ok(());
@@ -6019,10 +6031,14 @@ fn cmd_edit(
         anchor.ok_or_else(|| format!("mode '{}' requires --anchor", m))
     };
 
-    // Resolve a symbol → (start,end) line range, scoped to --file, via the
+    // Resolve a symbol â†’ (start,end) line range, scoped to --file, via the
     // same lookup `said sym` uses. Also runs an anchor-drift check: the file on
     // disk must still match what the brain indexed for that symbol, else the
     // range is stale and we refuse (recall correctness).
+    // append-into-symbol defaults to the largest (enclosing) span when a name
+    // is ambiguous â€” e.g. a C# class vs. its same-named 1-line constructor. A
+    // --line value, when given, overrides and selects an exact span.
+    let prefer_largest = mode == "append-into-symbol";
     let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
         let mut brain = open_brain(path)?;
         let results = brain.sym(name, 50);
@@ -6032,7 +6048,7 @@ fn cmd_edit(
             start_line: r.start_line as usize,
             end_line: r.end_line as usize,
         }).collect();
-        let (start, end) = edit::resolve_symbol_in_file(&cands, file)?;
+        let (start, end) = edit::resolve_symbol_ex(&cands, file, line, prefer_largest)?;
         // The symbol index's end_line can be off-by-one on the closing brace.
         // The brain's stored *content* for the symbol is authoritative, so we
         // derive the true end from its line count and (a) drift-check against
@@ -6087,7 +6103,7 @@ fn cmd_edit(
         }
         // Scope-aware: insert at the END of a named scope's body, just before
         // its closing brace. "Add a method to this class" always lands at class
-        // scope — prevents the new member nesting inside an existing method.
+        // scope â€” prevents the new member nesting inside an existing method.
         "append-into-symbol" => {
             let (start, end) = resolve_sym(want_symbol(mode).map_err(|e| { let _ = fail(e.clone()); e })?)
                 .map_err(|e| { let _ = fail(e.clone()); e })?;
@@ -6127,7 +6143,7 @@ fn cmd_edit(
             EditOp::ReplaceSubstring { needle: a.to_string(), replacement: new_text }
         }
         // Context modes: --anchor is a (possibly multi-line) block that must
-        // occur EXACTLY ONCE — disambiguates when a short string repeats.
+        // occur EXACTLY ONCE â€” disambiguates when a short string repeats.
         "insert-after-context" => {
             let a = want_anchor(mode).map_err(|e| { let _ = fail(e.clone()); e })?;
             let line = match edit::resolve_context_anchor(&file_content, a) {
@@ -6155,7 +6171,7 @@ fn cmd_edit(
         other => return fail(format!("unknown mode: {}", other)),
     };
 
-    // 5. Apply the edit (pure) — produces the new content + summary.
+    // 5. Apply the edit (pure) â€” produces the new content + summary.
     let result = match edit::apply_edit(&file_content, &op) {
         Ok(r) => r,
         Err(e) => return fail(e),
@@ -6175,9 +6191,9 @@ fn cmd_edit(
             let suggestions = sca_core::code_search::suggest_anchors(
                 &file_content, ext, result.applied_at_line);
             let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
-                "mode": s.mode, "symbol": s.symbol, "note": s.note,
+                "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
             })).collect();
-            let msg = format!("{} — edit rejected, file unchanged", e);
+            let msg = format!("{} â€” edit rejected, file unchanged", e);
             if json {
                 println!("{}", serde_json::json!({
                     "ok": false, "error": msg, "valid_anchors": valid,
@@ -6210,12 +6226,12 @@ fn cmd_edit(
         }));
     } else if dry_run {
         println!(
-            "DRY RUN — would apply {} at line {} (+{} / -{} lines). No file written.",
+            "DRY RUN â€” would apply {} at line {} (+{} / -{} lines). No file written.",
             mode, result.applied_at_line, result.lines_added, result.lines_removed
         );
     } else {
         println!(
-            "Edited {} — {} at line {} (+{} / -{} lines).",
+            "Edited {} â€” {} at line {} (+{} / -{} lines).",
             file, mode, result.applied_at_line, result.lines_added, result.lines_removed
         );
     }
@@ -6309,7 +6325,7 @@ fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String>
                     let base_kind = kind_parts[0];
                     // Match cmd_init's doc_id layout (path::NAME::kind:line)
                     // so reindex produces frames that collide with the ones
-                    // init created — triggering the intended tombstone chain.
+                    // init created â€” triggering the intended tombstone chain.
                     let doc_id = format!(
                         "{}::{}::{}:{}",
                         rel_prefix, chunk.name, base_kind, chunk.start_line
@@ -6359,7 +6375,7 @@ fn cmd_history(path: Option<&str>, name: &str, json: bool) -> Result<(), String>
     let brain = open_brain(path)?;
 
     // Collect ALL doc_ids (Active + Tombstone) so history works even for files
-    // that have been fully deleted — their lineage is still in the file.
+    // that have been fully deleted â€” their lineage is still in the file.
     use std::collections::BTreeSet;
     let mut all_doc_ids: BTreeSet<String> = BTreeSet::new();
     for meta in brain.frames.get_all_frames() {
@@ -6369,7 +6385,7 @@ fn cmd_history(path: Option<&str>, name: &str, json: bool) -> Result<(), String>
     }
     let all: Vec<String> = all_doc_ids.into_iter().collect();
 
-    // Resolve `name` → doc_id. Exact match first, then suffix match on "::name"
+    // Resolve `name` â†’ doc_id. Exact match first, then suffix match on "::name"
     // (which is how cmd_init encodes AST-chunked symbols).
     let mut candidate: Option<String> = None;
     if all.iter().any(|d| d == name) {
@@ -6384,7 +6400,7 @@ fn cmd_history(path: Option<&str>, name: &str, json: bool) -> Result<(), String>
             candidate = Some(hits[0].clone());
         } else if hits.len() > 1 {
             if !json {
-                eprintln!("Multiple matches — pick one with `said history <full doc_id>`:");
+                eprintln!("Multiple matches â€” pick one with `said history <full doc_id>`:");
                 for h in hits.iter().take(20) { eprintln!("  {}", h); }
             }
             return Err(format!("Ambiguous: {} matches for '{}'", hits.len(), name));
@@ -6476,7 +6492,7 @@ fn cmd_checkout(
         if hits.len() == 1 {
             candidate = Some(hits[0].clone());
         } else if hits.len() > 1 {
-            eprintln!("Multiple matches — pick one with `said checkout <full doc_id>`:");
+            eprintln!("Multiple matches â€” pick one with `said checkout <full doc_id>`:");
             for h in hits.iter().take(20) { eprintln!("  {}", h); }
             return Err(format!("Ambiguous: {} matches for '{}'", hits.len(), name));
         }
@@ -6501,7 +6517,7 @@ fn cmd_checkout(
         let tag_root = brain.lineage(&doc_id).iter()
             .find_map(|m| m.tags.iter().find_map(|t| t.strip_prefix("source:").map(|s| s.to_string())));
         let root = tag_root.ok_or_else(|| format!(
-            "No source: tag on {} — cannot locate original file. \
+            "No source: tag on {} â€” cannot locate original file. \
              Re-ingest with `said init` to attach a source origin.",
             doc_id
         ))?;
@@ -6537,7 +6553,7 @@ fn cmd_checkout(
 
         match symbol {
             None => {
-                // Whole-file frame — overwrite directly
+                // Whole-file frame â€” overwrite directly
                 if let Some(parent) = abs.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -6552,12 +6568,12 @@ fn cmd_checkout(
                     // Splice: re-parse current file, find the symbol's live
                     // line range, replace those lines with the restored chunk.
                     let current = std::fs::read_to_string(&abs)
-                        .map_err(|e| format!("Read {} failed: {} — create the file first or use a whole-file frame", abs.display(), e))?;
+                        .map_err(|e| format!("Read {} failed: {} â€” create the file first or use a whole-file frame", abs.display(), e))?;
                     let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
                     let chunks = sca_core::code_search::ast_chunk(&current, &ext);
                     let chunk = chunks.iter().find(|c| c.name == sym)
                         .ok_or_else(|| format!(
-                            "Symbol '{}' not found in current {} — was it renamed or deleted? \
+                            "Symbol '{}' not found in current {} â€” was it renamed or deleted? \
                              Checkout still updated the brain; the disk file is unchanged.",
                             sym, abs.display()
                         ))?;
@@ -6607,7 +6623,7 @@ fn cmd_checkout(
         if let Some(p) = wrote_to {
             println!("  wrote restored content to {}", p);
         }
-        println!("  (previous HEAD is now a tombstone — run `said history {}` to see the chain)", name);
+        println!("  (previous HEAD is now a tombstone â€” run `said history {}` to see the chain)", name);
     }
     Ok(())
 }
@@ -6620,9 +6636,9 @@ fn chrono_free_timestamp() -> u64 {
         .as_secs()
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// said dev-spec <action> — Dev Spec source-of-truth pipeline
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// said dev-spec <action> â€” Dev Spec source-of-truth pipeline
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(feature = "forge")]
 fn dev_spec_target_or_cwd(target: Option<&Path>) -> PathBuf {
@@ -6645,7 +6661,7 @@ fn cmd_dev_spec_parse(target: Option<&Path>, client: &str) -> Result<(), String>
         .map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&out_path, json).map_err(|e| format!("write: {e}"))?;
     eprintln!(
-        "✓ {} endpoints → {}",
+        "âœ“ {} endpoints â†’ {}",
         endpoints.len(),
         out_path.display()
     );
@@ -6669,7 +6685,7 @@ fn cmd_dev_spec_erd(target: Option<&Path>, client: &str) -> Result<(), String> {
     std::fs::write(&md_path, said_forge::dev_spec::erd::render_mermaid(&erd))
         .map_err(|e| format!("write md: {e}"))?;
     eprintln!(
-        "✓ ERD: {} entities → {} + {}",
+        "âœ“ ERD: {} entities â†’ {} + {}",
         erd.entities.len(),
         json_path.display(),
         md_path.display()
@@ -6706,7 +6722,7 @@ fn cmd_dev_spec_generate_tables(target: Option<&Path>, client: &str) -> Result<(
     let mut log = String::from("# ERD Borrow Decisions\n\n");
     for d in &decisions {
         log.push_str(&format!(
-            "- **{}**: {} → `{}.{}` (score {})\n  - {}\n",
+            "- **{}**: {} â†’ `{}.{}` (score {})\n  - {}\n",
             d.entity,
             d.borrowed_from.as_deref().unwrap_or("(fresh)"),
             d.schema,
@@ -6717,7 +6733,7 @@ fn cmd_dev_spec_generate_tables(target: Option<&Path>, client: &str) -> Result<(
     }
     std::fs::write(&borrows_log, log).map_err(|e| format!("write log: {e}"))?;
     eprintln!(
-        "✓ {} tables → {} (log: {})",
+        "âœ“ {} tables â†’ {} (log: {})",
         erd.entities.len(),
         tables_path.display(),
         borrows_log.display()
@@ -6742,16 +6758,16 @@ fn cmd_dev_spec_amend_registry(target: Option<&Path>, client: &str) -> Result<()
     let path = out_dir.join("registry-amendments.sql");
     std::fs::write(&path, merge_sql).map_err(|e| format!("write: {e}"))?;
     eprintln!(
-        "✓ {} registry-amendment MERGE statements → {}",
+        "âœ“ {} registry-amendment MERGE statements â†’ {}",
         endpoints.len(),
         path.display()
     );
     Ok(())
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// said test — Step 10 execution-level testing
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// said test â€” Step 10 execution-level testing
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Spin up the synthetic HTTP server backed by the running sandbox,
 /// drive it with the Bruno collection's `1. Local` env, run L3
@@ -6770,16 +6786,16 @@ fn cmd_test(
         .join(client);
     if !deliverables_root.join("api-specification.generated.yml").exists() {
         return Err(format!(
-            "no spec at {}/api-specification.generated.yml — run `said forge docs --client {} --verify-against-sandbox` first",
+            "no spec at {}/api-specification.generated.yml â€” run `said forge docs --client {} --verify-against-sandbox` first",
             deliverables_root.display(), client,
         ));
     }
-    // Bruno fixtures come from TWO roots — hand-authored takes priority
+    // Bruno fixtures come from TWO roots â€” hand-authored takes priority
     // over machine-generated:
     //   1. `dt/<CLIENT>/feapiTxnGlobal/.bruno/<CLIENT>-Global/1. Local/`
-    //      — engineer-curated source-of-truth, never modified by tooling
+    //      â€” engineer-curated source-of-truth, never modified by tooling
     //   2. `5-deliverables/<CLIENT>/bruno-generated/`
-    //      — output of `dtcard/.forge/generate_bruno.py`, fills gaps
+    //      â€” output of `dtcard/.forge/generate_bruno.py`, fills gaps
     //        for entities that have no hand-authored fixture yet
     // The harness merges them; (entity_folder, name) duplicates resolve
     // in favour of the hand-authored copy.
@@ -6818,7 +6834,7 @@ fn cmd_test(
         )),
     };
     eprintln!(
-        "  → testing against sandbox `{}` on port {}",
+        "  â†’ testing against sandbox `{}` on port {}",
         sandbox.container_name, sandbox.host_port,
     );
 
@@ -6829,10 +6845,10 @@ fn cmd_test(
     // starts from a clean state. Without this, idempotency / duplicate-
     // key PrcCodes from the previous run mask real coverage gaps.
     // Bootstrap-seed rows (gsv, eul, oit, mbl 'CEN', etc.) are
-    // preserved — those are owned by `forge docs --verify-against-sandbox`.
+    // preserved â€” those are owned by `forge docs --verify-against-sandbox`.
     let reset_path = workspace_root.join(".forge").join("test-data-reset.sql");
     if reset_path.exists() {
-        eprintln!("  → wiping test data via {}", reset_path.display());
+        eprintln!("  â†’ wiping test data via {}", reset_path.display());
         let sql = std::fs::read_to_string(&reset_path)
             .map_err(|e| format!("read {}: {}", reset_path.display(), e))?;
         rt.block_on(async {
@@ -6840,9 +6856,9 @@ fn cmd_test(
         }).map_err(|e| format!("test-data reset: {}", e))?;
     }
 
-    // OldData rich-fixture pass — re-seed the production-shaped lookup
+    // OldData rich-fixture pass â€” re-seed the production-shaped lookup
     // rows the test-data-reset just wiped (mbl / cbl / fbl / crv / acn).
-    // This is "Idea 1: rich-fixture mode" — synthetic POSTs run against
+    // This is "Idea 1: rich-fixture mode" â€” synthetic POSTs run against
     // real production lookup codes/GUIDs instead of bootstrap stubs.
     // Uses `IF NOT EXISTS` guards (see dtcard/.forge/load_olddata.py) so
     // the seed is idempotent across repeat harness runs.
@@ -6853,7 +6869,7 @@ fn cmd_test(
     // `5-deliverables/<CLIENT>/sql/olddata-seed.sql`.
     let olddata_path = deliverables_root.join("sql").join("olddata-seed.sql");
     if olddata_path.exists() {
-        eprintln!("  → seeding real oldData via {}", olddata_path.display());
+        eprintln!("  â†’ seeding real oldData via {}", olddata_path.display());
         let sql = std::fs::read_to_string(&olddata_path)
             .map_err(|e| format!("read {}: {}", olddata_path.display(), e))?;
         rt.block_on(async {
@@ -6868,7 +6884,7 @@ fn cmd_test(
     })?;
 
     eprintln!(
-        "✓ test-report.md written. {} green, {} missing-fixture, {} broken-step (of {} entities walked).",
+        "âœ“ test-report.md written. {} green, {} missing-fixture, {} broken-step (of {} entities walked).",
         summary.passed_count(),
         summary.missing_fixture_count(),
         summary.broken_step_count(),
@@ -6876,16 +6892,16 @@ fn cmd_test(
     );
     // Non-zero exit only when there are broken-step entities. Missing-
     // fixture is a Phase-A coverage gap (the workflow flags it for
-    // hand-authoring), not a test failure — don't fail CI for it.
+    // hand-authoring), not a test failure â€” don't fail CI for it.
     if summary.broken_step_count() > 0 {
         std::process::exit(1);
     }
     Ok(())
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// said forge <verb> — spec-driven workspace generator
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// said forge <verb> â€” spec-driven workspace generator
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(feature = "forge")]
 mod forge_cli {
@@ -6917,7 +6933,7 @@ mod forge_cli {
             );
         }
         // Machine-generated fixtures (output of `dtcard/.forge/generate_bruno.py`)
-        // — included so the coverage report counts an endpoint as
+        // â€” included so the coverage report counts an endpoint as
         // "Bruno present" if it has either a hand-authored OR a
         // generated fixture (the harness consumes both).
         roots.push(
@@ -6991,7 +7007,7 @@ mod forge_cli {
         let gt_root = target.join("1-ground-truth");
         if !gt_root.is_dir() {
             return Err(format!(
-                "no 1-ground-truth/ under {} — not a forge workspace?",
+                "no 1-ground-truth/ under {} â€” not a forge workspace?",
                 target.display()
             ));
         }
@@ -7134,7 +7150,7 @@ mod forge_cli {
         println!("Workspace: {}", workspace.display());
         println!();
         println!("{:<20} {:>8} {:>15} {:>10}", "Client", "Files", "Last spec", "Stale?");
-        println!("{}", "─".repeat(60));
+        println!("{}", "â”€".repeat(60));
         for c in &clients {
             let stale = if c.source_newer_than_spec() { "yes" } else { "no" };
             println!("{:<20} {:>8} {:>15} {:>10}", c.name, c.file_count, c.spec_age(), stale);
@@ -7189,12 +7205,12 @@ mod forge_cli {
         for (i, client) in selected.iter().enumerate() {
             let port = start_port + i as u16;
             if !json {
-                println!("\n══ {} ({}/{}) ══", client.name, i + 1, selected.len());
+                println!("\nâ•â• {} ({}/{}) â•â•", client.name, i + 1, selected.len());
                 println!("  Port:        {}", port);
                 println!("  Source files: {}", client.file_count);
             }
 
-            // 1. sandbox up — spawn `said sandbox <Client> --up --port N`.
+            // 1. sandbox up â€” spawn `said sandbox <Client> --up --port N`.
             // Use the same binary so feature flags + behavior are consistent.
             let sandbox_status = std::process::Command::new(&said_bin)
                 .args([
@@ -7207,7 +7223,7 @@ mod forge_cli {
                 .map_err(|e| format!("spawn sandbox for {}: {}", client.name, e))?;
             if !sandbox_status.success() {
                 if !json {
-                    println!("  ✗ sandbox up FAILED for {}", client.name);
+                    println!("  âœ— sandbox up FAILED for {}", client.name);
                 }
                 summary.push(serde_json::json!({
                     "client": client.name,
@@ -7218,7 +7234,7 @@ mod forge_cli {
                 continue;
             }
             if !json {
-                println!("  ✓ sandbox up");
+                println!("  âœ“ sandbox up");
             }
 
             // 1.5 Dev-Spec-driven stages: generate tables + registry
@@ -7240,7 +7256,7 @@ mod forge_cli {
                 .status()
                 .map_err(|e| format!("dev-spec generate-tables: {e}"))?;
             if !dev_spec_status.success() {
-                eprintln!("  ✗ dev-spec generate-tables FAILED");
+                eprintln!("  âœ— dev-spec generate-tables FAILED");
             } else {
                 let tables_path = workspace
                     .join("5-deliverables")
@@ -7253,9 +7269,9 @@ mod forge_cli {
                     port
                 );
                 if let Err(e) = apply_sql_to_sandbox(&container, &tables_path) {
-                    eprintln!("  ✗ apply tables.sql: {e}");
+                    eprintln!("  âœ— apply tables.sql: {e}");
                 } else {
-                    eprintln!("  ✓ Dev Spec tables applied");
+                    eprintln!("  âœ“ Dev Spec tables applied");
                 }
             }
 
@@ -7269,7 +7285,7 @@ mod forge_cli {
                 .status()
                 .map_err(|e| format!("dev-spec amend-registry: {e}"))?;
             if !amend_status.success() {
-                eprintln!("  ✗ dev-spec amend-registry FAILED");
+                eprintln!("  âœ— dev-spec amend-registry FAILED");
             } else {
                 let amend_path = workspace
                     .join("5-deliverables")
@@ -7282,13 +7298,13 @@ mod forge_cli {
                     port
                 );
                 if let Err(e) = apply_sql_to_sandbox(&container, &amend_path) {
-                    eprintln!("  ✗ apply registry-amendments.sql: {e}");
+                    eprintln!("  âœ— apply registry-amendments.sql: {e}");
                 } else {
-                    eprintln!("  ✓ Registry amendments applied");
+                    eprintln!("  âœ“ Registry amendments applied");
                 }
             }
 
-            // 2. forge docs — only when not skipped. Run via the binary
+            // 2. forge docs â€” only when not skipped. Run via the binary
             // for consistent feature-gated behavior.
             let mut spec_ok = false;
             if !no_docs {
@@ -7313,15 +7329,15 @@ mod forge_cli {
                 spec_ok = docs_status.success();
                 if !json {
                     if spec_ok {
-                        println!("  ✓ spec generated → 5-deliverables/{}/", client.name);
+                        println!("  âœ“ spec generated â†’ 5-deliverables/{}/", client.name);
                     } else {
-                        println!("  ✗ spec generation FAILED");
+                        println!("  âœ— spec generation FAILED");
                     }
                 }
             }
 
             // 3. tear down (unless --keep-running). Find the actual
-            // container name by docker filter on the client token —
+            // container name by docker filter on the client token â€”
             // sandbox uses lowercase regardless of arg casing.
             if !keep_running {
                 let container_filter = format!("name=said-sbx-{}-", client.name.to_lowercase());
@@ -7337,7 +7353,7 @@ mod forge_cli {
                     }
                 }
                 if !json {
-                    println!("  ✓ container removed");
+                    println!("  âœ“ container removed");
                 }
             }
 
@@ -7355,13 +7371,13 @@ mod forge_cli {
                 "results": summary,
             }));
         } else {
-            println!("\n══ Summary ══");
+            println!("\nâ•â• Summary â•â•");
             for r in &summary {
                 let name = r["client"].as_str().unwrap_or("?");
                 let port = r["port"].as_u64().unwrap_or(0);
                 let sb = r["sandbox_ok"].as_bool().unwrap_or(false);
                 let sp = r["spec_ok"].as_bool().unwrap_or(false);
-                let mark = if sb && (sp || no_docs) { "✓" } else { "✗" };
+                let mark = if sb && (sp || no_docs) { "âœ“" } else { "âœ—" };
                 println!(
                     "  {} {:<20} port={:<5}  sandbox={}  spec={}",
                     mark,
@@ -7377,7 +7393,7 @@ mod forge_cli {
 
     async fn run(path: Option<&str>, verb: ForgeVerb, json: bool) -> Result<(), String> {
         // `forge init` and `forge plan` operate on the workspace directory,
-        // not an existing .said brain — handle them before `resolve_path`.
+        // not an existing .said brain â€” handle them before `resolve_path`.
         if let ForgeVerb::Init { project, target, merge, force } = &verb {
             return cmd_init(project, target.as_deref(), *merge, *force, json);
         }
@@ -7454,7 +7470,7 @@ mod forge_cli {
             .await;
         }
         if let ForgeVerb::Rule { rule, input } = &verb {
-            // Pure string-in-string-out — no brain needed. Calls the
+            // Pure string-in-string-out â€” no brain needed. Calls the
             // canonical helpers in said-forge so Python tooling and Rust
             // tooling apply identical rules.
             use said_forge::dev_spec::parser::{
@@ -7543,9 +7559,9 @@ mod forge_cli {
         }
     }
 
-    // ─── proc framework: render + audit ─────────────────────────────────
+    // â”€â”€â”€ proc framework: render + audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     //
-    // Additive — does not modify any other forge subcommand. Reads the
+    // Additive â€” does not modify any other forge subcommand. Reads the
     // framework data layer at `<framework>/` (standards/, profiles/,
     // bundles/) and either renders a proc skeleton or audits deployed
     // procs against framework-rendered expectations.
@@ -7554,7 +7570,7 @@ mod forge_cli {
     /// internal LF text; we want every line terminator on disk to be `\r\n`
     /// so a freshly-rendered file diff-matches a deployed reference file
     /// byte-for-byte. Idempotent: if a `\r` is already present before `\n`,
-    /// we don't double it. UTF-8 safe — operates on str lines, not bytes.
+    /// we don't double it. UTF-8 safe â€” operates on str lines, not bytes.
     fn to_crlf(s: &str) -> String {
         // split_terminator preserves whether a trailing newline existed; we
         // re-emit each line followed by \r\n. If the input had no trailing
@@ -7692,7 +7708,7 @@ mod forge_cli {
         };
 
         // Mirror cmd_proc_framework_render path-resolution. `framework`
-        // is e.g. `<workspace>/dtcard/.forge/proc-framework` — three
+        // is e.g. `<workspace>/dtcard/.forge/proc-framework` â€” three
         // parents up is the workspace root the profile paths resolve
         // against.
         let workspace = framework
@@ -7709,7 +7725,7 @@ mod forge_cli {
             .ok_or_else(|| "profile.toml: generated_paths.cs_query_root not set".to_string())?;
         let ref_template = prof.reference_paths.cs_query_root.as_deref();
 
-        // Collect endpoints — same logic as the SQL renderer.
+        // Collect endpoints â€” same logic as the SQL renderer.
         let mut endpoints = if let Some(bname) = bundle {
             let b = load_bundle(framework, bname)?;
             b.endpoints
@@ -7754,7 +7770,7 @@ mod forge_cli {
             let text = render_endpoint_cs(framework, profile, ep, deployed_path.as_deref())?;
 
             // Deployed dt .cs convention is LF without trailing newline
-            // (verified by `file` on dt/TXN/.../Account/*.cs — 4 of 5
+            // (verified by `file` on dt/TXN/.../Account/*.cs â€” 4 of 5
             // are "ASCII text", LF). SSDT .sql is CRLF; .cs is LF.
             // Strip any trailing newline so the file ends mid-line like
             // the hand-authored originals.
@@ -7762,7 +7778,7 @@ mod forge_cli {
 
             // Resolve output path. The .cs is placed under
             // `<cs_query_root>/<bundle>/<ClassName>Query.cs` (nested
-            // layout — the dt convention for newer Query classes).
+            // layout â€” the dt convention for newer Query classes).
             let target_dir = if bundle_folder.is_empty() {
                 workspace.join(gen_template)
             } else {
@@ -8089,7 +8105,7 @@ mod forge_cli {
             println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         } else {
             let sep = platform_sep();
-            println!("✓ Initialised forge workspace at {}", root_str);
+            println!("âœ“ Initialised forge workspace at {}", root_str);
             println!(
                 "  {} folders, {} files created, {} skipped.",
                 result.folders_created, result.files_created, result.files_skipped
@@ -8097,11 +8113,11 @@ mod forge_cli {
             println!("  Brain: {}", said_str);
             println!();
             println!("Next steps:");
-            println!("  1. Drop SQL/code       → {root}{sep}1-ground-truth{sep}", root = root_str, sep = sep);
-            println!("  2. Drop existing code  → {root}{sep}2-progress{sep}", root = root_str, sep = sep);
-            println!("  3. Drop client PDFs    → {root}{sep}3-requirements{sep}", root = root_str, sep = sep);
-            println!("  4. Drop OpenAPI + MDs  → {root}{sep}4-expectations{sep}", root = root_str, sep = sep);
-            println!("  5. Run                 → said forge plan");
+            println!("  1. Drop SQL/code       â†’ {root}{sep}1-ground-truth{sep}", root = root_str, sep = sep);
+            println!("  2. Drop existing code  â†’ {root}{sep}2-progress{sep}", root = root_str, sep = sep);
+            println!("  3. Drop client PDFs    â†’ {root}{sep}3-requirements{sep}", root = root_str, sep = sep);
+            println!("  4. Drop OpenAPI + MDs  â†’ {root}{sep}4-expectations{sep}", root = root_str, sep = sep);
+            println!("  5. Run                 â†’ said forge plan");
         }
         Ok(())
     }
@@ -8122,7 +8138,7 @@ mod forge_cli {
         let cfg_path = WorkspaceConfig::default_path_for(&root);
         if !cfg_path.exists() {
             return Err(format!(
-                "no .forge/config.toml at {} — run `said forge plan` first",
+                "no .forge/config.toml at {} â€” run `said forge plan` first",
                 cfg_path.display()
             ));
         }
@@ -8130,7 +8146,7 @@ mod forge_cli {
             .map_err(|e| format!("load config: {}", e))?;
         if !cfg.plan_complete {
             return Err(format!(
-                "config at {} has plan_complete=false — run `said forge plan` first",
+                "config at {} has plan_complete=false â€” run `said forge plan` first",
                 cfg_path.display()
             ));
         }
@@ -8173,10 +8189,10 @@ mod forge_cli {
                 });
                 println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
             } else {
-                println!("Dry run — {} file(s) to ingest, {} unchanged (skip), {} orphan(s) at root",
+                println!("Dry run â€” {} file(s) to ingest, {} unchanged (skip), {} orphan(s) at root",
                          plan.entries.len(), plan.skipped_unchanged.len(), plan.orphans.len());
                 for e in &plan.entries {
-                    println!("  [{:?}] {} → {}", e.kind, e.rel_path.display(), e.authority.to_tag());
+                    println!("  [{:?}] {} â†’ {}", e.kind, e.rel_path.display(), e.authority.to_tag());
                 }
                 if !plan.orphans.is_empty() {
                     println!("Orphan files at project root (won't be ingested):");
@@ -8215,10 +8231,10 @@ mod forge_cli {
             });
             println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         } else {
-            println!("✓ Sync complete — {} frames written ({} bytes), {} unchanged",
+            println!("âœ“ Sync complete â€” {} frames written ({} bytes), {} unchanged",
                      result.frames_written, result.bytes_ingested, result.files_skipped_unchanged);
             if result.files_skipped_xlsx_unsupported > 0 {
-                println!("  ⚠ {} XLSX file(s) skipped (enable --features forge-xlsx in phase 15)",
+                println!("  âš  {} XLSX file(s) skipped (enable --features forge-xlsx in phase 15)",
                          result.files_skipped_xlsx_unsupported);
             }
             if !result.by_authority.is_empty() {
@@ -8256,7 +8272,7 @@ mod forge_cli {
             0 => Err(format!("no .said file at {}", root.display())),
             1 => Ok(found.into_iter().next().unwrap()),
             _ => Err(format!(
-                "multiple .said files at {} — pass --path to disambiguate",
+                "multiple .said files at {} â€” pass --path to disambiguate",
                 root.display()
             )),
         }
@@ -8337,20 +8353,20 @@ mod forge_cli {
         let cfg_path = WorkspaceConfig::default_path_for(&root);
         if !cfg_path.exists() {
             return Err(format!(
-                "no .forge/config.toml at {} — run `said forge plan` first",
+                "no .forge/config.toml at {} â€” run `said forge plan` first",
                 cfg_path.display()
             ));
         }
         let cfg = WorkspaceConfig::load(&cfg_path)
             .map_err(|e| format!("load config: {}", e))?;
         if !cfg.plan_complete {
-            return Err("config.toml has plan_complete=false — run `said forge plan` first".into());
+            return Err("config.toml has plan_complete=false â€” run `said forge plan` first".into());
         }
         if cfg.directive.mode == DirectiveMode::Unset {
-            return Err("no directive configured in .forge/config.toml — re-run `said forge plan`".into());
+            return Err("no directive configured in .forge/config.toml â€” re-run `said forge plan`".into());
         }
 
-        // Dev Planning root — we walk this folder tree looking for
+        // Dev Planning root â€” we walk this folder tree looking for
         // per-op MDs. Config.toml primary often points at a specific file
         // inside a group folder (e.g. `.../Cardholders/api.md`). We walk
         // upward until we find a folder that contains MULTIPLE subdirs
@@ -8362,7 +8378,7 @@ mod forge_cli {
             None => root.join("4-expectations/Dev Planning"),
         };
 
-        // OpenAPI — if secondary is set AND Both mode is active, use it.
+        // OpenAPI â€” if secondary is set AND Both mode is active, use it.
         // Otherwise fall back to scanning 4-expectations/ for an openapi yaml.
         let openapi_path: Option<PathBuf> = if cfg.directive.mode == DirectiveMode::Both {
             cfg.directive.secondary.as_ref().map(|p| root.join(p))
@@ -8407,9 +8423,9 @@ mod forge_cli {
             });
             println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
         } else {
-            println!("✓ Structured gap report written to {}", normalize_display_path(&out_dir));
+            println!("âœ“ Structured gap report written to {}", normalize_display_path(&out_dir));
             println!(
-                "  {} group folders · {} per-op files · {} orphan OpenAPI ops · {} XLSM rows loaded",
+                "  {} group folders Â· {} per-op files Â· {} orphan OpenAPI ops Â· {} XLSM rows loaded",
                 result.groups_written,
                 result.op_files_written,
                 result.orphan_openapi_ops.len(),
@@ -8438,7 +8454,7 @@ mod forge_cli {
         let cfg_path = WorkspaceConfig::default_path_for(&root);
         if !cfg_path.exists() {
             return Err(format!(
-                "no .forge/config.toml at {} — run `said forge plan` first",
+                "no .forge/config.toml at {} â€” run `said forge plan` first",
                 cfg_path.display()
             ));
         }
@@ -8509,7 +8525,7 @@ mod forge_cli {
             );
         } else {
             println!(
-                "✓ Viz written to {} ({} bytes · {} tables · {} ops)",
+                "âœ“ Viz written to {} ({} bytes Â· {} tables Â· {} ops)",
                 normalize_display_path(&out_path),
                 body.len(),
                 catalog.tables.len(),
@@ -8549,7 +8565,7 @@ mod forge_cli {
             }
         };
         eprintln!(
-            "  → verifying against sandbox `{}` on port {}",
+            "  â†’ verifying against sandbox `{}` on port {}",
             sandbox.container_name, sandbox.host_port
         );
         // Build the per-lookup-table column map. Forge already knows
@@ -8577,7 +8593,7 @@ mod forge_cli {
             let mut code_col = format!("{}_Code", prefix);
             let mut desc_col: Option<String> = None;
             // Pick whatever the table actually has; tolerate naming
-            // drift (col_Country_Lookup → col_Code; cps_*_Status → cps_Status;
+            // drift (col_Country_Lookup â†’ col_Code; cps_*_Status â†’ cps_Status;
             // some tables use the bare prefix as the PK column).
             if !t.columns.iter().any(|c| c.name.eq_ignore_ascii_case(&code_col)) {
                 if let Some(c) = t.columns.iter().find(|c| {
@@ -8601,7 +8617,7 @@ mod forge_cli {
         match sql_verify::run_verification_with_cap(&sandbox, &lookup_columns, max_enum_rows).await {
             Ok(report) => {
                 eprintln!(
-                    "  → sandbox: {} procs, {} closed-set lookups verified, {} open lookups skipped",
+                    "  â†’ sandbox: {} procs, {} closed-set lookups verified, {} open lookups skipped",
                     report.procs_verified,
                     report.closed_lookup_enums.len(),
                     report.skipped_open_lookups.len()
@@ -8691,7 +8707,7 @@ mod forge_cli {
     /// API registry table, emit the spec directly from those rows
     /// (skipping the heuristic name-mapper) and bind procs via the
     /// 6-gate matcher. Returns `Ok(None)` when no registry is available
-    /// — caller falls back to the catalog-walk generator.
+    /// â€” caller falls back to the catalog-walk generator.
     #[cfg(feature = "forge-sql-verify")]
     async fn build_registry_first_spec(
         title: &str,
@@ -8707,7 +8723,7 @@ mod forge_cli {
         };
         // Parse Dev Spec markdown so the registry-first spec gets
         // fully-enriched operations + components/schemas. Missing
-        // directory or parse failure → degrade to the bare-bones
+        // directory or parse failure â†’ degrade to the bare-bones
         // (Task 1) emission.
         let dev_planning = workspace_root.join("4-expectations").join("Dev Planning");
         let standard = said_forge::OpenApiStandard::load(workspace_root, Some(client_hint))
@@ -8730,7 +8746,7 @@ mod forge_cli {
             };
         let resolutions = said_forge::fitter::AmbiguityResolutions::load(workspace_root);
         if resolutions.len() > 0 {
-            eprintln!("  → loaded {} ambiguity resolutions", resolutions.len());
+            eprintln!("  â†’ loaded {} ambiguity resolutions", resolutions.len());
         }
         let result = said_forge::fitter::build_spec_from_registry(
             &sandbox, title, catalog, dev_eps_ref, &standard, &resolutions,
@@ -8758,7 +8774,7 @@ mod forge_cli {
         let ambiguities_path = deliverables_root.join("ambiguities.md");
         said_forge::fitter::write_ambiguities(&report, client_hint, &ambiguities_path)?;
 
-        // Four-signal coverage report: combines Dev Spec ∪ Registry
+        // Four-signal coverage report: combines Dev Spec âˆª Registry
         // (signals 1+2), the proc-binding outcome already in `report`
         // (signal 4), and Bruno fixture presence across both collection
         // roots (signal 3) into a single per-endpoint Phase A / Phase B
@@ -8785,12 +8801,12 @@ mod forge_cli {
             | said_forge::coverage::CoverageStatus::PhaseBAuthorDevSpec
         )).count();
         eprintln!(
-            "  → coverage: {} endpoints assessed ({} Phase A — testable, {} Phase B — needs generation)",
+            "  â†’ coverage: {} endpoints assessed ({} Phase A â€” testable, {} Phase B â€” needs generation)",
             coverage_rows.len(), testable, phase_b,
         );
 
         eprintln!(
-            "  → registry-first spec: {} endpoints from `{}` ({} bound, {} ambiguous, {} unbound)",
+            "  â†’ registry-first spec: {} endpoints from `{}` ({} bound, {} ambiguous, {} unbound)",
             report.registry_size,
             report.registry_source,
             report.missing_ops_added.len(),
@@ -8822,10 +8838,10 @@ mod forge_cli {
     /// Apply Dev Spec table definitions + registry amendments to the
     /// running sandbox. Runs before spec generation so the live DB
     /// has every entity Dev Spec demands. Idempotent (CREATE TABLE
-    /// IF NOT EXISTS, MERGE for registry rows) — safe to re-run.
+    /// IF NOT EXISTS, MERGE for registry rows) â€” safe to re-run.
     ///
     /// Steps:
-    ///   1. Walk Dev Spec markdown → derive ERD
+    ///   1. Walk Dev Spec markdown â†’ derive ERD
     ///   2. Borrow decisions vs SQL catalog
     ///   3. Emit tables.sql (CREATE TABLE + deferred FK ALTERs)
     ///   4. Emit registry-amendments.sql (MERGE per endpoint)
@@ -8873,36 +8889,36 @@ mod forge_cli {
             .map_err(|e| format!("write registry-amendments.sql: {}", e))?;
 
         // Apply tables first (procs/registry can FK to them).
-        eprintln!("  → applying Dev Spec tables.sql to sandbox `{}`",
+        eprintln!("  â†’ applying Dev Spec tables.sql to sandbox `{}`",
             sandbox.container_name);
         if let Err(e) = apply_sql_script(sandbox.host_port, &tables_sql).await {
-            // Soft warning — many CREATE TABLE statements use IF NOT
+            // Soft warning â€” many CREATE TABLE statements use IF NOT
             // EXISTS guards, so some failures are expected on re-runs.
-            eprintln!("  ⚠ tables.sql apply: {}", e);
+            eprintln!("  âš  tables.sql apply: {}", e);
         }
 
-        eprintln!("  → applying Dev Spec registry-amendments.sql to sandbox");
+        eprintln!("  â†’ applying Dev Spec registry-amendments.sql to sandbox");
         if let Err(e) = apply_sql_script(sandbox.host_port, &amend_sql).await {
-            eprintln!("  ⚠ registry-amendments.sql apply: {}", e);
+            eprintln!("  âš  registry-amendments.sql apply: {}", e);
         }
 
-        // Sandbox-bootstrap pass — applies `dtcard/.forge/sandbox-bootstrap.sql`
+        // Sandbox-bootstrap pass â€” applies `dtcard/.forge/sandbox-bootstrap.sql`
         // (seed data: gsv defaults, lookup-table fills, etc.) and
         // `dtcard/.forge/proc-patches.sql` (temporary proc patches).
         //
         // Both files are operator-editable. Adding a new seed row or
-        // proc patch does NOT require rebuilding said-cli — engineers
+        // proc patch does NOT require rebuilding said-cli â€” engineers
         // edit the file and re-run `forge docs --verify-against-sandbox`.
         // See the file headers for conventions and "when to delete"
         // notes per entry.
         let forge_dir = workspace_root.join(".forge");
         let bootstrap_path = forge_dir.join("sandbox-bootstrap.sql");
         if bootstrap_path.exists() {
-            eprintln!("  → applying sandbox bootstrap from {}", bootstrap_path.display());
+            eprintln!("  â†’ applying sandbox bootstrap from {}", bootstrap_path.display());
             let sql = std::fs::read_to_string(&bootstrap_path)
                 .map_err(|e| format!("read {}: {}", bootstrap_path.display(), e))?;
             if let Err(e) = apply_sql_script(sandbox.host_port, &sql).await {
-                eprintln!("  ⚠ sandbox bootstrap apply: {}", e);
+                eprintln!("  âš  sandbox bootstrap apply: {}", e);
             }
         }
         // proc-patches.sql is applied AFTER the ground-truth API procs
@@ -8911,7 +8927,7 @@ mod forge_cli {
         // overwrite the patched bodies and leave the sandbox running
         // the buggy upstream version. See "ground-truth API procs"
         // section below for the actual application.
-        // Registry cleanup — UPDATE/DELETE rows in
+        // Registry cleanup â€” UPDATE/DELETE rows in
         // `lookups.ars_Api_Rule_Settings` so it lines up with the
         // Dev Spec + `openapi-standard.toml` rules. Source-of-truth
         // for the contents is `dtcard/5-deliverables/<CLIENT>/dev-spec-vs-openapi-drift.md`
@@ -8921,26 +8937,26 @@ mod forge_cli {
         // are correct first.
         let cleanup_path = forge_dir.join("registry-cleanup.sql");
         if cleanup_path.exists() {
-            eprintln!("  → applying registry cleanup from {}", cleanup_path.display());
+            eprintln!("  â†’ applying registry cleanup from {}", cleanup_path.display());
             let sql = std::fs::read_to_string(&cleanup_path)
                 .map_err(|e| format!("read {}: {}", cleanup_path.display(), e))?;
             if let Err(e) = apply_sql_script(sandbox.host_port, &sql).await {
-                eprintln!("  ⚠ registry cleanup apply: {}", e);
+                eprintln!("  âš  registry cleanup apply: {}", e);
             }
         }
 
-        // Ground-truth API procs — deploy any `p_txn_API_*.sql` files
+        // Ground-truth API procs â€” deploy any `p_txn_API_*.sql` files
         // under `1-ground-truth/<Client>/` so the procs we hand-write
-        // for Phase B (Fee, Webhook, …) land in the running sandbox
+        // for Phase B (Fee, Webhook, â€¦) land in the running sandbox
         // without `docker cp` workarounds. The naming convention
         // (`p_txn_API_*`) is what every new API proc follows; the
         // sandbox snapshot at `.said-code/<module>/sandbox/schema.sql`
         // is regenerated by `forge sync` + `said sandbox` and stays
-        // the authoritative deploy target for fresh containers — but
+        // the authoritative deploy target for fresh containers â€” but
         // for the running container we want changes to land on every
         // `forge docs --verify-against-sandbox`.
         //
-        // Drop CREATE PROCEDURE → CREATE OR ALTER PROCEDURE on the
+        // Drop CREATE PROCEDURE â†’ CREATE OR ALTER PROCEDURE on the
         // way in so re-runs don't fail with "procedure already exists".
         let ground_truth_root = workspace_root.join("1-ground-truth").join(client_hint);
         if ground_truth_root.exists() {
@@ -8948,24 +8964,24 @@ mod forge_cli {
             collect_api_proc_files(&ground_truth_root, &mut api_proc_files);
             if !api_proc_files.is_empty() {
                 eprintln!(
-                    "  → applying {} ground-truth API procs from 1-ground-truth/{}/",
+                    "  â†’ applying {} ground-truth API procs from 1-ground-truth/{}/",
                     api_proc_files.len(), client_hint,
                 );
                 for path in &api_proc_files {
                     let sql = match std::fs::read_to_string(path) {
                         Ok(s) => s,
                         Err(e) => {
-                            eprintln!("    ⚠ read {}: {}", path.display(), e);
+                            eprintln!("    âš  read {}: {}", path.display(), e);
                             continue;
                         }
                     };
-                    // Strip a UTF-8 BOM if present — the on-disk files
+                    // Strip a UTF-8 BOM if present â€” the on-disk files
                     // were authored by various tools (Visual Studio,
                     // VS Code, hand-edits) and some carry the BOM.
                     // SQL Server's parser raises "Incorrect syntax
                     // near ''" when it encounters one.
                     let sql = sql.trim_start_matches('\u{FEFF}');
-                    // Convert CREATE PROCEDURE → CREATE OR ALTER
+                    // Convert CREATE PROCEDURE â†’ CREATE OR ALTER
                     // PROCEDURE so re-runs are idempotent. Hand-written
                     // procs sometimes use multi-space variants like
                     // "CREATE   PROCEDURE", so do a lower-case word-
@@ -8973,7 +8989,7 @@ mod forge_cli {
                     let sql = rewrite_create_procedure(sql);
                     if let Err(e) = apply_sql_script(sandbox.host_port, &sql).await {
                         eprintln!(
-                            "    ⚠ apply {}: {}",
+                            "    âš  apply {}: {}",
                             path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
                             e,
                         );
@@ -8982,20 +8998,20 @@ mod forge_cli {
             }
         }
 
-        // proc-patches.sql — apply NOW, after ground-truth re-deploy,
+        // proc-patches.sql â€” apply NOW, after ground-truth re-deploy,
         // so the idempotent ALTER patches outlive the canonical body.
         // Operator-editable; see file headers for "why" + "when to delete".
         let patches_path = forge_dir.join("proc-patches.sql");
         if patches_path.exists() {
-            eprintln!("  → applying proc patches from {}", patches_path.display());
+            eprintln!("  â†’ applying proc patches from {}", patches_path.display());
             let sql = std::fs::read_to_string(&patches_path)
                 .map_err(|e| format!("read {}: {}", patches_path.display(), e))?;
             if let Err(e) = apply_sql_script(sandbox.host_port, &sql).await {
-                eprintln!("  ⚠ proc patches apply: {}", e);
+                eprintln!("  âš  proc patches apply: {}", e);
             }
         }
 
-        // Validation-seed pass — ensures `lookups.arc_Api_Rule_Validations`
+        // Validation-seed pass â€” ensures `lookups.arc_Api_Rule_Validations`
         // has a row for every (method, path, field) the Bruno fixtures
         // POST/PUT. Without this, every Create proc raises PrcCode 1001
         // ("Field configuration not found") on the first request after
@@ -9007,24 +9023,24 @@ mod forge_cli {
             .join("validation-seed.sql");
         if validation_seed_path.exists() {
             eprintln!(
-                "  → applying validation seed from {}",
+                "  â†’ applying validation seed from {}",
                 validation_seed_path.display(),
             );
             let sql = std::fs::read_to_string(&validation_seed_path)
                 .map_err(|e| format!("read {}: {}", validation_seed_path.display(), e))?;
             if let Err(e) = apply_sql_script(sandbox.host_port, &sql).await {
-                eprintln!("  ⚠ validation seed apply: {}", e);
+                eprintln!("  âš  validation seed apply: {}", e);
             }
         }
 
-        // OldData-seed pass — applied by `said test` after the
+        // OldData-seed pass â€” applied by `said test` after the
         // synthetic test-data-reset.sql wipes lookups (mbl / cbl /
         // fbl / crv / acn). The seed itself is idempotent (`IF NOT
         // EXISTS` guards in dtcard/.forge/load_olddata.py output)
         // so re-running across multiple harness invocations is safe.
         //
         // Not applied here in `forge docs` because the deploy path
-        // doesn't run reset between calls — the seed lives next to
+        // doesn't run reset between calls â€” the seed lives next to
         // `said test` for the rich-fixture mode. To regenerate after
         // adding/changing a table whitelist entry, run:
         //   py dtcard/.forge/load_olddata.py --client <CLIENT>
@@ -9035,9 +9051,9 @@ mod forge_cli {
         Ok(())
     }
 
-    /// Replace the first `CREATE PROCEDURE` (or any CREATE…PROCEDURE
+    /// Replace the first `CREATE PROCEDURE` (or any CREATEâ€¦PROCEDURE
     /// where the gap between tokens is whitespace only) with
-    /// `CREATE OR ALTER PROCEDURE`. Idempotent — if the statement
+    /// `CREATE OR ALTER PROCEDURE`. Idempotent â€” if the statement
     /// already says `CREATE OR ALTER PROCEDURE`, the input is returned
     /// unchanged. Case-insensitive on both keywords.
     #[cfg(feature = "forge-sql-verify")]
@@ -9062,7 +9078,7 @@ mod forge_cli {
                     && &bytes[j..j + needle_proc.len()] == needle_proc
                 {
                     // Replace the [i .. j+needle_proc.len()] slice with
-                    // "CREATE OR ALTER PROCEDURE" — preserving the
+                    // "CREATE OR ALTER PROCEDURE" â€” preserving the
                     // remainder verbatim. Use byte indices on the
                     // original string (ASCII keywords, so byte == char).
                     let mut out = String::with_capacity(input.len() + 9);
@@ -9074,7 +9090,7 @@ mod forge_cli {
             }
             i += 1;
         }
-        // No CREATE PROCEDURE found — leave input untouched (it might
+        // No CREATE PROCEDURE found â€” leave input untouched (it might
         // be a TRIGGER or something else; let the SQL Server parser
         // surface the real error).
         input.to_string()
@@ -9100,7 +9116,7 @@ mod forge_cli {
                 // older `p_txn_Api_*` (mixed-case) naming. Some early
                 // entities (Product, Business) were authored before the
                 // convention was tightened to all-caps API and still ship
-                // the older filename — without this they never reach the
+                // the older filename â€” without this they never reach the
                 // sandbox on `forge docs --verify-against-sandbox`.
                 let lname = name.to_ascii_lowercase();
                 if lname.starts_with("p_txn_api_") && lname.ends_with(".sql") {
@@ -9147,7 +9163,7 @@ mod forge_cli {
             .map_err(|e| format!("build catalog: {}", e))?;
         let borrows = said_forge::dev_spec::borrow::decide_borrows(&expected, &catalog);
 
-        // Build the entity-set scope: each Expected entity →
+        // Build the entity-set scope: each Expected entity â†’
         // (schema, table) pair. Borrow decisions resolve target tables.
         let mut scope: BTreeSet<(String, String)> = BTreeSet::new();
         for (entity_name, _) in &expected.entities {
@@ -9160,10 +9176,10 @@ mod forge_cli {
 
         // Two reads from the live DB:
         //
-        //   1. **Scoped read** — Expected ERD entities + borrow targets.
+        //   1. **Scoped read** â€” Expected ERD entities + borrow targets.
         //      Used for drift comparison (we only care about contract
         //      divergence, not random catalog tables).
-        //   2. **Unscoped read** — every table in every schema.
+        //   2. **Unscoped read** â€” every table in every schema.
         //      Used for the final ERD render: the master TXN catalog
         //      (~256 tables) + the new Dev Spec tables (~74) = the
         //      complete database picture.
@@ -9178,7 +9194,7 @@ mod forge_cli {
             expected_paths.insert((ep.path.clone(), ep.method.to_uppercase()));
         }
 
-        // Compute drift against the SCOPED live read — drift only
+        // Compute drift against the SCOPED live read â€” drift only
         // concerns the Dev Spec contract.
         let report = said_forge::dev_spec::drift::compute_drift(
             &expected, &borrows, &live_scoped, &expected_paths, strict,
@@ -9224,11 +9240,11 @@ mod forge_cli {
             tags.join(", ")
         };
         eprintln!(
-            "  → ERD drift: {} (in-scope live: {} tables, {} registry rows; report at erd-drift.md)",
+            "  â†’ ERD drift: {} (in-scope live: {} tables, {} registry rows; report at erd-drift.md)",
             summary, report.live_table_count, report.live_registry_count,
         );
         eprintln!(
-            "  → final ERD: {} entities (full DB) → erd.json + erd.md",
+            "  â†’ final ERD: {} entities (full DB) â†’ erd.json + erd.md",
             live_full.tables.len(),
         );
         Ok(())
@@ -9264,7 +9280,7 @@ mod forge_cli {
         // One-line operator hint.
         if report.has_anything() {
             eprintln!(
-                "  → fit pass: {} corrections applied ({} paths, {} params, {} added) — {}",
+                "  â†’ fit pass: {} corrections applied ({} paths, {} params, {} added) â€” {}",
                 report.total_corrections(),
                 report.path_rewrites.len(),
                 report.param_rewrites.len(),
@@ -9273,13 +9289,13 @@ mod forge_cli {
             );
             if !report.missing_ops_logged.is_empty() {
                 eprintln!(
-                    "  ⓘ {} registry path(s) without a matching proc — logged for review",
+                    "  â“˜ {} registry path(s) without a matching proc â€” logged for review",
                     report.missing_ops_logged.len()
                 );
             }
             if !report.surplus_ops.is_empty() {
                 eprintln!(
-                    "  ⓘ {} spec op(s) not in registry — left in spec untouched (v1)",
+                    "  â“˜ {} spec op(s) not in registry â€” left in spec untouched (v1)",
                     report.surplus_ops.len()
                 );
             }
@@ -9327,7 +9343,7 @@ mod forge_cli {
         let cfg_path = WorkspaceConfig::default_path_for(&root);
         if !cfg_path.exists() {
             return Err(format!(
-                "no .forge/config.toml at {} — run `said forge plan` first",
+                "no .forge/config.toml at {} â€” run `said forge plan` first",
                 cfg_path.display()
             ));
         }
@@ -9335,7 +9351,7 @@ mod forge_cli {
             .map_err(|e| format!("load config: {}", e))?;
         if cfg.directive.mode == DirectiveMode::Unset {
             return Err(
-                "no directive configured in .forge/config.toml — re-run `said forge plan`".into(),
+                "no directive configured in .forge/config.toml â€” re-run `said forge plan`".into(),
             );
         }
 
@@ -9359,14 +9375,14 @@ mod forge_cli {
             });
             if ops.is_empty() {
                 return Err(format!(
-                    "no op matched --only `{}` — try a broader substring of the slug or label",
+                    "no op matched --only `{}` â€” try a broader substring of the slug or label",
                     needle
                 ));
             }
         }
         if ops.is_empty() && !from_sql {
             return Err(format!(
-                "no ops found under {} — run `said forge sync` to ingest Dev Planning first, \
+                "no ops found under {} â€” run `said forge sync` to ingest Dev Planning first, \
                  or pass --from-sql to generate the spec from SQL alone",
                 dev_planning_root.display()
             ));
@@ -9380,7 +9396,7 @@ mod forge_cli {
         if let Some(client_name) = client {
             let needle = format!("/{}/", client_name);
             let needle_lc = needle.to_lowercase();
-            // TableSchema has no source_path — keep all tables when
+            // TableSchema has no source_path â€” keep all tables when
             // filtering by client (the SqlObject filter below still
             // narrows procs/views/triggers to the right client).
             let _ = &needle_lc;
@@ -9395,7 +9411,7 @@ mod forge_cli {
 
         let service = MappingService::new(&catalog, &glossary, &overrides);
 
-        // XLSM rows from the brain — feeds Section 12 of each story.
+        // XLSM rows from the brain â€” feeds Section 12 of each story.
         let xlsx_rows = match find_workspace_said(&root) {
             Ok(said_path) => match SaidFile::open(&said_path) {
                 Ok(mut brain) => read_xlsx_rows_from_brain(&mut brain),
@@ -9404,20 +9420,20 @@ mod forge_cli {
             Err(_) => Vec::new(),
         };
 
-        // Load business config — default placeholders if missing.
+        // Load business config â€” default placeholders if missing.
         let business_path = root.join(".forge").join("business.toml");
         let business = BusinessConfig::load(&business_path)
             .map_err(|e| format!("load business.toml: {}", e))?;
         let business_is_placeholder = business.is_placeholder();
 
-        // StoryMeta lookup — was previously populated from XLSM rows
+        // StoryMeta lookup â€” was previously populated from XLSM rows
         // via said_forge::build_metas_from_xlsx, but that helper was
         // removed. Ops without a meta entry use TBD placeholders, which
         // is the correct fallback for now.
         let metas: BTreeMap<String, StoryMeta> = BTreeMap::new();
         let _ = &xlsx_rows;
 
-        // ── Comparison report (per epic) ──
+        // â”€â”€ Comparison report (per epic) â”€â”€
         // Built before generate_story_docs so the per-row data can be
         // injected into each story's "SQL Source of Truth" section.
         // We re-walk Dev Planning unfiltered so the comparison covers
@@ -9442,7 +9458,7 @@ mod forge_cli {
         };
         // Cross-layer literal lineage scan: previously read from
         // `[lineage] cs_root` in `.forge/config.toml`. The lineage
-        // field was removed from WorkspaceConfig — fall back to the
+        // field was removed from WorkspaceConfig â€” fall back to the
         // default scan (`<root>/2-progress/` if it exists).
         let cs_root_path: Option<std::path::PathBuf> = None;
         let cs_root_override = cs_root_path.as_deref();
@@ -9468,7 +9484,7 @@ mod forge_cli {
         let comparison_path = emit_report_file(&comparison, &comparison_dir)
             .map_err(|e| format!("emit comparison: {}", e))?;
 
-        // ── SQL → OpenAPI generated spec ──
+        // â”€â”€ SQL â†’ OpenAPI generated spec â”€â”€
         // Database-first: regenerate the API spec from SQL ground
         // truth. The client's wishlist OpenAPI lives in 4-expectations/
         // and gets diffed against this canonical spec by the
@@ -9477,7 +9493,7 @@ mod forge_cli {
         // When --verify-against-sandbox is set AND forge was built
         // with the `forge-sql-verify` feature, we connect to a
         // running `said-sbx-*` container, pull the lookup row counts
-        // and pull values for closed-set tables (≤25 rows). Those
+        // and pull values for closed-set tables (â‰¤25 rows). Those
         // become `enum:` overrides in the generated spec.
         let enum_overrides = run_sandbox_verification_if_requested(
             verify_against_sandbox,
@@ -9488,7 +9504,7 @@ mod forge_cli {
         .await;
         let enum_overrides_ref = enum_overrides.as_ref();
         // `--from-sql` walks every schema in the catalog (use case:
-        // clients without a curated single-module slice — e.g. Vivere).
+        // clients without a curated single-module slice â€” e.g. Vivere).
         // Otherwise restrict to `cardholder` for the curated TXN flow.
         let openapi_schema_filter: &str = if from_sql { "" } else { "cardholder" };
         // Client-aware spec title: any `--client X` invocation should
@@ -9515,7 +9531,7 @@ mod forge_cli {
                 .map_err(|e| format!("create deliverables dir: {}", e))?;
         }
 
-        // ─── APPLY DEV SPEC TABLES + REGISTRY TO SANDBOX ──────────────
+        // â”€â”€â”€ APPLY DEV SPEC TABLES + REGISTRY TO SANDBOX â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // The drift check (run after spec generation) compares the
         // Expected ERD against what's actually in the sandbox database.
         // For that comparison to be meaningful, the sandbox must first
@@ -9533,11 +9549,11 @@ mod forge_cli {
                 &root,
                 &deliverables_root,
             ).await {
-                eprintln!("  ⚠ Dev Spec sandbox apply failed: {}", e);
+                eprintln!("  âš  Dev Spec sandbox apply failed: {}", e);
             }
         }
 
-        // ─── REGISTRY-FIRST SPEC GENERATION ───────────────────────────
+        // â”€â”€â”€ REGISTRY-FIRST SPEC GENERATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // When the sandbox has a recognised registry table
         // (`ars_Api_Rule_Settings` or equivalent) we trust it as the
         // source of truth: emit one operation per (path, aml_Code) row
@@ -9572,11 +9588,11 @@ mod forge_cli {
         std::fs::write(&generated_path, &final_yaml)
             .map_err(|e| format!("write generated spec: {}", e))?;
 
-        // ─── ERD DRIFT CHECK ────────────────────────────────────────
+        // â”€â”€â”€ ERD DRIFT CHECK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // After the spec is generated, compare the **Expected ERD**
         // (Dev Spec markdown + borrow decisions) against the **Live DB**
         // (sandbox sys.* + ars_Api_Rule_Settings). Writes an additive
-        // `erd-drift.md` + `sql/erd-drift-alter.sql`. Observation only —
+        // `erd-drift.md` + `sql/erd-drift-alter.sql`. Observation only â€”
         // never executes SQL against the database.
         #[cfg(feature = "forge-sql-verify")]
         if verify_against_sandbox {
@@ -9586,7 +9602,7 @@ mod forge_cli {
                 &root,
                 false, // strict mode disabled by default
             ).await {
-                eprintln!("  ⚠ ERD drift check skipped: {}", e);
+                eprintln!("  âš  ERD drift check skipped: {}", e);
             }
         }
 
@@ -9654,31 +9670,31 @@ mod forge_cli {
             );
         } else {
             println!(
-                "✓ Story docs written for {} ops at {}",
+                "âœ“ Story docs written for {} ops at {}",
                 report.total_ops,
                 normalize_display_path(&report.out_dir)
             );
             println!(
-                "  {} files · catalog {} tables · glossary {} terms",
+                "  {} files Â· catalog {} tables Â· glossary {} terms",
                 report.files_written.len(),
                 catalog.tables.len(),
                 glossary.len()
             );
             println!(
-                "✓ Comparison report at {} ({} ops, {} orphan procs)",
+                "âœ“ Comparison report at {} ({} ops, {} orphan procs)",
                 normalize_display_path(&comparison_path),
                 comparison.rows.len(),
                 comparison.orphan_procs.len(),
             );
             println!(
-                "✓ Generated OpenAPI from SQL at {} ({} ops, {} internal procs)",
+                "âœ“ Generated OpenAPI from SQL at {} ({} ops, {} internal procs)",
                 normalize_display_path(&generated_path),
                 generated.op_count,
                 generated.orphan_proc_count,
             );
             if business_is_placeholder {
                 println!(
-                    "  ! business.toml has placeholder values — edit {} and re-run for signed-off filenames",
+                    "  ! business.toml has placeholder values â€” edit {} and re-run for signed-off filenames",
                     normalize_display_path(&business_path)
                 );
             }
@@ -9805,12 +9821,12 @@ mod forge_cli {
                 "script_errors": report.script_errors,
             }));
         } else {
-            println!("✓ Compose started, SQL Server healthy.");
+            println!("âœ“ Compose started, SQL Server healthy.");
             for (label, n) in &report.script_errors {
                 println!("  {}: {} non-fatal errors", label, n);
             }
             println!();
-            println!("🟢 Forge sandbox LIVE on port {}", out.host_port);
+            println!("ðŸŸ¢ Forge sandbox LIVE on port {}", out.host_port);
             println!("Connection: Server=localhost,{};User=sa;Password={}",
                 out.host_port, said_forge::sandbox::SANDBOX_PASSWORD);
         }
@@ -9839,7 +9855,7 @@ mod forge_cli {
         let spec_path = spec_dir.join("api-specification.generated.yml");
         if !spec_path.exists() {
             return Err(format!(
-                "no spec at {} — run `said forge docs --client {} --verify-against-sandbox` first",
+                "no spec at {} â€” run `said forge docs --client {} --verify-against-sandbox` first",
                 spec_path.display(),
                 client.unwrap_or(""),
             ));
@@ -9850,7 +9866,7 @@ mod forge_cli {
         use said_forge::sql_verify::discover_sandbox_with_hint;
         let sandbox = discover_sandbox_with_hint(client).ok_or_else(|| {
             format!(
-                "no sandbox container found{} — run `said sandbox {} --up` first",
+                "no sandbox container found{} â€” run `said sandbox {} --up` first",
                 client.map(|c| format!(" matching `{}`", c)).unwrap_or_default(),
                 client.unwrap_or("<module>"),
             )
@@ -9873,7 +9889,7 @@ mod forge_cli {
         }
         if ops.is_empty() {
             return Err(format!(
-                "spec at {} contains no operations — nothing to test",
+                "spec at {} contains no operations â€” nothing to test",
                 spec_path.display()
             ));
         }
@@ -9897,7 +9913,7 @@ mod forge_cli {
                 .unwrap_or_default());
         } else {
             println!();
-            println!("✓ Contract tests complete.");
+            println!("âœ“ Contract tests complete.");
             println!(
                 "  {} of {} assertions passed.",
                 report.passed_assertions(),
@@ -9905,7 +9921,7 @@ mod forge_cli {
             );
             if report.failed_assertions() > 0 {
                 println!(
-                    "  {} divergence{} flagged — see {}",
+                    "  {} divergence{} flagged â€” see {}",
                     report.failed_assertions(),
                     if report.failed_assertions() == 1 { "" } else { "s" },
                     report_path.display()
@@ -9996,7 +10012,7 @@ mod forge_cli {
 
         // Build catalog from the workspace's 1-ground-truth SQL dir. Fall
         // back to scanning the workspace root if the standard layout is
-        // absent — regen still works, it just sees fewer tables.
+        // absent â€” regen still works, it just sees fewer tables.
         let catalog =
             build_catalog(&root).map_err(|e| format!("build catalog: {}", e))?;
         let glossary = Glossary::build(&catalog);
@@ -10024,11 +10040,11 @@ mod forge_cli {
                     println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
                 } else {
                     println!(
-                        "✓ Skill regenerated at {}",
+                        "âœ“ Skill regenerated at {}",
                         normalize_display_path(&report.skill_path)
                     );
                     println!(
-                        "  {} preserved · {} regenerated · {} new · {} removed (catalog: {} tables, glossary: {} terms)",
+                        "  {} preserved Â· {} regenerated Â· {} new Â· {} removed (catalog: {} tables, glossary: {} terms)",
                         report.preserved.len(),
                         report.regenerated.len(),
                         report.generated_new.len(),
@@ -10140,7 +10156,7 @@ mod forge_cli {
             .unwrap_or_else(|_| "anonymous".into())
     }
 
-    // ─── load ───────────────────────────────────────────────────────────
+    // â”€â”€â”€ load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async fn cmd_load(
         brain_path: &Path,
@@ -10188,7 +10204,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── list ───────────────────────────────────────────────────────────
+    // â”€â”€â”€ list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn cmd_list(brain_path: &Path, filter: Option<&str>, json: bool) -> Result<(), String> {
         let mut brain = open_brain(brain_path)?;
@@ -10256,7 +10272,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── show ───────────────────────────────────────────────────────────
+    // â”€â”€â”€ show â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn cmd_show(brain_path: &Path, slug: &str, json: bool) -> Result<(), String> {
         let mut brain = open_brain(brain_path)?;
@@ -10285,7 +10301,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── status ─────────────────────────────────────────────────────────
+    // â”€â”€â”€ status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn cmd_status(brain_path: &Path, story: Option<&str>, json: bool) -> Result<(), String> {
         let mut brain = open_brain(brain_path)?;
@@ -10332,7 +10348,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── run ────────────────────────────────────────────────────────────
+    // â”€â”€â”€ run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async fn cmd_run(
         project_root: &Path,
@@ -10427,7 +10443,7 @@ mod forge_cli {
                     succeeded += 1;
                     if !json {
                         println!(
-                            "[{}/{}] {}  ✓  {}",
+                            "[{}/{}] {}  âœ“  {}",
                             idx + 1,
                             total,
                             outcome.slug,
@@ -10438,14 +10454,14 @@ mod forge_cli {
                 StoryStatus::Skipped => {
                     skipped += 1;
                     if !json {
-                        println!("[{}/{}] {}  ⊘  skipped", idx + 1, total, outcome.slug);
+                        println!("[{}/{}] {}  âŠ˜  skipped", idx + 1, total, outcome.slug);
                     }
                 }
                 _ => {
                     failed += 1;
                     if !json {
                         println!(
-                            "[{}/{}] {}  ✗  {}: {}",
+                            "[{}/{}] {}  âœ—  {}: {}",
                             idx + 1,
                             total,
                             outcome.slug,
@@ -10459,7 +10475,7 @@ mod forge_cli {
                 halted = true;
                 if !json {
                     println!(
-                        "circuit breaker: {} consecutive {} failures — halting",
+                        "circuit breaker: {} consecutive {} failures â€” halting",
                         threshold,
                         breaker.last_class().unwrap_or("unknown")
                     );
@@ -10482,7 +10498,7 @@ mod forge_cli {
             );
         } else {
             println!(
-                "done — {} succeeded, {} skipped, {} failed{}",
+                "done â€” {} succeeded, {} skipped, {} failed{}",
                 succeeded,
                 skipped,
                 failed,
@@ -10492,7 +10508,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── reset ──────────────────────────────────────────────────────────
+    // â”€â”€â”€ reset â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn cmd_reset(
         project_root: &Path,
@@ -10550,7 +10566,7 @@ mod forge_cli {
         Ok(())
     }
 
-    // ─── helpers ────────────────────────────────────────────────────────
+    // â”€â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn read_stories(sfb: &mut SaidFileBrain, hash: &str) -> Vec<Story> {
         use said_forge::frame::BrainIo;

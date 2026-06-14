@@ -34,8 +34,16 @@ said edit --file <relative/path> <MODE> [--symbol <name> | --anchor <text>] \
 | `append-into-symbol`   | `--symbol` | Insert at the END of the named scope's body (before its closing brace), auto-indented to match siblings. "Add a member to this class" lands at class scope, never nested inside another method. |
 
 **`--explain` (pre-validate):** `said edit --file X --explain (--symbol S | --anchor A) --json`
-returns the `valid_anchors` menu for that location **without editing** (exit 0,
-no write), so a caller picks the right move up front. `mode` is optional with `--explain`.
+returns the `valid_anchors` menu (each with `line` + `kind`) for that location
+**without editing** (exit 0, no write), so a caller picks the right move up
+front. `mode` is optional with `--explain`.
+
+**`--line <N>` (disambiguate):** when a `--symbol` matches more than one span in
+`--file` — e.g. a C# class and its same-named constructor — pass `--line N` to
+select the span starting at line N (the ambiguity error and `--explain` both
+list the candidate start lines). `append-into-symbol` defaults to the largest
+(enclosing) span when ambiguous, so "add a member to ClassName" works with no
+`--line`.
 
 **Structured repair menu:** when an edit is rejected by the syntax check, the
 `--json` error carries a `valid_anchors` array of copy-paste-ready `said edit`

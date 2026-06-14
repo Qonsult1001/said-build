@@ -1,4 +1,4 @@
-//! MCP server handler — routes tool calls to SaidFile methods.
+﻿//! MCP server handler â€” routes tool calls to SaidFile methods.
 
 use crate::tools::*;
 #[allow(unused_imports)]
@@ -33,7 +33,7 @@ pub struct SaidServerHandler {
 }
 
 // =========================================================================
-// LSP helper functions — used by handle_lsp_def / handle_lsp_refs etc.
+// LSP helper functions â€” used by handle_lsp_def / handle_lsp_refs etc.
 // Mirror the CLI helpers in said-cli/src/main.rs so behaviour is identical.
 // =========================================================================
 
@@ -136,7 +136,7 @@ impl SaidServerHandler {
     /// Return the directory containing the currently-attached brain, as an
     /// absolute path when possible. This is the CWD we set on every `said`
     /// subprocess so relative paths (like `.said-code/...`) land next to the
-    /// brain — NOT wherever Cursor happened to spawn the MCP server (which
+    /// brain â€” NOT wherever Cursor happened to spawn the MCP server (which
     /// is typically `C:\Users\<user>\` on Windows).
     ///
     /// Without this, subprocess writes go to MCP's inherited CWD and the
@@ -150,7 +150,7 @@ impl SaidServerHandler {
             Some(d) => d,
             None => std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         };
-        // Make absolute WITHOUT canonicalize — canonicalize on Windows returns
+        // Make absolute WITHOUT canonicalize â€” canonicalize on Windows returns
         // `\\?\C:\...` extended-length paths which confuse downstream string
         // concatenation with "/schema.sql" etc. (mixed / + \ separators, plus
         // some tools don't support \\?\). Join against cwd ourselves.
@@ -199,29 +199,29 @@ impl SaidServerHandler {
                 "# Welcome to .said\n\
                  \n\
                  You're connected to the **.said** MCP server. Right now it's \
-                 attached to `{base}` — a temporary placeholder.\n\
+                 attached to `{base}` â€” a temporary placeholder.\n\
                  \n\
                  ## Quick start (2 questions)\n\
                  \n\
                  **1. Pick a name for your brain.** It's one file that holds \
-                 everything — code, SQL, documents, memories. What should it \
+                 everything â€” code, SQL, documents, memories. What should it \
                  be called?\n\
                  \n\
                  Suggestions:\n\
-                 - `willie.said` — personal / single-project brain\n\
-                 - `acme.said` — one brain per client\n\
-                 - `vivere.said` — name it after the codebase you're indexing\n\
+                 - `willie.said` â€” personal / single-project brain\n\
+                 - `acme.said` â€” one brain per client\n\
+                 - `vivere.said` â€” name it after the codebase you're indexing\n\
                  \n\
                  **2. What do you want to use it for?**\n\
                  \n\
-                 - **Portable** — notes, journaling, research (start with \
+                 - **Portable** â€” notes, journaling, research (start with \
                  `remember` and `search`)\n\
-                 - **Enterprise** — legacy monolith modernization (start with \
+                 - **Enterprise** â€” legacy monolith modernization (start with \
                  `init` on your SQL/code folder, then `overview` + `snapshot`)\n\
                  \n\
                  ## Once you tell me the name, I'll:\n\
                  \n\
-                 1. Call `open path=\"<your-name>.said\"` — creates the brain \
+                 1. Call `open path=\"<your-name>.said\"` â€” creates the brain \
                  and cleans up the placeholder\n\
                  2. If enterprise: run `init dir=\"<path>\"` to ingest, then \
                  `overview` to show you what's inside\n\
@@ -229,7 +229,7 @@ impl SaidServerHandler {
                  \n\
                  Type: **\"Use `willie.said` and it's portable\"** or \
                  **\"Create `vivere.said` and init from `G:\\work\\sql`\"** \
-                 — or anything natural. I'll map it to the right tools."
+                 â€” or anything natural. I'll map it to the right tools."
             )
         } else {
             format!(
@@ -238,12 +238,12 @@ impl SaidServerHandler {
                  Attached to: **{base}**\n\
                  \n\
                  Common commands from here:\n\
-                 - `status` — health + frame count\n\
-                 - `overview` — what products/modules are in this brain\n\
-                 - `search <term>` — semantic search\n\
-                 - `snapshot <module>` — extract a module workspace\n\
-                 - `sandbox <module>` — spin up a Docker SQL Server test DB\n\
-                 - `open <name>.said` — switch to a different brain (this \
+                 - `status` â€” health + frame count\n\
+                 - `overview` â€” what products/modules are in this brain\n\
+                 - `search <term>` â€” semantic search\n\
+                 - `snapshot <module>` â€” extract a module workspace\n\
+                 - `sandbox <module>` â€” spin up a Docker SQL Server test DB\n\
+                 - `open <name>.said` â€” switch to a different brain (this \
                  one is kept)\n\
                  \n\
                  Tell me what you're trying to do and I'll pick the right tool."
@@ -254,7 +254,7 @@ impl SaidServerHandler {
     /// If `path` refers to a pristine/placeholder brain AND exactly one
     /// populated `.said` lives next to it, return the populated one. Otherwise
     /// return `path` unchanged. Never picks a populated brain when multiple
-    /// exist (that would be an ambiguous decision — user must pick via `open`).
+    /// exist (that would be an ambiguous decision â€” user must pick via `open`).
     fn auto_promote_if_placeholder(path: &str) -> String {
         let p = PathBuf::from(path);
         let file_name = p.file_name()
@@ -263,7 +263,7 @@ impl SaidServerHandler {
         let is_reserved_placeholder = file_name == ".brain.said";
 
         // Only promote when the target is reserved OR pristine/empty. If it's
-        // populated OR missing-with-a-real-name, leave it alone — the user
+        // populated OR missing-with-a-real-name, leave it alone â€” the user
         // picked that name on purpose.
         let should_promote = is_reserved_placeholder
             || (p.exists() && Self::is_pristine_brain(path));
@@ -300,8 +300,8 @@ impl SaidServerHandler {
         if populated.len() == 1 {
             return populated[0].0.to_string_lossy().to_string();
         }
-        // 0 populated → stay on placeholder (nothing to promote to).
-        // >1 populated → ambiguous; user must pick via `open`.
+        // 0 populated â†’ stay on placeholder (nothing to promote to).
+        // >1 populated â†’ ambiguous; user must pick via `open`.
         path.to_string()
     }
 
@@ -335,7 +335,7 @@ impl SaidServerHandler {
         found
     }
 
-    /// Is a brain file "pristine" — exists, the small size of a freshly
+    /// Is a brain file "pristine" â€” exists, the small size of a freshly
     /// created (empty) .said, zero frames? Safe to delete without data loss.
     fn is_pristine_brain(path: &str) -> bool {
         let size = match std::fs::metadata(path) {
@@ -343,7 +343,7 @@ impl SaidServerHandler {
             Err(_) => return false,
         };
         if size == 0 || size > 32_000 {
-            // zero-byte or populated — in neither case is it safe to silently delete.
+            // zero-byte or populated â€” in neither case is it safe to silently delete.
             return false;
         }
         // Try to open and check frame count.
@@ -372,13 +372,13 @@ impl SaidServerHandler {
             );
         }
 
-        // Track whether the file existed before we tried to open it — if not,
+        // Track whether the file existed before we tried to open it â€” if not,
         // `open_brain` will create it empty, and we flag it as ephemeral so
         // `open` can clean it up later when the user picks a real brain name.
         let existed_before = Path::new(&path).exists();
         let mut ephemeral: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Check if this is a lens file — if so, open the PARENT brain
+        // Check if this is a lens file â€” if so, open the PARENT brain
         if sca_core::lens::LensFile::is_lens(&path) {
             match sca_core::lens::LensFile::open(&path) {
                 Ok(lens) => {
@@ -431,7 +431,7 @@ impl SaidServerHandler {
     }
 
     fn open_brain(path: &str) -> SaidFile {
-        // Helper — load the SCA encoder from any known install path.
+        // Helper â€” load the SCA encoder from any known install path.
         fn attach_encoder(brain: &mut SaidFile) {
             for p in &[
                 "said-lam-static",
@@ -454,18 +454,18 @@ impl SaidServerHandler {
                 Err(e) => {
                     // File exists but couldn't be opened (bad CRC, corrupt,
                     // tmp-rename crash). Keep the existing file and return an
-                    // in-memory empty brain pointing at the same path — the
+                    // in-memory empty brain pointing at the same path â€” the
                     // user can inspect/recover manually.
                     eprintln!("[brain] Could not open {}: {}. Using in-memory empty brain.", path, e);
                     SaidFile::create(path)
                 }
             }
         } else {
-            // No file yet — create an empty brain AND persist it to disk so
+            // No file yet â€” create an empty brain AND persist it to disk so
             // subsequent tools can read from a real file. Without the save
             // call the file stays unwritten until someone calls init/remember,
             // which breaks any tool that checks file size.
-            eprintln!("[brain] {} does not exist — creating empty brain on disk.", path);
+            eprintln!("[brain] {} does not exist â€” creating empty brain on disk.", path);
             let mut brain = SaidFile::create(path);
             if let Err(e) = brain.save() {
                 eprintln!("[brain] WARNING: could not save empty brain: {}", e);
@@ -554,10 +554,10 @@ impl ServerHandler for SaidServerHandler {
         }
     }
 
-    // ── MCP prompts ────────────────────────────────────────────────────────
+    // â”€â”€ MCP prompts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Two first-class prompts:
-    //   `onboard`  — guided setup for first-time MCP attach.
-    //   `answerer` — the canonical .said agent system prompt, sourced
+    //   `onboard`  â€” guided setup for first-time MCP attach.
+    //   `answerer` â€” the canonical .said agent system prompt, sourced
     //                from the `said-prompts` crate so MCP clients
     //                (Claude Desktop, Cursor, etc.) load the same
     //                instructions the WASM browser agent uses.
@@ -572,7 +572,7 @@ impl ServerHandler for SaidServerHandler {
             prompts: vec![
                 Prompt {
                     name: "onboard".to_string(),
-                    title: Some("Welcome — Quick Start".to_string()),
+                    title: Some("Welcome â€” Quick Start".to_string()),
                     description: Some(
                         "A short guided setup for .said: pick a brain name, \
                          ingest your codebase, then explore modules. Use this \
@@ -587,7 +587,7 @@ impl ServerHandler for SaidServerHandler {
                     name: "answerer".to_string(),
                     title: Some(".said Answerer Agent".to_string()),
                     description: Some(
-                        "Canonical system prompt for the .said agent — reads \
+                        "Canonical system prompt for the .said agent â€” reads \
                          brain content and answers with citations. Aligned \
                          with Anthropic Claude Code production prompts. \
                          Single source of truth (said-prompts crate)."
@@ -668,7 +668,7 @@ impl SaidServerHandler {
         })?;
 
         let top_k = if t.deep.unwrap_or(false) { 500 } else { 50 };
-        // Decision 2 — parse optional pillar filter. Unknown names are ignored;
+        // Decision 2 â€” parse optional pillar filter. Unknown names are ignored;
         // if nothing valid was passed we treat it as "no filter" (all pillars).
         let pillar_set: Option<std::collections::HashSet<sca_core::frames::Pillar>> =
             t.pillar.as_ref().and_then(|raw| {
@@ -766,7 +766,7 @@ impl SaidServerHandler {
                 if !matching.is_empty() { Some(matching) } else { None }
             } else { None };
 
-        // THE SHARED CALL — same function the CLI uses. CLI and MCP return
+        // THE SHARED CALL â€” same function the CLI uses. CLI and MCP return
         // byte-identical result sets (modulo formatting) for any query.
         let (kept, keywords) = sca_core::ask::ask(
             &mut brain, &t.query, top, deep, scope_doc_ids.as_ref(),
@@ -828,7 +828,7 @@ impl SaidServerHandler {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
 
-        // Enterprise pointer mode — no content extraction, no blob. Each file
+        // Enterprise pointer mode â€” no content extraction, no blob. Each file
         // becomes a searchable External frame holding only URI + summary.
         // Same shape as CLI `said ingest --pointer`; see remember_as_external_pointer.
         if t.pointer.unwrap_or(false) {
@@ -838,7 +838,7 @@ impl SaidServerHandler {
                 return Err(CallToolError::from_message(format!("not found: {}", t.path)));
             }
 
-            // Build the list of files to register. Walk dirs shallow — no
+            // Build the list of files to register. Walk dirs shallow â€” no
             // gitignore filter at MCP level (the CLI's recursive walk is the
             // full-feature entry point; MCP gets the simpler file-by-file API).
             let files: Vec<std::path::PathBuf> = if path.is_file() {
@@ -925,7 +925,7 @@ impl SaidServerHandler {
         #[cfg(not(feature = "docs"))]
         {
             Err(CallToolError::from_message(
-                "Document ingestion disabled — rebuild said-mcp with --features docs".to_string(),
+                "Document ingestion disabled â€” rebuild said-mcp with --features docs".to_string(),
             ))
         }
     }
@@ -935,7 +935,7 @@ impl SaidServerHandler {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
 
-        // Decision 3 — parse optional pillar; default to Episodic. Unknown
+        // Decision 3 â€” parse optional pillar; default to Episodic. Unknown
         // pillar names fall back silently to Episodic (same spirit as
         // Decision 2's search tool).
         let pillar = t.pillar.as_deref().map(str::trim).map(str::to_lowercase);
@@ -979,7 +979,7 @@ impl SaidServerHandler {
             .map(|m| m.tags.clone())
             .unwrap_or_default();
         drop(brain);
-        // Brain now has real content — retire any ephemeral tag so `open`
+        // Brain now has real content â€” retire any ephemeral tag so `open`
         // doesn't delete it later.
         self.mark_populated();
 
@@ -996,34 +996,34 @@ impl SaidServerHandler {
         // Build a one-line Surprise / salience note. Silent on benign frames
         // so the default response stays short; flags contradictions + updates
         // so the caller's agent can react ("I noticed you're overriding a
-        // prior fact — preserved both as a conflict").
+        // prior fact â€” preserved both as a conflict").
         let mut notes: Vec<String> = Vec::new();
         notes.push(format!("salience={} ({})", scored.score, scored.band.tag()));
         if written_tags.iter().any(|t| t == "reconsolidation:contradicts") {
             let prior = written_tags.iter()
                 .find_map(|t| t.strip_prefix("contradicts:"))
                 .unwrap_or("unknown");
-            notes.push(format!("⚠ contradicts prior frame `{}`", prior));
+            notes.push(format!("âš  contradicts prior frame `{}`", prior));
         } else if written_tags.iter().any(|t| t == "reconsolidation:update") {
             let prior = written_tags.iter()
                 .find_map(|t| t.strip_prefix("updates:"))
                 .unwrap_or("unknown");
-            notes.push(format!("↻ updates prior frame `{}`", prior));
+            notes.push(format!("â†» updates prior frame `{}`", prior));
         }
-        let notes_line = notes.join(" · ");
+        let notes_line = notes.join(" Â· ");
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "✓ Saved to brain (frame #{}, pillar={}). {}\n\nBrain now has {} total frames. \
-                 This memory is searchable — future `search` calls can find it.",
+                "âœ“ Saved to brain (frame #{}, pillar={}). {}\n\nBrain now has {} total frames. \
+                 This memory is searchable â€” future `search` calls can find it.",
                 frame_id, pillar_label, notes_line, frame_count
             ),
         )]))
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    // Decision 3 — episodic writer hooks
-    // ────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Decision 3 â€” episodic writer hooks
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn handle_session_end(&self, t: SessionEndTool) -> Result<CallToolResult, CallToolError> {
         let mut brain = self.brain.lock().map_err(|e| {
@@ -1069,7 +1069,7 @@ impl SaidServerHandler {
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "✓ session_end logged (frame #{}). Brain has {} frames. \
+                "âœ“ session_end logged (frame #{}). Brain has {} frames. \
                  Dream consolidation will pick this up at next cycle.",
                 frame_id, frame_count
             ),
@@ -1128,7 +1128,7 @@ impl SaidServerHandler {
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "✓ tool_completion logged (frame #{}). Brain has {} frames. \
+                "âœ“ tool_completion logged (frame #{}). Brain has {} frames. \
                  Recurring tool+args+result patterns will distil to Procedural \
                  pillar at next dream cycle.",
                 frame_id, frame_count
@@ -1137,7 +1137,7 @@ impl SaidServerHandler {
     }
 
     fn handle_salience(&self, t: SalienceTool) -> Result<CallToolResult, CallToolError> {
-        // Read-only — no brain lock needed, pure scoring. But we still want
+        // Read-only â€” no brain lock needed, pure scoring. But we still want
         // the pillar parse to match the write-path's conventions.
         let pillar_enum = match t.pillar.as_deref().map(str::trim).map(str::to_lowercase).as_deref() {
             Some("semantic") => sca_core::frames::Pillar::Semantic,
@@ -1155,7 +1155,7 @@ impl SaidServerHandler {
             sca_core::salience::SalienceBand::Medium =>
                 "Recommendation: `remember` if context warrants; normal retrieval weight.",
             sca_core::salience::SalienceBand::High =>
-                "Recommendation: `remember` with this pillar. High reconsolidation value — preserve.",
+                "Recommendation: `remember` with this pillar. High reconsolidation value â€” preserve.",
         };
 
         let tag_list = scored.tags.join(", ");
@@ -1176,7 +1176,7 @@ impl SaidServerHandler {
         // Build DreamParams from tool args (all optional with sane defaults).
         let mut params = sca_core::dream::DreamParams::default();
         if let Some(th) = t.cluster_threshold {
-            // Clamp to [0.0, 1.0] — nonsense values should fall back.
+            // Clamp to [0.0, 1.0] â€” nonsense values should fall back.
             if th.is_finite() && (0.0..=1.0).contains(&th) {
                 params.cluster_threshold = th;
             }
@@ -1192,8 +1192,8 @@ impl SaidServerHandler {
             }
         }
 
-        // Cycle number — caller pin, or derived from existing count of
-        // `dream_cycle:*` Semantic frames (an idempotent fallback — no need
+        // Cycle number â€” caller pin, or derived from existing count of
+        // `dream_cycle:*` Semantic frames (an idempotent fallback â€” no need
         // to persist a counter in BRAN for v1).
         let cycle = t.cycle.unwrap_or_else(|| {
             let mut max_seen: u32 = 0;
@@ -1236,7 +1236,7 @@ impl SaidServerHandler {
         };
 
         Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-            "✓ dream cycle {} complete ({} ms)\n\
+            "âœ“ dream cycle {} complete ({} ms)\n\
              candidates_examined   = {}\n\
              clusters_formed       = {}\n\
              semantic_frames       = {}\n\
@@ -1252,14 +1252,14 @@ impl SaidServerHandler {
         ))]))
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // LSP tools — wraps SaidFile::lsp_definition / lsp_references / lsp_hover
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // LSP tools â€” wraps SaidFile::lsp_definition / lsp_references / lsp_hover
     // / lsp_workspace_symbol. Results are cached as frames in the brain so
     // future `ask_fused` retrieval finds them without a fresh LSP roundtrip.
     //
     // Gated on `feature = "lsp"`. When the feature is off, the handler
     // returns a structured error instead of failing the whole MCP server.
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     fn handle_lsp_def(&self, t: LspDefTool) -> Result<CallToolResult, CallToolError> {
         #[cfg(feature = "lsp")]
@@ -1342,7 +1342,7 @@ impl SaidServerHandler {
             let mut brain = self.brain.lock().map_err(|e| {
                 CallToolError::from_message(format!("brain lock: {}", e))
             })?;
-            // No file to detect from — default to rust-analyzer (workspace-level
+            // No file to detect from â€” default to rust-analyzer (workspace-level
             // search). Caller can override via env var SCA_LSP_SERVER.
             let server = std::env::var("SCA_LSP_SERVER").ok();
             let server_str = server.as_deref().unwrap_or("rust-analyzer");
@@ -1363,13 +1363,13 @@ impl SaidServerHandler {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Admin tool — parity with `said admin <action>` CLI subcommand family.
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // Admin tool â€” parity with `said admin <action>` CLI subcommand family.
     // Same semantics: legal holds block retention sweeps, restores demote the
     // current Active head, who-deleted surfaces attribution tags. Shipped as
     // a single tool with an `action` field so agents don't have to memorize a
     // separate tool name per operation.
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     fn handle_admin(&self, t: AdminTool) -> Result<CallToolResult, CallToolError> {
         let mut brain = self.brain.lock().map_err(|e| {
             CallToolError::from_message(format!("brain lock: {}", e))
@@ -1418,7 +1418,7 @@ impl SaidServerHandler {
                     .map(|id| format!("\n  Previous active head (frame #{}) demoted to tombstone.", id))
                     .unwrap_or_default();
                 Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "✓ Restored doc_id '{}' as frame #{}.{}",
+                    "âœ“ Restored doc_id '{}' as frame #{}.{}",
                     doc_id, restored, extra,
                 ))]))
             }
@@ -1439,7 +1439,7 @@ impl SaidServerHandler {
                         sca_core::frames::FrameStatus::Active => "active",
                     };
                     let superseded = m.superseded_by
-                        .map(|id| format!(" → superseded by #{}", id))
+                        .map(|id| format!(" â†’ superseded by #{}", id))
                         .unwrap_or_default();
                     let attrib: String = m.tags.iter()
                         .filter(|s| s.starts_with("user_id:") || s.starts_with("session:")
@@ -1464,7 +1464,7 @@ impl SaidServerHandler {
                 let n = brain.admin_legal_hold_add(doc_id, case);
                 brain.save().map_err(|e| CallToolError::from_message(e))?;
                 Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "✓ Placed legal hold '{}' on {} frame(s) for doc_id '{}'.",
+                    "âœ“ Placed legal hold '{}' on {} frame(s) for doc_id '{}'.",
                     case, n, doc_id,
                 ))]))
             }
@@ -1476,7 +1476,7 @@ impl SaidServerHandler {
                 let n = brain.admin_legal_hold_release(doc_id, case);
                 brain.save().map_err(|e| CallToolError::from_message(e))?;
                 Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "✓ Released legal hold '{}' from {} frame(s) for doc_id '{}'.",
+                    "âœ“ Released legal hold '{}' from {} frame(s) for doc_id '{}'.",
                     case, n, doc_id,
                 ))]))
             }
@@ -1485,7 +1485,7 @@ impl SaidServerHandler {
                 match log.verify() {
                     Ok(()) => {},
                     Err(e) => return Err(CallToolError::from_message(
-                        format!("✗ AUDT chain broken: {}", e))),
+                        format!("âœ— AUDT chain broken: {}", e))),
                 }
                 let filter_actor = t.doc_id.as_deref();  // reuse doc_id field
                 let filter_kind = t.case.as_deref();     // reuse case field
@@ -1533,8 +1533,8 @@ impl SaidServerHandler {
                 }
                 brain.save().map_err(|e| CallToolError::from_message(e))?;
                 Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "✓ Retention sweep dropped {} tombstones older than {} days (kept {} per doc).\n\
-                     Legal holds honored — no held frame was touched.\n\
+                    "âœ“ Retention sweep dropped {} tombstones older than {} days (kept {} per doc).\n\
+                     Legal holds honored â€” no held frame was touched.\n\
                      Run `compact` to physically reclaim the freed bytes.",
                     dropped, older_than_days, keep_per_doc,
                 ))]))
@@ -1560,8 +1560,8 @@ impl SaidServerHandler {
         // doc_id if it looks like a relative path under a known source root.
         let doc_ids: Vec<String> = brain.frames.active_doc_ids().iter().map(|s| s.to_string()).collect();
 
-        // Build map: file_part → doc_ids_for_that_file
-        // A doc_id like "sqlMasterGccGlobal/src/…/foo.sql::NAME::kind:line"
+        // Build map: file_part â†’ doc_ids_for_that_file
+        // A doc_id like "sqlMasterGccGlobal/src/â€¦/foo.sql::NAME::kind:line"
         // has file_part = everything before the first "::".
         let mut file_to_dids: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         let mut source_roots: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1628,7 +1628,7 @@ impl SaidServerHandler {
 
         // Build user-friendly report
         let preview: Vec<String> = orphaned_files.iter().take(10)
-            .map(|f| format!("  • {}", f)).collect();
+            .map(|f| format!("  â€¢ {}", f)).collect();
         let preview_text = if preview.is_empty() {
             "  (none)".to_string()
         } else {
@@ -1638,7 +1638,7 @@ impl SaidServerHandler {
             format!("{}{}", preview.join("\n"), extra)
         };
 
-        let mode = if dry { "(dry-run — nothing changed)" } else { "(executed)" };
+        let mode = if dry { "(dry-run â€” nothing changed)" } else { "(executed)" };
         let action = if dry {
             "would tombstone".to_string()
         } else {
@@ -1646,7 +1646,7 @@ impl SaidServerHandler {
         };
 
         Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-"✓ Sync complete {}
+"âœ“ Sync complete {}
 
 Scanned:              {} source files referenced by {} active frames
 Sources still on disk: {}
@@ -1658,7 +1658,7 @@ Orphaned sources:
 Action: {} {} orphaned source files.
 
 Tip: orphaned frames are TOMBSTONED, not hard-deleted. They're removed from
-search results but preserved in the lineage history — reachable via the
+search results but preserved in the lineage history â€” reachable via the
 `history` tool if you ever need to see what was there. To purge tombstones
 permanently, run `said compact --drop-history --all` from a terminal.",
             mode, total_files, doc_ids.len(),
@@ -1706,15 +1706,15 @@ permanently, run `said compact --drop-history --all` from a terminal.",
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "✓ Journal entry saved.\n\n\
+                "âœ“ Journal entry saved.\n\n\
                  Doc ID:   {}\n\
                  Title:    {}\n\
                  Frame:    #{}\n\
                  Tags:     kind:journal, date:{}\n\
                  \n\
                  Find it again later with:\n\
-                 • search query=\"{}\"\n\
-                 • get doc_id=\"{}\"",
+                 â€¢ search query=\"{}\"\n\
+                 â€¢ get doc_id=\"{}\"",
                 doc_id, title, frame_id, date, t.topic, doc_id
             ),
         )]))
@@ -1740,7 +1740,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 Ok(fresh) => {
                     *brain = fresh;
                     reload_note = format!(
-                        "\n(reloaded from disk: in-memory {} bytes, disk {} bytes — on-disk wins)",
+                        "\n(reloaded from disk: in-memory {} bytes, disk {} bytes â€” on-disk wins)",
                         mem_size, disk_size
                     );
                 }
@@ -1756,14 +1756,14 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         let s = brain.stats();
 
         let lens_info = if let Some(ref lens) = self.lens {
-            format!("\nModule: {} (lens → {})\nModule frames: {}\n",
+            format!("\nModule: {} (lens â†’ {})\nModule frames: {}\n",
                 lens.module_name, lens.parent_path, lens.frame_ids.len())
         } else {
             String::new()
         };
 
         // If the attached brain is empty but there are populated .said files
-        // sitting in the same directory, surface them — the user almost
+        // sitting in the same directory, surface them â€” the user almost
         // certainly meant to work with one of those.
         let other_brains = if s.active_frames == 0 {
             Self::list_populated_sibling_brains(&said_path)
@@ -1772,43 +1772,43 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         };
 
         // Headline tells the user immediately whether the brain is empty,
-        // small, or populated — and what they can do from here.
+        // small, or populated â€” and what they can do from here.
         let headline = if s.active_frames == 0 {
             if !other_brains.is_empty() {
                 let mut msg = String::from(
-                    "⚠ Brain is EMPTY — but there are populated brains nearby:\n\n"
+                    "âš  Brain is EMPTY â€” but there are populated brains nearby:\n\n"
                 );
                 for b in &other_brains {
-                    msg.push_str(&format!("  • {} ({:.1} MB)\n", b.0, b.1 as f64 / 1_048_576.0));
+                    msg.push_str(&format!("  â€¢ {} ({:.1} MB)\n", b.0, b.1 as f64 / 1_048_576.0));
                 }
                 msg.push_str(
                     "\nYou probably want to attach to one of those. Run:\n\
                      \n\
-                     • open path=\"<name>.said\"    — switch to the real brain\n\
+                     â€¢ open path=\"<name>.said\"    â€” switch to the real brain\n\
                      \n\
-                     …or if you want to stay empty and ingest fresh:\n\
+                     â€¦or if you want to stay empty and ingest fresh:\n\
                      \n\
-                     • init dir=\"<path>\"          — bulk-ingest a whole folder\n\
-                     • remember content=\"…\"        — store a single note/memory\n"
+                     â€¢ init dir=\"<path>\"          â€” bulk-ingest a whole folder\n\
+                     â€¢ remember content=\"â€¦\"        â€” store a single note/memory\n"
                 );
                 msg
             } else {
-                "Brain is EMPTY — nothing ingested yet.\n\
+                "Brain is EMPTY â€” nothing ingested yet.\n\
                  \n\
                  Next steps:\n\
-                 • init dir=\"<path>\"          — bulk-ingest a whole folder\n\
-                 • remember content=\"…\"        — store a single note/memory\n\
-                 • open path=\"<name>.said\"     — switch to a different brain\n"
+                 â€¢ init dir=\"<path>\"          â€” bulk-ingest a whole folder\n\
+                 â€¢ remember content=\"â€¦\"        â€” store a single note/memory\n\
+                 â€¢ open path=\"<name>.said\"     â€” switch to a different brain\n"
                     .to_string()
             }
         } else {
             "Brain is POPULATED and ready to query.\n\
              \n\
              Next steps:\n\
-             • overview                    — list detected modules/products\n\
-             • search \"<query>\"            — semantic search\n\
-             • sym <name>                  — exact symbol lookup\n\
-             • snapshot <module>           — extract a module workspace\n"
+             â€¢ overview                    â€” list detected modules/products\n\
+             â€¢ search \"<query>\"            â€” semantic search\n\
+             â€¢ sym <name>                  â€” exact symbol lookup\n\
+             â€¢ snapshot <module>           â€” extract a module workspace\n"
                 .to_string()
         };
 
@@ -1821,7 +1821,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
 
         let output = format!(
             "{}\n\
-             ─── Brain details ───\n\
+             â”€â”€â”€ Brain details â”€â”€â”€\n\
              File:          {}\n\
              {}\n\
              {}Active frames: {}  (ingested pieces of code/docs/memory)\n\
@@ -1872,7 +1872,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
     }
 
     /// Resolve + apply + syntax-verify ONE edit, returning the new file content
-    /// and a summary — WITHOUT writing. Shared by `handle_edit` (writes one) and
+    /// and a summary â€” WITHOUT writing. Shared by `handle_edit` (writes one) and
     /// `handle_edit_batch` (computes all, writes all-or-nothing). Errors carry a
     /// human-readable reason; the caller never writes on Err.
     fn compute_edit(
@@ -1898,7 +1898,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         let file_content = std::fs::read_to_string(file)
             .map_err(|e| format!("read {}: {}", file, e))?;
 
-        // Resolve a symbol → (start,end), scoped to file, with drift check +
+        // Resolve a symbol â†’ (start,end), scoped to file, with drift check +
         // authoritative-content span correction (matches the CLI path).
         let resolve_sym = |name: &str| -> Result<(usize, usize), String> {
             let mut brain = self.brain.lock().map_err(|e| format!("brain lock: {}", e))?;
@@ -2012,10 +2012,10 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 let suggestions = sca_core::code_search::suggest_anchors(
                     &file_content, ext, result.applied_at_line);
                 let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
-                    "mode": s.mode, "symbol": s.symbol, "note": s.note,
+                    "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
                 })).collect();
                 return Err(serde_json::json!({
-                    "error": format!("{} — edit rejected, file unchanged", e),
+                    "error": format!("{} â€” edit rejected, file unchanged", e),
                     "valid_anchors": valid,
                 }).to_string());
             }
@@ -2048,7 +2048,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         })
     }
 
-    /// Surgical anchored edit — the same core the `said edit` CLI uses
+    /// Surgical anchored edit â€” the same core the `said edit` CLI uses
     /// (`sca_core::edit`). No whole-file-rewrite path exists, so an autonomous
     /// caller cannot delete the rest of a file.
     fn handle_edit(&self, t: EditTool) -> Result<CallToolResult, CallToolError> {
@@ -2059,7 +2059,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             Ok(CallToolResult::text_content(vec![TextContent::from(edit_error_payload(&msg).to_string())]))
         };
 
-        // explain: pre-validate only — return valid_anchors without editing.
+        // explain: pre-validate only â€” return valid_anchors without editing.
         #[cfg(feature = "code")]
         if t.explain {
             if let Err(e) = sca_core::edit::is_safe_relative_path(&t.file) { return err_json(e); }
@@ -2077,7 +2077,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             } else { 1 };
             let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
             let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
-                "mode": s.mode, "symbol": s.symbol, "note": s.note,
+                "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
             })).collect();
             return ok_json(serde_json::json!({
                 "ok": true, "explain": true, "file": t.file, "at_line": line, "valid_anchors": valid,
@@ -2105,7 +2105,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         ok_json(summary)
     }
 
-    /// Transactional multi-edit — apply a SET of edits all-or-nothing. Every
+    /// Transactional multi-edit â€” apply a SET of edits all-or-nothing. Every
     /// edit is resolved + applied + syntax-verified in memory first; only if
     /// ALL succeed are the files written. If any fails, nothing is written, so
     /// you can never get a half-applied change set on disk (the GroqCycle gap).
@@ -2122,7 +2122,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         let mut summaries: Vec<serde_json::Value> = Vec::new();
         for (i, e) in t.edits.iter().enumerate() {
             // If this file was already edited in this batch, the on-disk read in
-            // compute_edit would miss prior edits — so for the common one-edit-
+            // compute_edit would miss prior edits â€” so for the common one-edit-
             // per-file case this is exact; multi-edit-same-file is applied in
             // order against disk and we warn rather than silently misorder.
             if pending.contains_key(&e.file) {
@@ -2153,7 +2153,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 }
             }
         }
-        // Phase 2: all computed OK → write them all.
+        // Phase 2: all computed OK â†’ write them all.
         if !t.dry_run {
             for (file, content) in &pending {
                 if let Err(e) = Self::atomic_write_edit(file, content) {
@@ -2190,7 +2190,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             if brain.tombstone_frame(doc_id) {
                 brain.save().map_err(|e| CallToolError::from_message(e))?;
                 return Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("Deleted: {} (tombstoned — preserved in history)", doc_id),
+                    format!("Deleted: {} (tombstoned â€” preserved in history)", doc_id),
                 )]));
             } else {
                 return Ok(CallToolResult::text_content(vec![TextContent::from(
@@ -2207,7 +2207,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 .as_secs();
             Some(now - (days as u64 * 86400))
         } else if let Some(ref date_str) = t.before_date {
-            // Parse YYYY-MM-DD → approximate Unix timestamp
+            // Parse YYYY-MM-DD â†’ approximate Unix timestamp
             let parts: Vec<&str> = date_str.split('-').collect();
             if parts.len() == 3 {
                 let year: i64 = parts[0].parse().unwrap_or(2026);
@@ -2265,7 +2265,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             }
 
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                format!("Deleted {} frames (tombstoned — preserved in history)", deleted),
+                format!("Deleted {} frames (tombstoned â€” preserved in history)", deleted),
             )]));
         }
 
@@ -2318,12 +2318,12 @@ permanently, run `said compact --drop-history --all` from a terminal.",
     }
 
     fn handle_snapshot(&self, t: SnapshotTool) -> Result<CallToolResult, CallToolError> {
-        // Snapshot needs to write files to disk — run via CLI subprocess
+        // Snapshot needs to write files to disk â€” run via CLI subprocess
         let said_path_owned = self.current_path();
         let said_path: &str = &said_path_owned;
         let module = &t.module;
 
-        // Run the CLI in the brain's directory — otherwise relative output
+        // Run the CLI in the brain's directory â€” otherwise relative output
         // paths like `.said-code/...` would land wherever Cursor started the
         // MCP server (typically the user's home dir), not next to the brain.
         let brain_dir = self.brain_dir();
@@ -2339,13 +2339,13 @@ permanently, run `said compact --drop-history --all` from a terminal.",
 
                 if !result.status.success() {
                     return Ok(CallToolResult::text_content(vec![TextContent::from(
-                        format!("✗ Snapshot failed for module '{}'.\n\nError output:\n{}",
+                        format!("âœ— Snapshot failed for module '{}'.\n\nError output:\n{}",
                             module, stderr.trim()),
                     )]));
                 }
 
                 // Parse the JSON the CLI returned. If parsing fails, fall back
-                // to raw output — but NEVER fabricate. We also GROUND-TRUTH
+                // to raw output â€” but NEVER fabricate. We also GROUND-TRUTH
                 // every number by re-checking the filesystem: the LLM gets a
                 // "Verified on disk" block it cannot paraphrase.
                 let json_line = stdout.lines()
@@ -2391,7 +2391,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
 
                 let verification = if !folder_exists {
                     format!(
-                        "⚠ DISK CHECK FAILED: output folder does NOT exist.\n\
+                        "âš  DISK CHECK FAILED: output folder does NOT exist.\n\
                          \n\
                          Reported relative path: {}\n\
                          Resolved absolute path: {}\n\
@@ -2403,25 +2403,25 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                     )
                 } else {
                     format!(
-"─── Ground-truth (verified on disk) ───
+"â”€â”€â”€ Ground-truth (verified on disk) â”€â”€â”€
 Relative path:     {}
-Absolute path:     {}  [exists: ✓]
+Absolute path:     {}  [exists: âœ“]
 BOUNDARY.md:       {}
 Lens brain file:   {}
 Files in Exclusive/ (actual count): {}
 ",
                         output_dir,
                         resolved_str,
-                        if boundary_exists { "✓ present" } else { "✗ MISSING" },
-                        if lens_exists { "✓ present" } else { "✗ MISSING" },
+                        if boundary_exists { "âœ“ present" } else { "âœ— MISSING" },
+                        if lens_exists { "âœ“ present" } else { "âœ— MISSING" },
                         actual_files,
                     )
                 };
 
                 let msg = format!(
-"✓ Module '{}' extracted.
+"âœ“ Module '{}' extracted.
 
-─── From the snapshot tool (JSON) ───
+â”€â”€â”€ From the snapshot tool (JSON) â”€â”€â”€
 Exclusive tables:    {}
 Exclusive procs:     {}
 Exclusive triggers:  {}
@@ -2433,14 +2433,14 @@ Brain frames:        {}
 Output folder:       {}
 
 {}
-─── What to do next ───
-• sandbox module=\"{}\"            — spin up a live test DB for this module
-• clean targets=[\"{}\"]           — tear down this workspace
-• open path=\"{}/{}.{}.said\"  — attach to the module's lens brain for focused search
+â”€â”€â”€ What to do next â”€â”€â”€
+â€¢ sandbox module=\"{}\"            â€” spin up a live test DB for this module
+â€¢ clean targets=[\"{}\"]           â€” tear down this workspace
+â€¢ open path=\"{}/{}.{}.said\"  â€” attach to the module's lens brain for focused search
 
 STRICT RULE FOR THE LLM: report the EXACT numbers above. Do not paraphrase, \
 round, or replace any value with one from memory or prior runs. If any \
-field above shows 0, that is the truth — say 0, not a past value.
+field above shows 0, that is the truth â€” say 0, not a past value.
 ",
                     module,
                     tables, procs, triggers, views, functions, shared, files_copied, frames,
@@ -2455,7 +2455,7 @@ field above shows 0, that is the truth — say 0, not a past value.
             }
             Err(e) => {
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("✗ Could not run snapshot (said CLI not in PATH): {}\n\
+                    format!("âœ— Could not run snapshot (said CLI not in PATH): {}\n\
                              Run manually from a terminal: said snapshot {} --path {}",
                         e, module, said_path),
                 )]))
@@ -2464,13 +2464,13 @@ field above shows 0, that is the truth — say 0, not a past value.
     }
 
     fn handle_open(&self, t: OpenTool) -> Result<CallToolResult, CallToolError> {
-        // Normalize the path — Windows users often paste forward- or back-slash
+        // Normalize the path â€” Windows users often paste forward- or back-slash
         // paths interchangeably. We keep it as-is on disk but canonicalize for
         // the same-file check below.
         let new_path = t.path.clone();
         let new_pathbuf = std::path::PathBuf::from(&new_path);
 
-        // Create the file if it doesn't exist — this is the whole point of
+        // Create the file if it doesn't exist â€” this is the whole point of
         // `open`: "attach to this brain, creating it if needed".
         let was_created = !new_pathbuf.exists();
         if was_created {
@@ -2495,7 +2495,7 @@ field above shows 0, that is the truth — say 0, not a past value.
         // Open the (possibly freshly-created) file and swap it in.
         let fresh = match sca_core::said_file::SaidFile::open(&new_path) {
             Ok(mut b) => {
-                // Attach the encoder if available — same paths open_brain uses.
+                // Attach the encoder if available â€” same paths open_brain uses.
                 for p in &[
                     "said-lam-static",
                     "../said-lam-static",
@@ -2525,7 +2525,7 @@ field above shows 0, that is the truth — say 0, not a past value.
         // Atomically swap path and brain. Take BOTH mutexes and hold them
         // across both writes so a concurrent tool call (MCP handlers can
         // run on separate tokio tasks) can't observe one updated without
-        // the other. Lock order: brain then path, always — matches every
+        // the other. Lock order: brain then path, always â€” matches every
         // other code path in this file so we don't deadlock with them.
         {
             let mut brain_guard = self.brain.lock().map_err(|e| {
@@ -2538,7 +2538,7 @@ field above shows 0, that is the truth — say 0, not a past value.
             *path_guard = new_path.clone();
         }
 
-        // ── Ephemeral bookkeeping ──────────────────────────────────────────
+        // â”€â”€ Ephemeral bookkeeping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // If the old path was a placeholder we auto-created and never
         // populated, remove it now so the user isn't left with a stray
         // vivere.said next to their real willie.said.
@@ -2563,7 +2563,7 @@ field above shows 0, that is the truth — say 0, not a past value.
                     }
                     Err(e) => {
                         cleanup_note = format!(
-                            "\n(could not remove placeholder {}: {} — safe to delete manually)",
+                            "\n(could not remove placeholder {}: {} â€” safe to delete manually)",
                             old_path, e
                         );
                     }
@@ -2582,29 +2582,29 @@ field above shows 0, that is the truth — say 0, not a past value.
 
         let (headline, next_steps) = if was_created {
             (
-                format!("✓ Created new empty brain: {} ({} bytes)", new_path, size),
+                format!("âœ“ Created new empty brain: {} ({} bytes)", new_path, size),
                 "This brain has no content yet. To populate it:\n\
                  \n\
-                 • init dir=\"<path>\"            — bulk-ingest a code/SQL/docs folder (best for monoliths)\n\
-                 • ingest path=\"<file>\"         — add a single file (PDF, DOCX, MP4, etc.)\n\
-                 • remember content=\"…\"         — store a note or memory directly\n\
+                 â€¢ init dir=\"<path>\"            â€” bulk-ingest a code/SQL/docs folder (best for monoliths)\n\
+                 â€¢ ingest path=\"<file>\"         â€” add a single file (PDF, DOCX, MP4, etc.)\n\
+                 â€¢ remember content=\"â€¦\"         â€” store a note or memory directly\n\
                  \n\
                  Example: `init dir=\"G:\\\\work\\\\my-project\\\\src\"`"
                     .to_string(),
             )
         } else {
             (
-                format!("✓ Attached to existing brain: {}", new_path),
+                format!("âœ“ Attached to existing brain: {}", new_path),
                 format!(
-                    "Size: {} bytes  •  Active frames: {}\n\
+                    "Size: {} bytes  â€¢  Active frames: {}\n\
                      \n\
                      Ready to query:\n\
                      \n\
-                     • overview                     — what's in this brain?\n\
-                     • search \"<query>\"             — semantic search\n\
-                     • sym <name>                   — look up a function/class/table by name\n\
-                     • snapshot <module>            — extract a module workspace\n\
-                     • sandbox <module>             — spin up a live SQL test DB",
+                     â€¢ overview                     â€” what's in this brain?\n\
+                     â€¢ search \"<query>\"             â€” semantic search\n\
+                     â€¢ sym <name>                   â€” look up a function/class/table by name\n\
+                     â€¢ snapshot <module>            â€” extract a module workspace\n\
+                     â€¢ sandbox <module>             â€” spin up a live SQL test DB",
                     size, active_frames
                 ),
             )
@@ -2620,7 +2620,7 @@ field above shows 0, that is the truth — say 0, not a past value.
         ))]))
     }
 
-    /// Mark the currently-attached brain as "populated" — removes it from the
+    /// Mark the currently-attached brain as "populated" â€” removes it from the
     /// ephemeral set so a later `open` won't delete it. Called by tools that
     /// add content (init, remember, ingest).
     fn mark_populated(&self) {
@@ -2659,7 +2659,7 @@ field above shows 0, that is the truth — say 0, not a past value.
             // without the `overwrite` flag.
             if size > 32_000 {
                 return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "Refusing to overwrite {} — it's {} bytes, which looks populated.\n\
+                    "Refusing to overwrite {} â€” it's {} bytes, which looks populated.\n\
                      \n\
                      If this is intentional, call with `overwrite: true` (when supported) \
                      or delete the file manually first.\n\
@@ -2678,7 +2678,7 @@ field above shows 0, that is the truth — say 0, not a past value.
         }
 
         // Write the empty brain. Mode is set ONCE at creation and is
-        // immutable — Portable and Enterprise are licensed separately, and
+        // immutable â€” Portable and Enterprise are licensed separately, and
         // there is no later mode-switch command. Default: Portable.
         let chosen_mode = t.mode.as_deref()
             .and_then(sca_core::said_file::BrainMode::parse)
@@ -2725,7 +2725,7 @@ field above shows 0, that is the truth — say 0, not a past value.
 
     fn handle_init(&self, t: InitTool) -> Result<CallToolResult, CallToolError> {
         // `said init` opens the brain, walks the dir, and writes results back.
-        // The MCP server already holds this brain mmap'd — release our mutex so
+        // The MCP server already holds this brain mmap'd â€” release our mutex so
         // the subprocess can take the file lock.
         let said_path = self.current_path();
         // Use absolute paths so the subprocess doesn't depend on our CWD.
@@ -2747,7 +2747,7 @@ field above shows 0, that is the truth — say 0, not a past value.
             .chain(sibling.map(|p| p.into_os_string()))
             .collect();
 
-        // Run subprocess in the brain's directory — snapshot/.said-code output
+        // Run subprocess in the brain's directory â€” snapshot/.said-code output
         // lands there instead of inheriting Cursor's CWD.
         let brain_dir = self.brain_dir();
         for exe in &cli_paths {
@@ -2781,11 +2781,11 @@ field above shows 0, that is the truth — say 0, not a past value.
                     self.mark_populated();
 
                     // A friendly, guided response. The user shouldn't have to
-                    // figure out "what now?" — we tell them the three most
+                    // figure out "what now?" â€” we tell them the three most
                     // useful next steps directly.
                     let size_mb = size as f64 / 1_048_576.0;
                     let msg = format!(
-"✓ Ingest complete — brain populated.
+"âœ“ Ingest complete â€” brain populated.
 
 Brain:      {}
 Source:     {}
@@ -2794,11 +2794,11 @@ Size:       {:.1} MB
 
 Your brain is ready. Try any of these next:
 
-  1. overview              → see what modules / products are detected
-  2. search \"…\"            → semantic search across everything
-  3. sym <name>            → look up an exact function / table / class
-  4. snapshot <module>     → extract a module into its own workspace
-  5. sandbox <module>      → spin up a live test database (SQL brains only)
+  1. overview              â†’ see what modules / products are detected
+  2. search \"â€¦\"            â†’ semantic search across everything
+  3. sym <name>            â†’ look up an exact function / table / class
+  4. snapshot <module>     â†’ extract a module into its own workspace
+  5. sandbox <module>      â†’ spin up a live test database (SQL brains only)
 
 Example: ask me \"overview\" or \"search for card validation\" and I'll run it.
 ",
@@ -2808,7 +2808,7 @@ Example: ask me \"overview\" or \"search for card validation\" and I'll run it.
                 } else {
                     // Surface the CLI's actual error.
                     let msg = format!(
-"✗ Ingest failed.
+"âœ— Ingest failed.
 
 Source:  {}
 Brain:   {}
@@ -2828,7 +2828,7 @@ Common fixes:
             }
         }
         Ok(CallToolResult::text_content(vec![TextContent::from(
-            "Could not run `said init` — the said CLI binary wasn't found.\n\
+            "Could not run `said init` â€” the said CLI binary wasn't found.\n\
              \n\
              The CLI must be on PATH or installed next to said-mcp.exe. If you're \
              in development, rebuild with: cargo build -p said-cli --features code --release"
@@ -2837,7 +2837,7 @@ Common fixes:
     }
 
     fn handle_overview(&self, t: OverviewTool) -> Result<CallToolResult, CallToolError> {
-        // Run `said overview` — reusing CLI keeps catalogue-derivation in one place.
+        // Run `said overview` â€” reusing CLI keeps catalogue-derivation in one place.
         let abs_path = std::fs::canonicalize(self.current_path())
             .unwrap_or_else(|_| std::path::PathBuf::from(self.current_path()))
             .to_string_lossy().to_string();
@@ -2874,7 +2874,7 @@ Common fixes:
             }
         }
         Ok(CallToolResult::text_content(vec![TextContent::from(
-            "Could not run `said overview` — said CLI not on PATH or next to said-mcp.exe."
+            "Could not run `said overview` â€” said CLI not on PATH or next to said-mcp.exe."
                 .to_string()
         )]))
     }
@@ -2902,7 +2902,7 @@ Common fixes:
 
         // Drop the mmap now so the file handle is released before `said
         // clean` tries to remove the file. We replace the brain with an
-        // in-memory-only empty one pointed at the SAME path — if `clean`
+        // in-memory-only empty one pointed at the SAME path â€” if `clean`
         // deletes the file we'll re-save it as a placeholder afterwards.
         let dropped = if will_touch_attached_brain || targets_contain_brain {
             if let Ok(mut brain) = self.brain.lock() {
@@ -2970,7 +2970,7 @@ Common fixes:
                     );
                 }
             } else {
-                // File still exists — reload it (could have been shrunk /
+                // File still exists â€” reload it (could have been shrunk /
                 // modified by whatever clean did).
                 if let Ok(fresh) = sca_core::said_file::SaidFile::open(&current_path) {
                     if let Ok(mut brain) = self.brain.lock() { *brain = fresh; }
@@ -2988,7 +2988,7 @@ Common fixes:
         match response {
             Some(r) => Ok(CallToolResult::text_content(vec![TextContent::from(r)])),
             None => Ok(CallToolResult::text_content(vec![TextContent::from(
-                "Could not run `said clean` — the said CLI is not on PATH or next to said-mcp.exe. \
+                "Could not run `said clean` â€” the said CLI is not on PATH or next to said-mcp.exe. \
                  From your shell: `said clean` (optionally with module names or --all)."
                     .to_string()
             )])),
@@ -3033,7 +3033,7 @@ Common fixes:
         let is_multi = all_modules.len() > 1;
 
         // Workspace root: .said-code/<module>.<brain> next to the attached
-        // BRAIN (never relative to whatever cwd Cursor spawned us in — that
+        // BRAIN (never relative to whatever cwd Cursor spawned us in â€” that
         // used to dump workspaces into the user's home directory). We make
         // the path absolute by rooting it at `brain_dir()`.
         let brain_root = self.brain_dir();
@@ -3047,7 +3047,7 @@ Common fixes:
         let sandbox_dir_pb = base_dir_pb.join("sandbox");
         let sandbox_dir = sandbox_dir_pb.to_string_lossy().to_string();
 
-        // Per-sandbox Docker identity — default 1433 but user can override.
+        // Per-sandbox Docker identity â€” default 1433 but user can override.
         // Different ports let `card`, `billing`, `card+billing` all run at once.
         let port: u16 = t.port.unwrap_or(1433);
         let container_name = format!("said-sbx-{}-{}", scoped_label.replace('+', "-"), port);
@@ -3092,7 +3092,7 @@ Common fixes:
         };
 
         // Check if snapshot(s) were run. For multi-module, any one existing is
-        // enough to proceed — full schema comes from parent brain regardless.
+        // enough to proceed â€” full schema comes from parent brain regardless.
         let has_snapshot = all_modules.iter().any(|m| {
             let p = workspace_root.join(format!("{}.{}", m, said_stem));
             p.join("Exclusive").exists() || p.join("BOUNDARY.md").exists()
@@ -3101,7 +3101,7 @@ Common fixes:
         // Create sandbox directory
         let _ = std::fs::create_dir_all(&sandbox_dir_pb);
 
-        // ALL objects from BRAIN — complete schema for FK/function dependencies
+        // ALL objects from BRAIN â€” complete schema for FK/function dependencies
         // Module-specific filtering happens at the proc/trigger level
         let mut functions: Vec<(String, String, Vec<String>)> = Vec::new(); // (name, content, deps)
         let mut tables: Vec<(String, String, String, Vec<String>)> = Vec::new();
@@ -3116,12 +3116,12 @@ Common fixes:
         // SQL Server runs them after schema (01) and INSERT seed (02).
         // MERGE files indexed by (manifest_scope, table_name).
         // `manifest_scope` is the directory path containing the
-        // data-index.json that owns this MERGE — typically the client
+        // data-index.json that owns this MERGE â€” typically the client
         // folder under 1-ground-truth/. Multi-client workspaces have
         // multiple manifests; this keeps each MERGE matched to its own.
         let mut data_by_table: std::collections::BTreeMap<(String, String), String> =
             std::collections::BTreeMap::new();
-        // Per-manifest dependency order: scope_prefix → table list.
+        // Per-manifest dependency order: scope_prefix â†’ table list.
         // Multiple data-index.json files coexist (one per client repo).
         let mut data_index_orders: std::collections::BTreeMap<String, Vec<String>> =
             std::collections::BTreeMap::new();
@@ -3164,7 +3164,7 @@ Common fixes:
 
                 // ALL tables (needed for FK references). Matches two title
                 // conventions:
-                //   - `(table)` / `create_table` — AST-chunked titles from
+                //   - `(table)` / `create_table` â€” AST-chunked titles from
                 //     `said add-dir` ingest.
                 //   - forge-sync titles are path-based and don't carry these
                 //     markers; fall back to a content sniff. A frame is a
@@ -3177,10 +3177,10 @@ Common fixes:
                     && contains_sql_keyword_pair(&upper, "CREATE", "TABLE");
                 if title.contains("create_table") || title.contains("(table)") || is_forge_sync_table {
                     // Normalize table name. Two doc_id conventions:
-                    //   - AST-chunked:  `path::NAME::kind:line` — take the
+                    //   - AST-chunked:  `path::NAME::kind:line` â€” take the
                     //                   NAME segment between the `::`.
                     //   - forge-sync:   `forge-sync:1-ground-truth/.../Tables/<file>.sql`
-                    //                   (no `::`) — extract the file stem
+                    //                   (no `::`) â€” extract the file stem
                     //                   `<file>` (e.g. `ana_Acc_No_Alloc`).
                     // The earlier code path (`rsplit('.').next()`) returned
                     // the extension `"sql"` for every forge-sync table,
@@ -3191,7 +3191,7 @@ Common fixes:
                         let no_brackets = chunk_name.replace(['[', ']'], "");
                         no_brackets.rsplit('.').next().unwrap_or(&no_brackets).to_uppercase()
                     } else {
-                        // forge-sync path — file stem of the SQL file
+                        // forge-sync path â€” file stem of the SQL file
                         let last_seg = did.rsplit('/').next().unwrap_or(did);
                         let stem = last_seg.rsplit('.').nth(1).unwrap_or(last_seg);
                         stem.to_uppercase()
@@ -3228,7 +3228,7 @@ Common fixes:
                     tables.push((tname, did.clone(), clean, all_fks));
 
                 // ALL functions (tables need them for DEFAULT constraints).
-                // Forge-sync fallback mirrors the table branch above —
+                // Forge-sync fallback mirrors the table branch above â€”
                 // path-pattern + content sniff for functions whose titles
                 // are paths rather than `(function)` markers.
                 } else if title.contains("create_function")
@@ -3237,12 +3237,12 @@ Common fixes:
                         && did.contains("/Functions/")
                         && contains_sql_keyword_pair(&upper, "CREATE", "FUNCTION"))
                 {
-                    // Placeholder — deps computed in a second pass once we know ALL function names
+                    // Placeholder â€” deps computed in a second pass once we know ALL function names
                     functions.push((did.clone(), clean, Vec::<String>::new()));
 
-                // ALL triggers (from brain — includes those embedded in table files).
+                // ALL triggers (from brain â€” includes those embedded in table files).
                 // Forge-sync fallback: triggers usually live in the same file
-                // as their parent table (Tables/<x>.sql) — handled by the
+                // as their parent table (Tables/<x>.sql) â€” handled by the
                 // table branch above. Standalone trigger files use `Triggers/`.
                 } else if title.contains("create_trigger")
                     || title.contains("(trigger)")
@@ -3261,7 +3261,7 @@ Common fixes:
                 // procedure` markers. Detect proc files by path pattern
                 // + content sniff. Without this branch, hand-written
                 // procs added to `1-ground-truth/` after `forge sync`
-                // never reach the snapshot — only the running container
+                // never reach the snapshot â€” only the running container
                 // sees them via `forge docs --verify-against-sandbox`'s
                 // auto-deploy. The path pattern is the dt convention
                 // (`<schema>/Stored Procedures/<file>.sql`); the content
@@ -3302,7 +3302,7 @@ Common fixes:
                     // dir whose data-index.json should own this file.
                     // Example doc_id:
                     //   1-ground-truth/TXN/sqlMasterDataTxnGlobal/src/Data/cps_*.sql
-                    //   → scope = `1-ground-truth/TXN/sqlMasterDataTxnGlobal/src`
+                    //   â†’ scope = `1-ground-truth/TXN/sqlMasterDataTxnGlobal/src`
                     let scope = {
                         let dir = path_only.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
                         // Drop trailing `/Data` so the scope matches the
@@ -3317,8 +3317,8 @@ Common fixes:
 
                     // Strip per-file `WITH CHECK CHECK CONSTRAINT ALL`
                     // lines so they don't re-validate against still-empty
-                    // FK targets. Also strip `ALTER TABLE … DISABLE/ENABLE
-                    // TRIGGER <Name>` lines that name specific triggers —
+                    // FK targets. Also strip `ALTER TABLE â€¦ DISABLE/ENABLE
+                    // TRIGGER <Name>` lines that name specific triggers â€”
                     // when a trigger fails to deploy (16 source-bug errors
                     // in schema.sql), these calls error with Msg 4920 and
                     // abort the batch before MERGE runs. We disable+enable
@@ -3332,7 +3332,7 @@ Common fixes:
                                 return false;
                             }
                             // Drop named-trigger ALTERs but keep
-                            // `ALTER TABLE … NOCHECK CONSTRAINT ALL`.
+                            // `ALTER TABLE â€¦ NOCHECK CONSTRAINT ALL`.
                             let is_named_trigger_alter =
                                 (u.contains("DISABLE TRIGGER") || u.contains("ENABLE TRIGGER"))
                                 && !u.contains(" ALL");
@@ -3359,7 +3359,7 @@ Common fixes:
             }
 
             // Parse data-index.json if present. Each manifest scopes to
-            // its own client folder — keyed by the dir holding the .json
+            // its own client folder â€” keyed by the dir holding the .json
             // so siblings (e.g. TXN/.../src/data-index.json and
             // Vivere/.../src/data-index.json) don't interleave.
             if did.to_lowercase().ends_with("data-index.json") {
@@ -3385,7 +3385,7 @@ Common fixes:
             }
         }
 
-        // Build the set of ALL function names (normalized — no schema prefix).
+        // Build the set of ALL function names (normalized â€” no schema prefix).
         // Generic: works for any naming convention (F_*, fn_*, CamelCase, etc.)
         // Doc_id layout is `path::NAME::kind:line` (kind:line appended by init
         // to keep doc_ids unique when a file has multiple chunks sharing a name,
@@ -3402,7 +3402,7 @@ Common fixes:
                 let stem = last_seg.strip_suffix(".sql").unwrap_or(last_seg);
                 return stem.to_uppercase();
             }
-            // Split off the path prefix, then take the first component after —
+            // Split off the path prefix, then take the first component after â€”
             // which is the chunk name.
             let after_path = if let Some(pos) = did.find("::") {
                 &did[pos+2..]
@@ -3458,7 +3458,7 @@ Common fixes:
             out.to_uppercase()
         };
 
-        // Compute function→function dependencies (which other functions each
+        // Compute functionâ†’function dependencies (which other functions each
         // function calls). SQL Server's deferred name resolution covers most
         // table references inside function bodies, so we keep all functions
         // in one pre-table bucket.
@@ -3517,7 +3517,7 @@ Common fixes:
         let mut placed: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut remaining: Vec<(String, String, String, Vec<String>)> = tables;
 
-        // Multiple passes — each pass places tables whose FK deps are satisfied
+        // Multiple passes â€” each pass places tables whose FK deps are satisfied
         for _round in 0..50 {
             if remaining.is_empty() { break; }
             let prev_count = remaining.len();
@@ -3534,7 +3534,7 @@ Common fixes:
                 }
             }
             if still_remaining.len() == prev_count {
-                // Circular deps — just dump the rest
+                // Circular deps â€” just dump the rest
                 for (name, did, content, _) in still_remaining {
                     ordered_tables.push((name, did, content));
                 }
@@ -3608,7 +3608,7 @@ Common fixes:
             view_remaining = still;
         }
 
-        // Procs & triggers — SQL Server uses deferred name resolution inside
+        // Procs & triggers â€” SQL Server uses deferred name resolution inside
         // procedure bodies, so strict ordering isn't required for correctness.
         // We still sort them to minimize warnings on systems that bind eagerly.
         let sort_by_refs = |items: Vec<(String, String)>| -> Vec<(String, String)> {
@@ -3651,12 +3651,12 @@ Common fixes:
         let trigger_count = triggers.len();
         let view_count = ordered_views.len();
 
-        // ─── DEPENDENCY-CLOSURE CHECK ────────────────────────────────
+        // â”€â”€â”€ DEPENDENCY-CLOSURE CHECK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Walk every proc / function / trigger / view body and harvest
         // every cross-object reference (`EXEC <obj>`, `<schema>.<fn>(`,
         // `JOIN <table>`, `FROM <table>`). Cross-reference against the
         // set of objects we're about to deploy. Anything referenced but
-        // not deployed is a "missing dep" — surface it loudly so the
+        // not deployed is a "missing dep" â€” surface it loudly so the
         // operator knows the live sandbox WILL fail at runtime when a
         // proc tries to call something that isn't there.
         //
@@ -3799,7 +3799,7 @@ Common fixes:
                              missing: &mut std::collections::BTreeMap<String, std::collections::BTreeSet<String>>| {
             let stripped = strip_sql_noise_for_refs(body);
             let upper = stripped.to_uppercase();
-            // Statement-marker references (EXEC, JOIN, FROM, …).
+            // Statement-marker references (EXEC, JOIN, FROM, â€¦).
             for marker in object_markers {
                 let mut from = 0usize;
                 while let Some(rel) = upper[from..].find(marker) {
@@ -3841,7 +3841,7 @@ Common fixes:
                         | "VARYING" | "TEXT" | "NTEXT" | "BINARY" | "VARBINARY" | "IMAGE"
                         | "UNIQUEIDENTIFIER" | "XML" | "JSON" | "TIMESTAMP" | "ROWVERSION"
                         | "HIERARCHYID" | "GEOMETRY" | "GEOGRAPHY" | "SQL_VARIANT" | "CHAR"
-                        // SQL Server system catalog tables/views — always present at runtime.
+                        // SQL Server system catalog tables/views â€” always present at runtime.
                         | "OBJECTS" | "COLUMNS" | "TABLES" | "INDEXES" | "PARAMETERS"
                         | "TRIGGERS" | "VIEWS" | "PROCEDURES" | "TYPES" | "SCHEMAS"
                         | "PARTITIONS" | "FOREIGN_KEYS" | "FOREIGN_KEY_COLUMNS"
@@ -3931,19 +3931,19 @@ Common fixes:
                 } else {
                     String::new()
                 };
-                format!("  {} ← {}{}", name, preview.join(", "), extra)
+                format!("  {} â† {}{}", name, preview.join(", "), extra)
             })
             .collect();
         let dep_report = if missing_deps.is_empty() {
-            "-- No missing dependencies — every cross-object reference resolves to a deployed object.\n".to_string()
+            "-- No missing dependencies â€” every cross-object reference resolves to a deployed object.\n".to_string()
         } else {
             format!(
-                "-- ⚠ {} cross-object reference{} unresolved in the deploy set.\n\
+                "-- âš  {} cross-object reference{} unresolved in the deploy set.\n\
                  -- These will fail at proc execution time (e.g. `Could not find\n\
                  -- stored procedure 'X'`). Add the missing object's source file\n\
                  -- to 1-ground-truth/<client>/ so it gets ingested + deployed.\n\
                  --\n\
-                 -- Missing object ← caller(s):\n\
+                 -- Missing object â† caller(s):\n\
                  {}\n",
                 missing_deps.len(),
                 if missing_deps.len() == 1 { "" } else { "s" },
@@ -3953,7 +3953,7 @@ Common fixes:
         let dep_report_path = sandbox_dir_pb.join("missing-deps.txt");
         let _ = std::fs::write(&dep_report_path, &dep_report);
 
-        // Build schema.sql in correct order: functions → tables → views → procs → triggers
+        // Build schema.sql in correct order: functions â†’ tables â†’ views â†’ procs â†’ triggers
         let mut schema = format!(
             "-- =============================================\n\
              -- {} Module Sandbox Schema\n\
@@ -3971,9 +3971,9 @@ Common fixes:
             module, func_count, table_count, view_count, proc_count, trigger_count
         );
 
-        // CREATE SCHEMA — every non-dbo schema referenced by any table /
+        // CREATE SCHEMA â€” every non-dbo schema referenced by any table /
         // proc / function / view / trigger needs to exist before its
-        // objects do, otherwise CREATE TABLE [lookups].[…] fails with
+        // objects do, otherwise CREATE TABLE [lookups].[â€¦] fails with
         // Msg 2714. Scan all collected object content for schema-qualified
         // identifiers and emit IF SCHEMA_ID(...) IS NULL CREATE SCHEMA
         // for each unique non-dbo schema seen.
@@ -4055,7 +4055,7 @@ Common fixes:
                 }
             }
             if !schemas.is_empty() {
-                schema.push_str("-- ═══ SCHEMAS (idempotent CREATE) ═══\n");
+                schema.push_str("-- â•â•â• SCHEMAS (idempotent CREATE) â•â•â•\n");
                 for s in &schemas {
                     schema.push_str(&format!(
                         "IF SCHEMA_ID('{name}') IS NULL EXEC('CREATE SCHEMA [{name}]');\nGO\n",
@@ -4078,11 +4078,11 @@ Common fixes:
         let mut emitted_triggers: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut emitted_fk_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Functions FIRST (dependency-sorted) — tables need them for DEFAULT
+        // Functions FIRST (dependency-sorted) â€” tables need them for DEFAULT
         // constraints. SQL Server's deferred name resolution lets function
         // bodies reference tables that don't yet exist.
         if !ordered_functions.is_empty() {
-            schema.push_str("-- ═══ FUNCTIONS (dependency-sorted, loaded first) ═══\n\n");
+            schema.push_str("-- â•â•â• FUNCTIONS (dependency-sorted, loaded first) â•â•â•\n\n");
             for (did, content) in &ordered_functions {
                 let name = normalize_name(did);
                 if !emitted_functions.insert(name) { continue; }
@@ -4091,7 +4091,7 @@ Common fixes:
         }
 
         // PASS 1: Tables WITHOUT FK constraints (avoids circular dependency errors)
-        schema.push_str("-- ═══ PASS 1: TABLES (without FK constraints) ═══\n\n");
+        schema.push_str("-- â•â•â• PASS 1: TABLES (without FK constraints) â•â•â•\n\n");
         let mut fk_alters: Vec<String> = Vec::new();
 
         for (name, did, content) in &ordered_tables {
@@ -4145,7 +4145,7 @@ Common fixes:
         // PASS 2: Add FK constraints via ALTER TABLE (deduped by constraint name)
         if !fk_alters.is_empty() {
             schema.push_str(&format!(
-                "-- ═══ PASS 2: FOREIGN KEY CONSTRAINTS ═══\n\n"
+                "-- â•â•â• PASS 2: FOREIGN KEY CONSTRAINTS â•â•â•\n\n"
             ));
             let mut deduped = 0usize;
             for alter in &fk_alters {
@@ -4170,13 +4170,13 @@ Common fixes:
 
         // POST-TABLE RE-CREATE for inline table-valued functions (iTVF).
         // iTVFs have the form `RETURNS TABLE AS RETURN (...)` and SQL Server
-        // binds their body strictly at CREATE time — they will have failed
+        // binds their body strictly at CREATE time â€” they will have failed
         // in the pre-table emission above if they reference base tables.
         // Re-emit them via CREATE OR ALTER now that tables exist.
         let itvf_retries: Vec<&(String, String)> = ordered_functions.iter()
             .filter(|(_, content)| {
                 // Match `RETURNS TABLE` followed by `AS` then `RETURN(` with
-                // arbitrary whitespace / newlines between — this is the iTVF
+                // arbitrary whitespace / newlines between â€” this is the iTVF
                 // shape. Multi-statement TVFs use `RETURNS @var TABLE(...)`
                 // and don't bind strictly, so exclude them.
                 let u = content.to_uppercase();
@@ -4187,9 +4187,9 @@ Common fixes:
             })
             .collect();
         if !itvf_retries.is_empty() {
-            schema.push_str("-- ═══ POST-TABLE FUNCTION RECREATE (inline TVFs) ═══\n\n");
+            schema.push_str("-- â•â•â• POST-TABLE FUNCTION RECREATE (inline TVFs) â•â•â•\n\n");
             for (did, content) in &itvf_retries {
-                // Swap leading CREATE FUNCTION → CREATE OR ALTER FUNCTION so
+                // Swap leading CREATE FUNCTION â†’ CREATE OR ALTER FUNCTION so
                 // this idempotently fixes any body that failed to bind before.
                 let upper = content.to_uppercase();
                 let rewritten = if let Some(pos) = upper.find("CREATE FUNCTION") {
@@ -4206,7 +4206,7 @@ Common fixes:
         }
 
         if !ordered_views.is_empty() {
-            schema.push_str("-- ═══ VIEWS (dependency-sorted) ═══\n\n");
+            schema.push_str("-- â•â•â• VIEWS (dependency-sorted) â•â•â•\n\n");
             for (did, content) in &ordered_views {
                 let name = normalize_name(did);
                 if !emitted_views.insert(name) { continue; }
@@ -4215,7 +4215,7 @@ Common fixes:
         }
 
         if !procs.is_empty() {
-            schema.push_str("-- ═══ STORED PROCEDURES ═══\n\n");
+            schema.push_str("-- â•â•â• STORED PROCEDURES â•â•â•\n\n");
             for (did, content) in &procs {
                 let name = normalize_name(did);
                 if !emitted_procs.insert(name) { continue; }
@@ -4224,7 +4224,7 @@ Common fixes:
         }
 
         if !triggers.is_empty() {
-            schema.push_str("-- ═══ TRIGGERS ═══\n\n");
+            schema.push_str("-- â•â•â• TRIGGERS â•â•â•\n\n");
             for (did, content) in &triggers {
                 let name = normalize_name(did);
                 if !emitted_triggers.insert(name) { continue; }
@@ -4235,14 +4235,14 @@ Common fixes:
         let schema_path = sandbox_dir_pb.join("schema.sql");
         if let Err(e) = std::fs::write(&schema_path, &schema) {
             return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                "✗ Failed to write {} ({}).\n\n\
+                "âœ— Failed to write {} ({}).\n\n\
                  Common causes: the parent directory is read-only, disk full, \
                  or the path contains invalid characters for this filesystem.",
                 schema_path.display(), e
             ))]));
         }
 
-        // Write seed-data.sql — also scan frame content for INSERT statements
+        // Write seed-data.sql â€” also scan frame content for INSERT statements
         // that might be embedded in table definition files
         for (_, _, content) in &ordered_tables {
             // Look for INSERT lines within table files
@@ -4271,7 +4271,7 @@ Common fixes:
         // Emit each MERGE block to its own file under
         // sandbox/data/<NN>_<table>.sql so run.sh can run each via a
         // separate sqlcmd invocation. Fresh connections mean fresh
-        // session state — no IDENTITY_INSERT poisoning between files.
+        // session state â€” no IDENTITY_INSERT poisoning between files.
         // The `<NN>` prefix preserves data-index.json dependency order
         // through alphabetical sqlcmd-driven shell loop iteration.
         let data_dir = sandbox_dir_pb.join("data");
@@ -4344,7 +4344,7 @@ Common fixes:
         //     happens in 04-data-postcheck.sql after all MERGEs run.
         for (i, (table_name, body)) in ordered_files.iter().enumerate() {
             // Parse the actual MERGE target from the body so we don't
-            // hardcode `[lookups].[X]` — Vivere uses bare table names,
+            // hardcode `[lookups].[X]` â€” Vivere uses bare table names,
             // TXN uses `[lookups].*`. Falls back to `[<filename>]` if
             // we can't find the explicit target.
             let target_tbl = {
@@ -4442,11 +4442,11 @@ services:
         let compose_path = sandbox_dir_pb.join("docker-compose.yml");
         if let Err(e) = std::fs::write(&compose_path, &docker) {
             return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                "✗ Failed to write {} ({}).", compose_path.display(), e
+                "âœ— Failed to write {} ({}).", compose_path.display(), e
             ))]));
         }
 
-        // Write run.sh — references the per-sandbox container name explicitly
+        // Write run.sh â€” references the per-sandbox container name explicitly
         // so it works even when multiple sandboxes are up at the same time.
         let run_script = format!(
 "#!/bin/bash
@@ -4474,7 +4474,7 @@ while IFS= read -r f; do
     ok=$((ok+1))
   else
     fail=$((fail+1))
-    echo \"  ✗ $f\"
+    echo \"  âœ— $f\"
   fi
 done < ./data/_manifest.txt
 echo \"Lookup data: $ok ok, $fail failed\"
@@ -4492,18 +4492,18 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
         let mut up_result = String::new();
         if t.up.unwrap_or(true) {
             use std::process::Command;
-            up_result.push_str("\n\n── Bringing up sandbox ──\n");
+            up_result.push_str("\n\nâ”€â”€ Bringing up sandbox â”€â”€\n");
             let compose_up = Command::new("docker")
                 .args(["compose", "up", "-d"])
                 .current_dir(&sandbox_dir)
                 .output();
             match compose_up {
                 Ok(r) if r.status.success() => {
-                    up_result.push_str("✓ docker compose up -d\n");
+                    up_result.push_str("âœ“ docker compose up -d\n");
                 }
                 Ok(r) => {
                     up_result.push_str(&format!(
-                        "✗ docker compose up failed:\n{}\n",
+                        "âœ— docker compose up failed:\n{}\n",
                         String::from_utf8_lossy(&r.stderr)
                     ));
                     up_result.push_str(&format!(
@@ -4517,7 +4517,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                 }
                 Err(e) => {
                     up_result.push_str(&format!(
-                        "✗ Could not invoke docker: {}\n  Manual recovery: cd {} && bash run.sh\n",
+                        "âœ— Could not invoke docker: {}\n  Manual recovery: cd {} && bash run.sh\n",
                         e, sandbox_dir
                     ));
                     let output = format!(
@@ -4545,7 +4545,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                 false
             });
             if !ready {
-                up_result.push_str("✗ SQL Server did not become healthy within 90s. Check `docker logs ");
+                up_result.push_str("âœ— SQL Server did not become healthy within 90s. Check `docker logs ");
                 up_result.push_str(&container_name);
                 up_result.push_str("`.\n");
                 let output = format!(
@@ -4553,7 +4553,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                 );
                 return Ok(CallToolResult::text_content(vec![TextContent::from(output)]));
             }
-            up_result.push_str("✓ SQL Server healthy\n");
+            up_result.push_str("âœ“ SQL Server healthy\n");
 
             // Load schema.
             up_result.push_str("Loading schema (this takes 20-30s)...\n");
@@ -4570,16 +4570,16 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                         .filter(|l| l.contains("Msg") && l.contains("Level 16"))
                         .count();
                     up_result.push_str(&format!(
-                        "✓ Schema loaded ({} non-cascade errors from pre-existing source bugs)\n",
+                        "âœ“ Schema loaded ({} non-cascade errors from pre-existing source bugs)\n",
                         error_count
                     ));
                 }
                 Err(e) => {
-                    up_result.push_str(&format!("✗ Schema load failed: {}\n", e));
+                    up_result.push_str(&format!("âœ— Schema load failed: {}\n", e));
                 }
             }
 
-            // Load lookup-data MERGE scripts — ONE FILE PER sqlcmd
+            // Load lookup-data MERGE scripts â€” ONE FILE PER sqlcmd
             // invocation. Each invocation = fresh connection = clean
             // session state. This is the only reliable way to ship the
             // dt MERGE scripts, because their per-file IDENTITY_INSERT
@@ -4619,12 +4619,12 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                     }
                 }
                 up_result.push_str(&format!(
-                    "✓ Lookup data: {} loaded, {} failed\n",
+                    "âœ“ Lookup data: {} loaded, {} failed\n",
                     ok, fail
                 ));
                 if !failed_names.is_empty() {
                     for n in &failed_names {
-                        up_result.push_str(&format!("    ✗ {}\n", n));
+                        up_result.push_str(&format!("    âœ— {}\n", n));
                     }
                     if fail > failed_names.len() {
                         up_result.push_str(&format!(
@@ -4636,12 +4636,12 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
             }
 
             // Surface the dependency-closure check result. We wrote
-            // `missing-deps.txt` upstream during schema.sql build —
+            // `missing-deps.txt` upstream during schema.sql build â€”
             // print a one-liner here so operators see the count without
             // having to grep the sandbox dir.
             if !missing_deps.is_empty() {
                 up_result.push_str(&format!(
-                    "\n⚠ {} cross-object reference{} unresolved in deploy set — see {}/missing-deps.txt\n\
+                    "\nâš  {} cross-object reference{} unresolved in deploy set â€” see {}/missing-deps.txt\n\
                      (procs that call these will RAISERROR `Could not find stored procedure '...'` at runtime)\n",
                     missing_deps.len(),
                     if missing_deps.len() == 1 { "" } else { "s" },
@@ -4649,7 +4649,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
                 ));
                 let preview: Vec<&String> = missing_deps.keys().take(5).collect();
                 for name in preview {
-                    up_result.push_str(&format!("  ⚠ {}\n", name));
+                    up_result.push_str(&format!("  âš  {}\n", name));
                 }
                 if missing_deps.len() > 5 {
                     up_result.push_str(&format!("  ... and {} more\n", missing_deps.len() - 5));
@@ -4657,14 +4657,14 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
             }
 
             up_result.push_str(&format!(
-                "\n🟢 Sandbox LIVE on port {}\n\
+                "\nðŸŸ¢ Sandbox LIVE on port {}\n\
                  Connection: Server=localhost,{};User=sa;Password=Said_Test_2026!\n",
                 port, port
             ));
         }
 
         let multi_hint = if is_multi {
-            format!("\n\nCROSS-MODULE MODE — modules [{}] are deployed into the SAME database.\n\
+            format!("\n\nCROSS-MODULE MODE â€” modules [{}] are deployed into the SAME database.\n\
                      Any proc from any listed module can INSERT into or trigger any other's tables.\n\
                      Use this to catch negative interactions (e.g. billing triggers firing on card updates).",
                     all_modules.join(", "))
@@ -4676,10 +4676,10 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
             "Sandbox created: {}/\n\n\
              Modules:   [{}]\n\
              Container: {}\n\
-             Port:      {} (host) → 1433 (container)\n\n\
+             Port:      {} (host) â†’ 1433 (container)\n\n\
              Snapshot:  {}\n\n\
              Schema (dependency-ordered):\n\
-             - {} functions (loaded first — DEFAULT constraints depend on these)\n\
+             - {} functions (loaded first â€” DEFAULT constraints depend on these)\n\
              - {} tables (topologically sorted by FK dependencies)\n\
              - {} views\n\
              - {} stored procedures (from selected module(s) only)\n\
@@ -4687,7 +4687,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
              - {} seed data statements\n\n\
              Files:\n\
              - docker-compose.yml  (SQL Server 2022, container={}, port={})\n\
-             - schema.sql          (functions → tables → views → procs → triggers)\n\
+             - schema.sql          (functions â†’ tables â†’ views â†’ procs â†’ triggers)\n\
              - seed-data.sql       (inline INSERT statements)\n\
              - data/<NN>_<table>.sql (per-file MERGE scripts, one sqlcmd each)\n\
              - data/_manifest.txt  (load order, data-index.json-driven)\n\
@@ -4701,7 +4701,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
             all_modules.join(", "),
             container_name, port,
             if has_snapshot { "found (Exclusive/Shared/BOUNDARY.md)" }
-            else { "NOT FOUND — run 'snapshot' first to extract module files" },
+            else { "NOT FOUND â€” run 'snapshot' first to extract module files" },
             func_count, table_count, view_count, proc_count, trigger_count, seed_parts.len(),
             container_name, port,
             sandbox_dir, port,
@@ -4773,7 +4773,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
             Ok((new_fid, delta)) => {
                 brain.save().map_err(|e| CallToolError::from_message(e))?;
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("Checked out v{} → new frame_id={}, semantic delta={:.4}", t.version, new_fid, delta),
+                    format!("Checked out v{} â†’ new frame_id={}, semantic delta={:.4}", t.version, new_fid, delta),
                 )]))
             }
             Err(e) => Ok(CallToolResult::text_content(vec![TextContent::from(
@@ -4824,10 +4824,10 @@ fn walkdir_count(dir: std::path::PathBuf) -> u64 {
     total
 }
 
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Forge MCP tool handlers (feature-gated). Six thin dispatchers over
 // said_forge::mcp_api + said_forge::run_one.
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(feature = "forge")]
 impl SaidServerHandler {
@@ -4868,7 +4868,7 @@ impl SaidServerHandler {
     async fn handle_forge_load(&self, t: ForgeLoadTool) -> Result<CallToolResult, CallToolError> {
         if !t.confirm {
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                "forge_load requires confirm:true — ask the user first and state which path/URL will be loaded".to_string(),
+                "forge_load requires confirm:true â€” ask the user first and state which path/URL will be loaded".to_string(),
             )]));
         }
         let registry = said_forge::SourceRegistry::default();
@@ -4903,7 +4903,7 @@ impl SaidServerHandler {
     async fn handle_forge_run(&self, t: ForgeRunTool) -> Result<CallToolResult, CallToolError> {
         if !t.confirm {
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                "forge_run requires confirm:true — show the user the cost estimate before calling".to_string(),
+                "forge_run requires confirm:true â€” show the user the cost estimate before calling".to_string(),
             )]));
         }
         // The MCP path holds `self.brain: Arc<Mutex<SaidFile>>` under a
@@ -4927,7 +4927,7 @@ impl SaidServerHandler {
     fn handle_forge_reset(&self, t: ForgeResetTool) -> Result<CallToolResult, CallToolError> {
         if !t.confirm {
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                "forge_reset requires confirm:true — destructive, ask the user".to_string(),
+                "forge_reset requires confirm:true â€” destructive, ask the user".to_string(),
             )]));
         }
         let project_root = self.brain_dir();
@@ -5080,7 +5080,7 @@ impl SaidServerHandler {
         let cfg_path = WorkspaceConfig::default_path_for(&root);
         if !cfg_path.exists() {
             return Err(CallToolError::from_message(format!(
-                "no .forge/config.toml at {} — call forge_plan_apply first",
+                "no .forge/config.toml at {} â€” call forge_plan_apply first",
                 cfg_path.display()
             )));
         }
@@ -5088,7 +5088,7 @@ impl SaidServerHandler {
             .map_err(|e| CallToolError::from_message(format!("load config: {}", e)))?;
         if !cfg.plan_complete {
             return Err(CallToolError::from_message(format!(
-                "config at {} has plan_complete=false — call forge_plan_apply first",
+                "config at {} has plan_complete=false â€” call forge_plan_apply first",
                 cfg_path.display()
             )));
         }
@@ -5222,7 +5222,7 @@ fn locate_workspace_said(root: &std::path::Path) -> Result<std::path::PathBuf, S
         0 => Err(format!("no .said file at {}", root.display())),
         1 => Ok(found.into_iter().next().unwrap()),
         _ => Err(format!(
-            "multiple .said files at {} — pass an explicit target path",
+            "multiple .said files at {} â€” pass an explicit target path",
             root.display()
         )),
     }

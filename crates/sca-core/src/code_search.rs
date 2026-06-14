@@ -194,6 +194,11 @@ fn collect_scopes(node: tree_sitter::Node, source: &[u8], line: usize, best: &mu
 pub struct AnchorSuggestion {
     pub mode: String,
     pub symbol: String,
+    /// Start line of the target span — pass back as `--line` to disambiguate a
+    /// name that matches multiple spans (e.g. a C# class vs its constructor).
+    pub line: usize,
+    /// Declaration kind (class/method/…) so the caller can disambiguate by kind.
+    pub kind: String,
     pub note: String,
 }
 
@@ -215,7 +220,13 @@ pub fn suggest_anchors(source: &str, extension: &str, line: usize) -> Vec<Anchor
         out.push(AnchorSuggestion {
             mode: "append-into-symbol".to_string(),
             symbol: container.name.clone(),
-            note: format!("add a sibling member at the end of `{}`'s body (class scope)", container.name),
+            line: container.start_line,
+            kind: container.kind.clone(),
+            note: format!(
+                "add a sibling member at the end of {} `{}` (lines {}-{}); pass --line {} to disambiguate",
+                short_kind(&container.kind), container.name,
+                container.start_line, container.end_line, container.start_line
+            ),
         });
     }
     // Innermost method/function: insert after it (stays at the same scope).
@@ -226,8 +237,26 @@ pub fn suggest_anchors(source: &str, extension: &str, line: usize) -> Vec<Anchor
         out.push(AnchorSuggestion {
             mode: "insert-after-symbol".to_string(),
             symbol: method.name.clone(),
-            note: format!("insert after `{}` (same scope as that method)", method.name),
+            line: method.start_line,
+            kind: method.kind.clone(),
+            note: format!(
+                "insert after `{}` (lines {}-{}, same scope); pass --line {} to disambiguate",
+                method.name, method.start_line, method.end_line, method.start_line
+            ),
         });
+    }
+
+    /// Human-friendly short kind label.
+    fn short_kind(k: &str) -> &str {
+        match k {
+            "class_declaration" | "class_definition" => "class",
+            "struct_item" | "struct_specifier" => "struct",
+            "impl_item" => "impl",
+            "interface_declaration" => "interface",
+            "namespace_declaration" => "namespace",
+            "mod_item" => "module",
+            _ => "scope",
+        }
     }
     out
 }
