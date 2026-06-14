@@ -225,6 +225,46 @@ pub struct CheckoutTool {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Tool 8b: EDIT — surgical, anchored source edit (no whole-file rewrite)
+// ════════════════════════════════════════════════════════════════════════════
+
+#[mcp_tool(
+    name = "edit",
+    description = "Apply a SURGICAL, anchored edit to a source file on disk — insert, replace, or \
+                   delete a small region at a named symbol or an exact-text anchor. There is NO \
+                   whole-file-rewrite path, so you cannot accidentally delete the rest of a file. \
+                   Prefer this over rewriting a whole file. Modes: insert-after-symbol, \
+                   insert-before-symbol, replace-symbol, delete-symbol, insert-after-text, \
+                   insert-before-text, replace-text. Provide --symbol for *-symbol modes (resolved \
+                   via the symbol index, scoped to `file`) or `anchor` (exact substring) for *-text \
+                   modes. Use dry_run to preview. Returns ok/applied_at_line/lines_added/removed.",
+    destructive_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct EditTool {
+    /// Repo-relative path of the source file to change (e.g. src/Program.cs).
+    pub file: String,
+    /// Edit mode: insert-after-symbol | insert-before-symbol | replace-symbol |
+    /// delete-symbol | insert-after-text | insert-before-text | replace-text
+    pub mode: String,
+    /// Symbol name for *-symbol modes (resolved scoped to `file`).
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Exact substring anchor for *-text modes.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// New content to insert/replace (not needed for delete-symbol).
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Preview only: resolve + compute the change but do NOT write the file.
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Allow a replace/delete spanning more than the default max lines.
+    #[serde(default)]
+    pub allow_large: bool,
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Tool 9: DELETE — remove a memory or frame
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -980,14 +1020,14 @@ pub struct LspSymbolsTool {
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
-                      SymTool, HistoryTool, CheckoutTool, DeleteTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
-                      SymTool, HistoryTool, CheckoutTool, DeleteTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,

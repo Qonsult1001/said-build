@@ -35,6 +35,7 @@ pub mod code_search;
 #[cfg(feature = "code")]
 pub mod grammars;
 pub mod crystalline;
+pub mod edit;
 pub mod frames;
 #[cfg(feature = "lsp")]
 pub mod lsp_client;

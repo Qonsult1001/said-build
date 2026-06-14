@@ -18,3 +18,9 @@ node_modules
 # Local brain files + vault DB — kept locally for testing, NOT pushed.
 *.said
 /vault.db
+
+# Python build artifacts (the sca-core python binding is built on demand)
+__pycache__/
+*.pyc
+*.pyd
+*.so

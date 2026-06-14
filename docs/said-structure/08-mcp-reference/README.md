@@ -29,6 +29,7 @@ By default attaches to a sibling `.said` file (`./brain.said`, auto-promoting to
 - [delete](other-tools.md#delete) — soft-delete a frame
 - [checkout](other-tools.md#checkout) — restore a past version
 - [history](other-tools.md#history) — lineage trail
+- [edit](edit.md) — surgical anchored insert/replace/delete on a source file (no whole-file rewrite)
 
 ### Admin / compliance
 - [admin](admin.md) — single tool with `action` discriminator covering 7 subcommands
