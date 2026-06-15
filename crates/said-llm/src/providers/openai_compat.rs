@@ -66,16 +66,41 @@ impl OpenAICompatibleProvider {
                 }
             })
         };
-        json!({
+        // Provider-correct fields (researched): Groq and OpenRouter differ.
+        //   - Groq: token field is `max_completion_tokens`; reasoning is the flat
+        //     `reasoning_effort` string ("low"|"medium"|"high"). `max_tokens` and
+        //     a `reasoning` object are REJECTED (400).
+        //   - OpenRouter: token field is `max_tokens`; reasoning is the
+        //     `reasoning: {enabled|effort}` object; supports `provider` pinning.
+        let is_groq = self.base_url.contains("groq");
+        let is_openrouter = self.base_url.contains("openrouter");
+        let effort = std::env::var("SAID_LLM_REASONING_EFFORT").unwrap_or_else(|_| "medium".into());
+
+        let mut body = json!({
             "model": self.model,
             "temperature": req.temperature,
-            "max_tokens": req.max_output_tokens,
             "response_format": response_format,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user",   "content": req.user }
             ]
-        })
+        });
+        if is_groq {
+            body["max_completion_tokens"] = json!(req.max_output_tokens);
+            body["reasoning_effort"] = json!(effort);
+        } else {
+            body["max_tokens"] = json!(req.max_output_tokens);
+        }
+        if is_openrouter {
+            body["reasoning"] = json!({ "effort": effort });
+            if let Ok(order) = std::env::var("SAID_LLM_PROVIDER_ORDER") {
+                let providers: Vec<&str> = order.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if !providers.is_empty() {
+                    body["provider"] = json!({ "order": providers, "allow_fallbacks": true });
+                }
+            }
+        }
+        body
     }
 
     pub(crate) fn parse_body(
@@ -94,10 +119,21 @@ impl OpenAICompatibleProvider {
         let message = first
             .get("message")
             .ok_or_else(|| LlmError::Llm("no message".into()))?;
+        // Reasoning models (Kimi K2.x, etc.) can leave `content` null — they put
+        // text in `reasoning` and, if max_tokens is exhausted on reasoning, never
+        // emit content. Fall back to `reasoning` so we still get the answer; only
+        // error if BOTH are empty (a genuinely empty completion, e.g. length cap).
         let content = message
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| LlmError::Llm("no message content".into()))?;
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| message.get("reasoning").and_then(|v| v.as_str()))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                let fr = body.get("choices").and_then(|c| c.get(0))
+                    .and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).unwrap_or("?");
+                LlmError::Llm(format!("empty completion (no content/reasoning; finish_reason={})", fr))
+            })?;
         let parsed_json: serde_json::Value = serde_json::from_str(content)
             .map_err(|e| LlmError::Llm(format!("json parse: {}", e)))?;
         let usage = body.get("usage");
