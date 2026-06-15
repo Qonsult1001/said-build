@@ -26,10 +26,19 @@ pub struct CompletionRequest {
     pub cacheable_prelude: Option<String>,
     /// JSON schema the response must match. Providers enforce this via tools
     /// (Anthropic) or `response_format: json_schema` (OpenAI-compat).
+    /// Ignored when `json_object` is true.
     pub schema: serde_json::Value,
     pub schema_name: String,
     pub max_output_tokens: u32,
     pub temperature: f32,
+    /// Permissive JSON mode: ask the provider for valid JSON WITHOUT a strict
+    /// schema (`response_format: {"type":"json_object"}`). Use for free-form
+    /// outputs that are JSON-shaped but not a fixed schema — e.g. a coding
+    /// change-set whose `content` is arbitrary code. Strict `json_schema` mode
+    /// (the default, `false`) rejects these on several providers (Groq:
+    /// `json_validate_failed`). This is the mode Advisory's GroqCycle proved.
+    /// Defaults to false → existing schema behaviour is unchanged.
+    pub json_object: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

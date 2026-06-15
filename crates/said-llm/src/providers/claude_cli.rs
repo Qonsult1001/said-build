@@ -391,6 +391,7 @@ mod tests {
             schema_name: "rewrite".into(),
             max_output_tokens: 200,
             temperature: 0.2,
+            json_object: false,
         };
         let prompt = p.build_prompt(&req);
         assert!(prompt.contains("rewrite queries"));

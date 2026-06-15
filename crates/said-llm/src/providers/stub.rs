@@ -138,6 +138,7 @@ mod tests {
             schema_name: "s".into(),
             max_output_tokens: 100,
             temperature: 0.0,
+            json_object: false,
         }
     }
 

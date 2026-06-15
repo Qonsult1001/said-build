@@ -53,6 +53,7 @@ pub async fn run(
         schema_name: "iteration_note".to_string(),
         max_output_tokens: 4096,
         temperature: 0.2,
+        json_object: true,
     };
     let authored = match provider.complete(&req).await {
         Ok(resp) => resp

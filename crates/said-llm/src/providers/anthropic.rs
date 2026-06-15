@@ -196,6 +196,7 @@ mod tests {
             schema_name: "record_generation".into(),
             max_output_tokens: 4000,
             temperature: 0.2,
+            json_object: false,
         }
     }
 

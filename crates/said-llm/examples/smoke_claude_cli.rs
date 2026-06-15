@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema_name: "rewrite_query".into(),
         max_output_tokens: 256,
         temperature: 0.2,
+        json_object: false,
     };
 
     println!("[smoke] sending one query ...");

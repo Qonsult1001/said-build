@@ -330,6 +330,7 @@ fn build_rewrite_request(question: &str, question_type: &str, n_rewrites: usize)
         schema_name: "rewrite_query".into(),
         max_output_tokens: 400,
         temperature: 0.5,
+        json_object: false,
     }
 }
 

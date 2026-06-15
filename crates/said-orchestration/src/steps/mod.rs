@@ -140,10 +140,24 @@ pub(crate) async fn run_phase(
     let had_ctx = !context.is_empty();
     let prompt = phase_prompt(phase, &CodingContext { task: task.to_string(), context });
 
+    // The CODE/REPAIR phases emit a change-set ({"edits":[...]}) which apply.rs
+    // consumes directly — DON'T wrap it in {"output":"..."} (two conflicting
+    // shape instructions confuse the model and break apply). Prose phases
+    // (plan/design/test) return {"output":"..."} and we unwrap it.
+    let emits_change_set = matches!(phase, Phase::Code | Phase::Repair);
+    let system = if emits_change_set {
+        "You are a coding assistant driven by .said memory. Follow the instructions exactly. \
+         Output ONLY the change-set JSON the instructions specify (a top-level {\"edits\":[...]} \
+         object). No prose, no markdown."
+            .to_string()
+    } else {
+        "You are a coding assistant driven by .said memory. Follow the instructions exactly. \
+         Return your answer as JSON: {\"output\": \"<your full answer>\"}."
+            .to_string()
+    };
+
     let req = CompletionRequest {
-        system: "You are a coding assistant driven by .said memory. Follow the instructions \
-                 exactly. Return your answer as JSON: {\"output\": \"<your full answer>\"}."
-            .to_string(),
+        system,
         user: prompt.clone(),
         cacheable_prelude: None,
         schema: serde_json::json!({
@@ -155,16 +169,22 @@ pub(crate) async fn run_phase(
         schema_name: "phase_output".to_string(),
         max_output_tokens: 4096,
         temperature: 0.2,
+        // Permissive JSON (json_object), not strict schema (strict mode fails on
+        // Groq for arbitrary code content). Proven in Advisory's GroqCycle.
+        json_object: true,
     };
     let resp = provider
         .complete(&req)
         .await
         .map_err(|e| format!("llm completion ({}): {}", phase.name(), e))?;
-    let output = resp
-        .json
-        .get("output")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&resp.raw)
-        .to_string();
+    // resp.json is the PARSED message content (parse_body already extracted
+    // choices[0].message.content and json-parsed it). Change-set phases: serialize
+    // that parsed object back to a string for apply.rs (which extracts `edits`).
+    // Prose phases: unwrap the `output` string.
+    let output = if emits_change_set {
+        serde_json::to_string(&resp.json).unwrap_or_else(|_| resp.raw.clone())
+    } else {
+        resp.json.get("output").and_then(|v| v.as_str()).unwrap_or(&resp.raw).to_string()
+    };
     Ok(PhaseResult { phase: phase.name(), prompt, output, had_recalled_context: had_ctx })
 }

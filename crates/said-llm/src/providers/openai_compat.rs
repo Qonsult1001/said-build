@@ -49,18 +49,28 @@ impl OpenAICompatibleProvider {
             system.push_str("\n\n");
         }
         system.push_str(&req.system);
-        json!({
-            "model": self.model,
-            "temperature": req.temperature,
-            "max_tokens": req.max_output_tokens,
-            "response_format": {
+        // Permissive json_object mode (no strict schema) vs strict json_schema.
+        // json_object works across Groq models for free-form JSON-shaped output
+        // (e.g. a coding change-set with arbitrary `content`); json_schema stays
+        // the default for exact-shape extraction (forge). Proven in Advisory's
+        // GroqCycle (JsonObject:true).
+        let response_format = if req.json_object {
+            json!({ "type": "json_object" })
+        } else {
+            json!({
                 "type": "json_schema",
                 "json_schema": {
                     "name": req.schema_name,
                     "strict": true,
                     "schema": req.schema,
                 }
-            },
+            })
+        };
+        json!({
+            "model": self.model,
+            "temperature": req.temperature,
+            "max_tokens": req.max_output_tokens,
+            "response_format": response_format,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user",   "content": req.user }
@@ -194,6 +204,7 @@ mod tests {
             schema_name: "story_gen".into(),
             max_output_tokens: 2000,
             temperature: 0.1,
+            json_object: false,
         }
     }
 
@@ -210,6 +221,17 @@ mod tests {
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["response_format"]["json_schema"]["strict"], true);
         assert_eq!(body["response_format"]["json_schema"]["name"], "story_gen");
+    }
+
+    #[test]
+    fn body_uses_json_object_when_flagged() {
+        let p = provider();
+        let mut req = sample_req();
+        req.json_object = true;
+        let body = p.build_body(&req);
+        // Permissive json_object mode — no strict schema (the Groq-compatible path).
+        assert_eq!(body["response_format"]["type"], "json_object");
+        assert!(body["response_format"].get("json_schema").is_none());
     }
 
     #[test]

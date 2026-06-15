@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema_name: "rerank_top_n".into(),
         max_output_tokens: 800,
         temperature: 0.0,
+        json_object: false,
     };
 
     // ── Step 3: pick provider — default Claude CLI ─────────────────────

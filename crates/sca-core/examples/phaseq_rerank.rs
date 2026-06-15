@@ -268,6 +268,7 @@ fn build_rerank_request(
         schema_name: "rerank_top_n".into(),
         max_output_tokens: 800,
         temperature: 0.0,
+        json_object: false,
     }
 }
 
