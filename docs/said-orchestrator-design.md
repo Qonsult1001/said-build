@@ -117,3 +117,73 @@ MCP tool so a client can either hand `.said` the wheel OR step it manually.)
 5. MCP surface so external clients can step the loop or hand over the wheel.
 
 Ground truth stays the gate at every stage. Memory + prompts only propose.
+
+---
+
+## Implementation status & LIVE RESULTS (built)
+
+The full loop is BUILT and LIVE-PROVEN. Crates (clean separation, conforms to
+docs/said-structure/13-integrations.md Rule 2 — core `.said` never calls an LLM):
+
+- **said-prompts** (`coding::`) — the playbook: phase prompts (plan/design/code/
+  test/repair) + the 10-section iteration template + the LEARN extraction prompt.
+- **sca-core** — project memory (recall the verified iteration; intent-isolated).
+- **said-orchestration** (separate process, the `said-think` pattern) — the phases
+  (one file per step under `steps/`), the loop, `gate.rs` (build/test = sole
+  judge), `apply.rs` (anchored edits, no whole-file rewrite), `source.rs` (real
+  source + vetted anchor menu), `compress.rs` (Claude-style note compression),
+  `config.rs` (`[llm]` TOML, `${ENV}` keys). Binary: `said-orchestrate`.
+
+### Staged build — status
+1. Phase-prompt library — ✅ done (in said-prompts).
+2. LLM client — ✅ via said-llm (BYO: Anthropic / OpenAI-compatible / Claude-CLI),
+   incl. a `json_object` mode added so free-form coding output works on Groq/
+   OpenRouter (strict `json_schema` is rejected there for arbitrary code).
+3. One vertical, gate-verified, learn-on-green — ✅ LIVE-PROVEN.
+4. Generalize to other workflows — ✅ Claude itself uses ONE loop + model
+   adaptation (reverse-engineered, see memory/claude-code-reverse-engineering),
+   so the single loop generalizes; proven on a NEW task shape (HTML/JS, below).
+5. MCP surface — ⏳ not yet (the phases could be exposed via said-mcp `prompts/*`).
+
+### How anchor hallucination is prevented (the autonomy fix)
+Live testing showed the only real autonomy gap was edit anchors. Mirrors Claude
+Code's edit safety (Read-before-Edit + exact-match) + Advisory's RealEndpointAnchors:
+- `source.rs` injects the ACTUAL target file (line-numbered) into code/repair
+  context, PLUS a vetted ANCHOR MENU of safe, complete statement-ending lines —
+  the model picks a real line instead of reconstructing (and truncating) one.
+- `apply.rs` resolves anchors whitespace-tolerantly and across MULTI-LINE
+  statements (maps a collapsed statement to its ending line), and REJECTS
+  mid-statement insert-after (would split a statement → build break). Apply
+  failures feed the repair loop instead of aborting.
+
+### LIVE model matrix — all GREEN, fully autonomous (no anchor handed)
+Task: add an anonymous GET endpoint to a copy of Advisory's C# Program.cs; gate =
+`dotnet build`. Five models across two providers:
+
+| Model | Provider | Result |
+|---|---|---|
+| claude-opus-4.8 | OpenRouter | ✅ green, 1st attempt |
+| kimi-k2.5 (Composer's open base) | OpenRouter | ✅ green, 1st attempt |
+| kimi-k2.7-code | OpenRouter | ✅ green (reliable once the anchor menu landed) |
+| gpt-oss-120b | Groq | ✅ green, 1st attempt |
+| gpt-oss-20b | Groq | ✅ green, 1st attempt |
+
+**The orchestrator drives open AND closed models to a green gate, autonomously.**
+The vetted-anchor menu made the variable models as reliable as Opus 4.8.
+
+### Task-shape generality — proven
+Same orchestrator, totally different artifact + gate, ZERO code change: an HTML/JS
+Pong game where the model implements `stepBall` physics; gate = `node pong.test.js`
+(6 logic assertions). gpt-oss-120b → green, 1st attempt, independently verified.
+Only `--build` and `--task` differ from the C# runs.
+
+### Key management
+`said-orchestrate --llm-config <toml>` reads provider/model/base_url/api_key, with
+`api_key = "${ENV_VAR}"` placeholder expansion (forge's pattern). Keys live in env/
+secret store, never plaintext in the file. Falls back to env vars.
+
+### Next: K2.5 vs Cursor Composer (controlled)
+The pre-registered protocol (Advisory docs/k2.5-said-vs-composer-test.md) holds the
+base model constant (Kimi K2.5) and varies only the harness: `.said` orchestration
+(no RL) vs Composer (K2.5 + Cursor's RL). The gate judges. A tie or win for `.said`
+validates portable, model-agnostic memory-orchestration as a Composer alternative.
