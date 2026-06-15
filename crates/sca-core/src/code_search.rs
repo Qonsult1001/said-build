@@ -202,6 +202,42 @@ pub struct AnchorSuggestion {
     pub note: String,
 }
 
+/// Whether a definition `kind` is a CONTAINER (its body holds members), so the
+/// right "add a member" move is `append-into-symbol` rather than insert-after.
+/// Single source of truth — used by both source-based and index-based suggestions.
+#[cfg(feature = "code")]
+pub fn is_container_kind(kind: &str) -> bool {
+    matches!(kind,
+        "class_declaration" | "class_definition" | "impl_item" | "struct_item" |
+        "struct_specifier" | "interface_declaration" | "namespace_declaration" | "mod_item")
+        || kind.contains("class") || kind.contains("struct")
+        || kind.contains("interface") || kind.contains("namespace")
+}
+
+/// Build an anchor menu from INDEX candidates alone (no source on disk) — for a
+/// brain-only `--explain`. Each candidate is a `(name, kind, start_line,
+/// end_line)`. Container kinds get `append-into-symbol`; everything else
+/// `insert-after-symbol`. Reuses [`is_container_kind`] so the classification
+/// matches the source-based path exactly (no duplicated, drifting kind lists).
+#[cfg(feature = "code")]
+pub fn suggest_anchors_from_candidates(
+    cands: &[(String, String, usize, usize)],
+) -> Vec<AnchorSuggestion> {
+    cands.iter().map(|(name, kind, start, end)| {
+        let mode = if is_container_kind(kind) { "append-into-symbol" } else { "insert-after-symbol" };
+        AnchorSuggestion {
+            mode: mode.to_string(),
+            symbol: name.clone(),
+            line: *start,
+            kind: kind.clone(),
+            note: format!(
+                "{} `{}` at lines {}-{}; pass --line {} to target this span",
+                short_kind(kind), name, start, end, start
+            ),
+        }
+    }).collect()
+}
+
 /// Given a `line` where an anchor landed (often badly — e.g. inside a method),
 /// return valid, scope-correct moves the caller can use instead. Collects the
 /// enclosing scope chain and offers: append into the enclosing class body, and
@@ -213,9 +249,7 @@ pub fn suggest_anchors(source: &str, extension: &str, line: usize) -> Vec<Anchor
     scopes.sort_by_key(|s| s.end_line.saturating_sub(s.start_line));
     let mut out = Vec::new();
     // Enclosing container (class/struct/impl/namespace/mod): append into its body.
-    if let Some(container) = scopes.iter().find(|s| matches!(s.kind.as_str(),
-        "class_declaration" | "class_definition" | "impl_item" | "struct_item" |
-        "struct_specifier" | "interface_declaration" | "namespace_declaration" | "mod_item"))
+    if let Some(container) = scopes.iter().find(|s| is_container_kind(&s.kind))
     {
         out.push(AnchorSuggestion {
             mode: "append-into-symbol".to_string(),
@@ -246,19 +280,21 @@ pub fn suggest_anchors(source: &str, extension: &str, line: usize) -> Vec<Anchor
         });
     }
 
-    /// Human-friendly short kind label.
-    fn short_kind(k: &str) -> &str {
-        match k {
-            "class_declaration" | "class_definition" => "class",
-            "struct_item" | "struct_specifier" => "struct",
-            "impl_item" => "impl",
-            "interface_declaration" => "interface",
-            "namespace_declaration" => "namespace",
-            "mod_item" => "module",
-            _ => "scope",
-        }
-    }
     out
+}
+
+/// Human-friendly short kind label (shared by source- and index-based menus).
+#[cfg(feature = "code")]
+fn short_kind(k: &str) -> &str {
+    match k {
+        "class_declaration" | "class_definition" => "class",
+        "struct_item" | "struct_specifier" => "struct",
+        "impl_item" => "impl",
+        "interface_declaration" => "interface",
+        "namespace_declaration" => "namespace",
+        "mod_item" => "module",
+        _ => "scope",
+    }
 }
 
 /// Collect ALL named definition scopes that enclose `line` (1-based).

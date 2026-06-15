@@ -39,7 +39,9 @@ enum Commands {
         #[arg(long, default_value = "portable")]
         mode: String,
     },
-    /// Add a document (text or file or directory)
+    /// Add a document (text or file or directory).
+    /// Aliased as `remember` to match the MCP tool name.
+    #[command(alias = "remember")]
     Add {
         /// Text content to add (omit if using --file or --dir)
         text: Option<String>,
@@ -5963,32 +5965,66 @@ fn cmd_edit(
     // front instead of learning it from a failed edit. (code feature only.)
     #[cfg(feature = "code")]
     if explain {
-        let on_disk = std::fs::read(file).map_err(|e| { let _ = fail(format!("read {}: {}", file, e)); format!("read {}: {}", file, e) })?;
-        let fc = decode_text(&on_disk).ok_or_else(|| { let m = format!("{} is not valid UTF-8/UTF-16 text", file); let _ = fail(m.clone()); m })?;
         let ext = std::path::Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
-        // Determine the line to explain: a symbol's location, or an anchor's line.
-        let line = if let Some(name) = symbol {
-            let brain = open_brain(path)?;
-            let results = brain.sym(name, 50);
-            results.iter()
-                .find(|r| edit::paths_equal(r.doc_id.split("::").next().unwrap_or(""), file))
-                .map(|r| r.start_line as usize)
-                .unwrap_or(1)
-        } else if let Some(a) = anchor {
-            edit::resolve_text_anchor(&fc, a).unwrap_or(1)
-        } else { 1 };
-        let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
+        // Try the on-disk source first (richest: scope-aware suggestions).
+        let on_disk = std::fs::read(file).ok().and_then(|b| decode_text(&b));
+        if let Some(fc) = on_disk {
+            let line = if let Some(name) = symbol {
+                let brain = open_brain(path)?;
+                brain.sym(name, 50).iter()
+                    .find(|r| edit::paths_equal(r.doc_id.split("::").next().unwrap_or(""), file))
+                    .map(|r| r.start_line as usize).unwrap_or(1)
+            } else if let Some(a) = anchor {
+                edit::resolve_text_anchor(&fc, a).unwrap_or(1)
+            } else { 1 };
+            let suggestions = sca_core::code_search::suggest_anchors(&fc, ext, line);
+            let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
+                "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
+            })).collect();
+            if json {
+                println!("{}", serde_json::json!({
+                    "ok": true, "explain": true, "source": "disk", "file": file, "at_line": line,
+                    "valid_anchors": valid,
+                }));
+            } else {
+                println!("Valid anchors at {}:{} —", file, line);
+                for s in &suggestions { println!("  {} --symbol {} --line {}  ({})", s.mode, s.symbol, s.line, s.note); }
+            }
+            return Ok(());
+        }
+        // Brain-only fallback: source not on disk (e.g. brain baked in /app, no
+        // checkout). Build the menu from the INDEX alone — it stores name, kind,
+        // and start/end lines per symbol. Requires --symbol.
+        let name = match symbol {
+            Some(n) => n,
+            None => return fail(format!(
+                "{} not found on disk and no --symbol given; brain-only --explain needs --symbol", file)),
+        };
+        let brain = open_brain(path)?;
+        // Collect index candidates (name, kind, start, end) for this symbol in
+        // this file, then let the shared core build the menu — same container
+        // classification as the source-based path (no duplicated kind list).
+        let index_cands: Vec<(String, String, usize, usize)> = brain.sym(name, 50).iter()
+            .filter(|r| edit::paths_equal(r.doc_id.split("::").next().unwrap_or(""), file))
+            .map(|r| {
+                let kind = r.doc_id.split("::").nth(2)
+                    .map(|s| s.split(':').next().unwrap_or(s)).unwrap_or("?").to_string();
+                (r.name.clone(), kind, r.start_line as usize, r.end_line as usize)
+            }).collect();
+        if index_cands.is_empty() {
+            return fail(format!("symbol '{}' not found in {} (brain-only lookup)", name, file));
+        }
+        let suggestions = sca_core::code_search::suggest_anchors_from_candidates(&index_cands);
         let valid: Vec<serde_json::Value> = suggestions.iter().map(|s| serde_json::json!({
             "mode": s.mode, "symbol": s.symbol, "line": s.line, "kind": s.kind, "note": s.note,
         })).collect();
         if json {
             println!("{}", serde_json::json!({
-                "ok": true, "explain": true, "file": file, "at_line": line,
-                "valid_anchors": valid,
+                "ok": true, "explain": true, "source": "brain", "file": file, "valid_anchors": valid,
             }));
         } else {
-            println!("Valid anchors at {}:{} â€”", file, line);
-            for s in &suggestions { println!("  {} --symbol {}  ({})", s.mode, s.symbol, s.note); }
+            println!("Valid anchors for {} in {} (from index) —", name, file);
+            for s in &suggestions { println!("  {} --symbol {} --line {}", s.mode, s.symbol, s.line); }
         }
         return Ok(());
     }

@@ -1,10 +1,23 @@
 # `said edit` — Handoff for the Linux box / Advisory
 
-**Date:** 2026-06-14 · **Version:** `said 0.7.0` (both `said` CLI and `said-mcp`)
+**Date:** 2026-06-15 · **Version:** `said 0.8.0` (both `said` CLI and `said-mcp`)
 **Artifact:** `said-full-linux-x64`
 
-> **Live-binary check:** `said --version` must print **`said 0.7.0`**. If it
+> **Live-binary check:** `said --version` must print **`said 0.8.0`**. If it
 > prints anything lower, the old binary is still baked in — rebuild the image.
+
+### New in 0.8.0 — brain-only `--explain` + `remember` alias + path semantics
+
+| Change | What it means for you |
+|--------|------------------------|
+| **Brain-only `--explain`** | `said edit --explain --symbol X --file <path>` now works **even when the source file isn't on disk** (e.g. the brain is baked at `/app` and there's no checkout). It falls back to the index — which stores name/kind/start/end — and returns `valid_anchors` with `"source": "brain"`. So you can pre-validate against the baked brain before a clone exists. (When the source IS on disk it uses it, returning `"source": "disk"`.) |
+| **`said remember` aliased to `add`** | `said remember "<text>"` now works (was a silent "unrecognized subcommand" no-op). CLI `add` and MCP `remember` are now both accepted on the CLI. |
+| **`--file` is CWD-relative (documented)** | Symbol-mode and `--explain` resolve `--file` **relative to the current working directory** (where the *source* lives), independent of where `--path` (the brain) points. Run source-reading edits inside the clone. The brain-only `--explain` above is the exception — it doesn't need the file on disk. |
+
+> **For the cycle:** you can now call `said edit --explain --symbol <Class> --file <relpath> --json`
+> against the **baked brain** (no checkout) to get the class's `line`/`kind` up front
+> (`"source":"brain"`), then issue `append-into-symbol --symbol <Class>` in the clone. Or just
+> rely on the largest-span default (no `--line` needed) once the clone exists.
 
 ### New in 0.7.0 — C# class/ctor disambiguation (resolves the live blocker)
 
@@ -37,7 +50,7 @@ construction** — there is no whole-file-write path.
 | **New `said edit` subcommand** | Surgical, anchored insert/replace/delete on a source file. No mode can rewrite a whole file. |
 | **New MCP `edit` tool** | Same capability exposed to MCP clients (Claude/Groq via the MCP server). Identical behavior + safety. |
 | **AST chunker bug fixed** | Short functions (<3-line body) used to vanish from the symbol index and the previous symbol's range over-extended — which made `replace-symbol` eat the next function. Now every named definition has an exact range. Makes symbol-mode edits safe. |
-| **Version** | `said --version` → `said 0.7.0` (current). Use this to confirm the new binary is live in the container. |
+| **Version** | `said --version` → `said 0.8.0` (current). Use this to confirm the new binary is live in the container. |
 | **Feature bundles** | Binaries are now built as bundles. The one you want is **`full`** (= code + docs + OCR + LSP, with the encoder baked in). |
 
 ### New in 0.3.0 — world-class safety upgrades
@@ -134,9 +147,9 @@ appears more than once *within the same file*, the edit errors (never guesses).
    ```
 4. Confirm the new binary is live:
    ```bash
-   /app/said --version          # must print: said 0.7.0
+   /app/said --version          # must print: said 0.8.0
    ```
-   If it says anything below `0.7.0`, the old binary is still baked in — rebuild the image.
+   If it says anything below `0.8.0`, the old binary is still baked in — rebuild the image.
 
 > **Shell note (carried over from build.md):** under Git Bash, prefix
 > `docker exec` calls with `MSYS_NO_PATHCONV=1` or `/app/said` gets rewritten to
