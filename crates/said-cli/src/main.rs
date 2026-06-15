@@ -174,6 +174,36 @@ enum Commands {
         /// File to reindex
         file: String,
     },
+    /// Record a fix CASE: a ticket shape + the `said edit` change-set that
+    /// built+passed. ONLY call this after a real build/test gate is green — the
+    /// case becomes replayable by `suggest-fix`. Stored as a `fixcase`-tagged
+    /// frame fingerprinted on the ticket text.
+    RecordFix {
+        /// The ticket text/summary (this is what gets fingerprinted)
+        #[arg(long)]
+        ticket: String,
+        /// The change-set JSON (the `edits` array applied via `said edit`)
+        #[arg(long)]
+        edits: Option<String>,
+        /// Read the change-set JSON from a file instead of --edits
+        #[arg(long)]
+        edits_file: Option<String>,
+        /// Optional label (e.g. a PR number) for traceability
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Suggest a known-good fix for a ticket WITHOUT calling an LLM: fingerprint
+    /// the ticket, find the most-similar past `fixcase` (recorded after a green
+    /// build), and return its change-set + similarity. Read-only — the caller
+    /// decides whether to replay it. Returns no match below the threshold.
+    SuggestFix {
+        /// The ticket text/summary to find a known-good fix for
+        #[arg(long)]
+        ticket: String,
+        /// Minimum similarity (0.0–1.0) to return a match. Default 0.85.
+        #[arg(long, default_value_t = 0.85)]
+        min_similarity: f32,
+    },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
@@ -1189,6 +1219,10 @@ fn main() {
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
+        Commands::RecordFix { ref ticket, ref edits, ref edits_file, ref label } =>
+            cmd_record_fix(cli.path.as_deref(), ticket, edits.as_deref(), edits_file.as_deref(), label.as_deref(), cli.json),
+        Commands::SuggestFix { ref ticket, min_similarity } =>
+            cmd_suggest_fix(cli.path.as_deref(), ticket, min_similarity, cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -6307,6 +6341,114 @@ fn file_stem_or(p: &Path) -> String {
 // ---------------------------------------------------------------------------
 // Lineage commands: reindex + history
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Fix-replay: record-fix (write a green-build case) + suggest-fix (read)
+// ---------------------------------------------------------------------------
+
+/// Separator between the ticket text (fingerprinted) and the change-set JSON
+/// inside a `fixcase` frame's content. The ticket comes first so the frame's
+/// SCA fingerprint reflects the ticket SHAPE, which is what we match on.
+const FIXCASE_SEP: &str = "\n<<<SAID-FIXCASE-EDITS>>>\n";
+const FIXCASE_TAG: &str = "fixcase";
+
+/// Build a fixcase frame body from ticket + change-set JSON.
+fn make_fixcase_body(ticket: &str, edits_json: &str) -> String {
+    format!("{}{}{}", ticket.trim(), FIXCASE_SEP, edits_json.trim())
+}
+
+/// Split a fixcase frame body back into (ticket, edits_json). If the separator
+/// is absent (legacy/plain frame), the whole body is the ticket and edits empty.
+fn split_fixcase_body(body: &str) -> (&str, &str) {
+    match body.split_once(FIXCASE_SEP) {
+        Some((t, e)) => (t.trim(), e.trim()),
+        None => (body.trim(), ""),
+    }
+}
+
+fn cmd_record_fix(
+    path: Option<&str>, ticket: &str, edits: Option<&str>, edits_file: Option<&str>,
+    label: Option<&str>, json: bool,
+) -> Result<(), String> {
+    let edits_json = match (edits, edits_file) {
+        (Some(_), Some(_)) => return Err("pass only one of --edits / --edits-file".into()),
+        (Some(e), None) => e.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| format!("read --edits-file {}: {}", f, e))?,
+        (None, None) => return Err("missing --edits or --edits-file".into()),
+    };
+    // Strip a leading UTF-8 BOM (common on Windows-written files) — serde_json
+    // rejects it as invalid JSON otherwise.
+    let edits_json = edits_json.trim_start_matches('\u{feff}').trim().to_string();
+    // Validate it's JSON so we never store garbage as a "known-good" case.
+    if serde_json::from_str::<serde_json::Value>(&edits_json).is_err() {
+        return Err("--edits is not valid JSON".into());
+    }
+    let mut brain = open_brain(path)?;
+    let body = make_fixcase_body(ticket, &edits_json);
+    // Deterministic-ish doc_id from a content hash + optional label.
+    let hash = blake3::hash(body.as_bytes()).to_hex();
+    let doc_id = format!("fixcase::{}", &hash.as_str()[..16]);
+    brain.remember_as(&doc_id, &body, Some("fixcase"));
+    brain.add_tag(&doc_id, FIXCASE_TAG);
+    if let Some(l) = label { brain.add_tag(&doc_id, &format!("pr:{}", l)); }
+    let _ = brain.build_index();
+    brain.save().map_err(|e| e)?;
+    if json {
+        println!("{}", serde_json::json!({ "ok": true, "recorded": doc_id, "label": label }));
+    } else {
+        println!("Recorded fixcase {} (label: {})", doc_id, label.unwrap_or("-"));
+    }
+    Ok(())
+}
+
+fn cmd_suggest_fix(path: Option<&str>, ticket: &str, min_similarity: f32, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    // Rank with the same 3-engine fusion `said ask` uses (sym + grep + SCA) —
+    // it surfaces fixcase frames that pure SCA query misses — then keep only
+    // fixcase-tagged frames. Results are sorted best-first by confidence.
+    let (cands, _kw) = sca_core::ask::ask(&mut brain, ticket, 25, false, None);
+    let mut best: Option<(String, f32)> = None;
+    for c in &cands {
+        let is_fixcase = brain.frames.get_meta(&c.doc_id)
+            .map(|m| m.tags.iter().any(|t| t == FIXCASE_TAG))
+            .unwrap_or(false);
+        if is_fixcase {
+            best = Some((c.doc_id.clone(), c.confidence));
+            break;
+        }
+    }
+    match best {
+        Some((doc_id, score)) if score >= min_similarity => {
+            let body = brain.get(&doc_id).unwrap_or_default();
+            let (matched_ticket, edits_json) = split_fixcase_body(&body);
+            let edits: serde_json::Value = serde_json::from_str(edits_json)
+                .unwrap_or(serde_json::Value::Null);
+            let label = brain.frames.get_meta(&doc_id)
+                .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned());
+            if json {
+                println!("{}", serde_json::json!({
+                    "ok": true, "match": {
+                        "similarity": score, "doc_id": doc_id, "label": label,
+                        "matched_ticket": matched_ticket, "edits": edits,
+                        "note": "isomorphic to a fix that built+passed; review before replay",
+                    }
+                }));
+            } else {
+                println!("Match ({:.2}) {}  label={}", score, doc_id, label.unwrap_or_else(|| "-".into()));
+                println!("  ticket: {}", matched_ticket);
+                println!("  edits:  {}", edits_json);
+            }
+        }
+        _ => {
+            if json {
+                println!("{}", serde_json::json!({ "ok": true, "match": serde_json::Value::Null }));
+            } else {
+                println!("No known-good fix above similarity {:.2} — fall through to the LLM.", min_similarity);
+            }
+        }
+    }
+    Ok(())
+}
 
 fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String> {
     let file_path = Path::new(file).canonicalize()

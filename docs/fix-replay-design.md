@@ -1,5 +1,14 @@
 # Fix-Replay by Fingerprint — Design (read-only v1)
 
+> **STATUS: v1 SHIPPED in said 0.9.0.** Two CLI verbs: `said record-fix`
+> (write a green-build case) and `said suggest-fix` (read-only lookup). Proven
+> end-to-end: a paraphrased ticket matched a recorded fix at 0.85 similarity and
+> returned its change-set; a dissimilar ticket returned `match:null`. Uses the
+> 3-engine `ask` fusion (sym+grep+SCA) for matching — pure SCA `query` missed
+> the case. Cases are plain `fixcase`-tagged frames (reuses all existing
+> machinery). The caller still owns the build+test gate and decides whether to
+> replay. See "Implemented surface" at the bottom.
+
 **Goal:** before any LLM call, let `.said` answer "have I landed a fix shaped like
 this ticket before?" and, if so, return the *change-set* that built+passed last
 time — case-based reasoning in the SCA fingerprint substrate, no inference.
@@ -93,3 +102,40 @@ language-agnostic and inference-free.
   line back as a learned anchor frame so next `ask` finds it.
 - `said anchors <file>`: list candidate insertion points from ANY file (not just
   named symbols) — closes the top-level-statements recall gap structurally.
+
+---
+
+## Implemented surface (v1, said 0.9.0)
+
+**Record a green-build case** (caller runs this ONLY after the build+test gate passes):
+```
+said record-fix --path brain.said \
+  --ticket "<ticket text — this is what gets fingerprinted>" \
+  (--edits '<json>' | --edits-file <f>) [--label <pr#>] --json
+→ { "ok": true, "recorded": "fixcase::<hash>", "label": "<pr#>" }
+```
+Stores a `fixcase`-tagged frame: body = `ticket` + separator + change-set JSON.
+The ticket drives the fingerprint. A leading UTF-8 BOM in the edits file is
+stripped (any platform). Invalid JSON is rejected — no garbage cases.
+
+**Suggest a known-good fix** (read-only; no LLM call):
+```
+said suggest-fix --path brain.said --ticket "<ticket text>" [--min-similarity 0.85] --json
+→ { "ok": true, "match": { "similarity", "doc_id", "label",
+                           "matched_ticket", "edits": [...], "note" } }
+  or { "ok": true, "match": null }   // below threshold → fall through to the LLM
+```
+Matching uses the 3-engine `ask` fusion (sym + grep + SCA), filtered to
+`fixcase` frames. Returns the best match only at/above `--min-similarity`
+(default 0.85). Tune the threshold from real hit/miss outcomes.
+
+### Cycle integration (Advisory)
+```
+ticket → said suggest-fix
+          ├─ match  → show change-set to operator; if approved, apply via `said edit` (NO LLM)
+          └─ null   → existing path: LLM plans → said edit → ...
+       → dotnet build + test gate          (unchanged — the ground truth)
+       → on GREEN only: said record-fix     (learn the case for next time)
+```
+The gate stays the sole success signal. `.said` matches shapes and replays
+stored actions; it does not reason.
