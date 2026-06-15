@@ -174,13 +174,18 @@ enum Commands {
         /// File to reindex
         file: String,
     },
-    /// CODING MEMORY — learn a verified fix. Stores a problem→fix recipe in the
-    /// Procedural pillar (TRIGGER=problem, STEPS=change-set, OUTCOME=success).
-    /// ONLY call after a real build/test gate is green — `success` is the sole
-    /// recorded outcome and the sole ground truth. Recalled later, memory-first,
-    /// by `recall-fix`. No ticket number needed; describe the problem plainly.
+    /// CODING MEMORY — learn a verified coding iteration. Stores the WHOLE
+    /// iteration (like Claude Code's session memory, but for code) so any LLM can
+    /// reload full context, not just a diff: task + files/functions + steps +
+    /// errors&corrections + learnings + the verified change-set. ONLY call after a
+    /// real build/test gate is green — `success` is the sole recorded outcome and
+    /// ground truth. Recalled memory-first by `recall-fix`.
+    ///
+    /// REQUIRED surface stays dead-simple: --problem + --edits[-file]. The other
+    /// fields are OPTIONAL — pass them when the client has them (richer context),
+    /// omit them otherwise.
     LearnFix {
-        /// The problem this fix solved, in plain words (the recall key).
+        /// The problem this iteration solved, in plain words (the recall key).
         #[arg(long)]
         problem: String,
         /// The change-set JSON (the `edits` array applied via `said edit`).
@@ -190,6 +195,23 @@ enum Commands {
         /// on Windows PowerShell, which mangles inline JSON quotes).
         #[arg(long)]
         edits_file: Option<String>,
+        /// Read a full client-authored iteration NOTE (the 10-section template
+        /// filled in, like Claude Code's session memory) from a file. When given,
+        /// it becomes the stored story verbatim; --files/--errors/--learnings are
+        /// ignored. Get the template via `said fix-template`.
+        #[arg(long)]
+        note_file: Option<String>,
+        /// Optional: important files/functions touched and why (Claude's "Files
+        /// and Functions"). Free text.
+        #[arg(long)]
+        files: Option<String>,
+        /// Optional: errors hit and how they were fixed; approaches that failed
+        /// and should not be retried (Claude's "Errors & Corrections").
+        #[arg(long)]
+        errors: Option<String>,
+        /// Optional: what worked / what to avoid (Claude's "Learnings").
+        #[arg(long)]
+        learnings: Option<String>,
         /// Optional provenance tag (e.g. a PR number). Never required, never the
         /// lookup key — just a breadcrumb for traceability.
         #[arg(long)]
@@ -1223,8 +1245,9 @@ fn main() {
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
-        Commands::LearnFix { ref problem, ref edits, ref edits_file, ref label } =>
-            cmd_learn_fix(cli.path.as_deref(), problem, edits.as_deref(), edits_file.as_deref(), label.as_deref(), cli.json),
+        Commands::LearnFix { ref problem, ref edits, ref edits_file, ref note_file, ref files, ref errors, ref learnings, ref label } =>
+            cmd_learn_fix(cli.path.as_deref(), problem, edits.as_deref(), edits_file.as_deref(),
+                note_file.as_deref(), files.as_deref(), errors.as_deref(), learnings.as_deref(), label.as_deref(), cli.json),
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
         Commands::Edit {
@@ -6358,16 +6381,28 @@ fn file_stem_or(p: &Path) -> String {
 // never recalls "document an endpoint". See docs/coding-memory-design.md.
 // ---------------------------------------------------------------------------
 
-/// Markers inside a coding-memory frame body. The body is human-readable
-/// (procedural convention) AND carries the machine-readable change-set + the
-/// action-residue used for intent matching.
+/// Markers inside a coding-memory frame body. The body is a human-readable
+/// coding-iteration note (modelled on Claude Code's session memory, adapted for
+/// code) followed by the machine-readable change-set JSON and the action-residue
+/// used for intent matching.
 const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
 const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 
-/// Build a coding-memory frame body: a procedural TRIGGER→STEPS→OUTCOME recipe
-/// followed by the machine-readable change-set JSON and the action residue.
-fn make_fix_body(problem: &str, edits_json: &str, action: &str) -> String {
-    let steps = match serde_json::from_str::<serde_json::Value>(edits_json) {
+/// A learned coding iteration. Required: problem + edits. Optional context fields
+/// mirror Claude Code's SessionMemory sections so recall reloads FULL context.
+struct FixIteration<'a> {
+    problem: &'a str,
+    edits_json: &'a str,
+    files: Option<&'a str>,      // Claude: "Files and Functions"
+    errors: Option<&'a str>,     // Claude: "Errors & Corrections"
+    learnings: Option<&'a str>,  // Claude: "Learnings"
+    action: &'a str,             // intent residue (machine, for matching)
+}
+
+/// Build the human-readable iteration note + machine payload. Mirrors Claude
+/// Code's session-memory template, adapted for a single verified code fix.
+fn make_fix_body(it: &FixIteration) -> String {
+    let steps = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
         Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
             .map(|(i, e)| {
                 let mode = e.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
@@ -6379,29 +6414,57 @@ fn make_fix_body(problem: &str, edits_json: &str, action: &str) -> String {
             .collect::<Vec<_>>().join("\n"),
         _ => "  (change-set)".to_string(),
     };
-    format!(
-        "TRIGGER: {}\nSTEPS:\n{}\nOUTCOME: success — built+passed{}{}{}{}",
-        problem.trim(), steps,
-        FIX_EDITS_SEP, edits_json.trim(),
-        FIX_ACTION_SEP, action.trim(),
-    )
+    let mut body = format!("TASK: {}\n", it.problem.trim());
+    if let Some(f) = it.files { if !f.trim().is_empty() { body.push_str(&format!("FILES: {}\n", f.trim())); } }
+    body.push_str(&format!("STEPS:\n{}\n", steps));
+    if let Some(e) = it.errors { if !e.trim().is_empty() { body.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    if let Some(l) = it.learnings { if !l.trim().is_empty() { body.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
+    body.push_str("RESULT: success — built+passed");
+    body.push_str(FIX_EDITS_SEP);
+    body.push_str(it.edits_json.trim());
+    body.push_str(FIX_ACTION_SEP);
+    body.push_str(it.action.trim());
+    body
+}
+
+/// Build a frame body from a full CLIENT-AUTHORED iteration note (the 10-section
+/// template filled in, like Claude's session memory). The note is stored as the
+/// story verbatim; we prepend a TASK: line so `problem` round-trips, then append
+/// the machine payload (edits + intent residue).
+fn make_fix_body_from_note(problem: &str, note: &str, edits_json: &str, action: &str) -> String {
+    let mut body = format!("TASK: {}\n\n", problem.trim());
+    body.push_str(note.trim());
+    body.push_str(FIX_EDITS_SEP);
+    body.push_str(edits_json.trim());
+    body.push_str(FIX_ACTION_SEP);
+    body.push_str(action.trim());
+    body
 }
 
 /// Pull (problem, edits_json, action) back out of a coding-memory frame body.
+/// The full human-readable note (with FILES/ERRORS/LEARNINGS) is everything
+/// before FIX_EDITS_SEP and is returned verbatim by `recall-fix` as `context`.
 fn split_fix_body(body: &str) -> (String, String, String) {
-    let (recipe_plus, action) = match body.split_once(FIX_ACTION_SEP) {
+    let (note_plus, action) = match body.split_once(FIX_ACTION_SEP) {
         Some((a, b)) => (a, b.trim().to_string()),
         None => (body, String::new()),
     };
-    let (recipe, edits) = match recipe_plus.split_once(FIX_EDITS_SEP) {
+    let (note, edits) = match note_plus.split_once(FIX_EDITS_SEP) {
         Some((a, b)) => (a, b.trim().to_string()),
-        None => (recipe_plus, String::new()),
+        None => (note_plus, String::new()),
     };
-    // The problem is the TRIGGER: line.
-    let problem = recipe.lines().next()
-        .and_then(|l| l.strip_prefix("TRIGGER: "))
+    // The problem is the TASK: line.
+    let problem = note.lines().next()
+        .and_then(|l| l.strip_prefix("TASK: "))
         .unwrap_or("").trim().to_string();
     (problem, edits, action)
+}
+
+/// Return the full human-readable iteration note (everything before the machine
+/// payload) — the FULL context an LLM reloads on recall.
+fn fix_note(body: &str) -> String {
+    let note = body.split(FIX_EDITS_SEP).next().unwrap_or(body);
+    note.trim().to_string()
 }
 
 const FIX_PILLAR_TAG: &str = "pillar:procedural";
@@ -6410,8 +6473,10 @@ const FIX_KIND_TAG: &str = "coding-fix";
 const FIX_ACTION_TAG: &str = "coding-fix-action";
 const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_learn_fix(
     path: Option<&str>, problem: &str, edits: Option<&str>, edits_file: Option<&str>,
+    note_file: Option<&str>, files: Option<&str>, errors: Option<&str>, learnings: Option<&str>,
     label: Option<&str>, json: bool,
 ) -> Result<(), String> {
     let edits_json = match (edits, edits_file) {
@@ -6427,7 +6492,23 @@ fn cmd_learn_fix(
     }
     let mut brain = open_brain(path)?;
     let action = sca_core::ask::action_residue(problem);
-    let body = make_fix_body(problem, &edits_json, &action);
+    // The stored story: a full client-authored iteration NOTE (the 10-section
+    // template filled in, like Claude's session memory) when --note-file is given,
+    // otherwise the structured note we assemble from the explicit fields. Either
+    // way the machine payload (edits + intent residue) is appended for replay +
+    // matching.
+    let note = match note_file {
+        Some(f) => Some(std::fs::read_to_string(f)
+            .map_err(|e| format!("read --note-file {}: {}", f, e))?
+            .trim_start_matches('\u{feff}').trim().to_string()),
+        None => None,
+    };
+    let body = match &note {
+        Some(n) => make_fix_body_from_note(problem, n, &edits_json, &action),
+        None => make_fix_body(&FixIteration {
+            problem, edits_json: &edits_json, files, errors, learnings, action: &action,
+        }),
+    };
     let hash = blake3::hash(body.as_bytes()).to_hex();
     let id16 = hash.as_str()[..16].to_string();
     let doc_id = format!("fix::{}", id16);
@@ -6537,6 +6618,9 @@ fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: 
         Some((doc_id, score)) if score >= min_similarity => {
             let body = brain.get(&doc_id).unwrap_or_default();
             let (matched_problem, edits_json, _action) = split_fix_body(&body);
+            // The FULL iteration context (TASK/FILES/STEPS/ERRORS/LEARNINGS/RESULT)
+            // — this is what saves any LLM from re-deriving; it's the context window.
+            let context = fix_note(&body);
             let edits: serde_json::Value = serde_json::from_str(&edits_json)
                 .unwrap_or(serde_json::Value::Null);
             let label = brain.frames.get_meta(&doc_id)
@@ -6545,13 +6629,13 @@ fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: 
                 println!("{}", serde_json::json!({
                     "ok": true, "fix": {
                         "score": score, "doc_id": doc_id, "provenance": label,
-                        "matched_problem": matched_problem, "edits": edits,
+                        "matched_problem": matched_problem, "context": context, "edits": edits,
                         "note": "verified fix (built+passed) for a problem of this shape; gate still verifies on apply",
                     }
                 }));
             } else {
                 println!("Fix ({:.2}) {}  provenance={}", score, doc_id, label.unwrap_or_else(|| "-".into()));
-                println!("  problem: {}", matched_problem);
+                println!("{}", context);
                 println!("  edits:   {}", edits_json);
             }
         }

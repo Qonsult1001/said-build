@@ -27,6 +27,8 @@
 
 pub mod ask;
 pub mod audit;
+pub mod coding_memory;
+pub mod tokenizer;
 pub mod brain;
 pub mod migrate;
 pub mod plugin;
