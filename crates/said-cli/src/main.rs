@@ -230,6 +230,22 @@ enum Commands {
         #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
     },
+    /// ORCHESTRATOR — emit the standard PROMPT for a lifecycle phase, filled with
+    /// the task + recalled project memory (prior iterations/conventions/errors).
+    /// This is the "playbook": send the output to ANY external LLM to run the
+    /// Claude-Code workflow phase-by-phase. The build/test gate (not this prompt)
+    /// is the judge of correctness. Phases: plan|design|code|test|repair.
+    PhasePrompt {
+        /// Which phase: plan | design | code | test | repair.
+        phase: String,
+        /// The coding task / problem, in plain words.
+        #[arg(long)]
+        task: String,
+        /// Extra context to append (e.g. gate error output for the repair phase),
+        /// in addition to what .said recalls from memory.
+        #[arg(long)]
+        extra: Option<String>,
+    },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
@@ -1250,6 +1266,8 @@ fn main() {
                 note_file.as_deref(), files.as_deref(), errors.as_deref(), learnings.as_deref(), label.as_deref(), cli.json),
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
+        Commands::PhasePrompt { ref phase, ref task, ref extra } =>
+            cmd_phase_prompt(cli.path.as_deref(), phase, task, extra.as_deref(), cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -6538,38 +6556,25 @@ fn cmd_learn_fix(
     Ok(())
 }
 
-fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
-    let mut brain = open_brain(path)?;
-
-    // Candidate set: coding-fix frames (Procedural, outcome=success). We surface
-    // them via the standard fusion recall, then keep only our kind. This anchors
-    // on literal+semantic relevance so unrelated fixes never win.
-    let (fusion_cands, _kw) = sca_core::ask::ask(&mut brain, problem, 25, false, None);
+/// Find the best-matching coding-fix for a problem, returning (doc_id, score).
+/// Shared by `recall-fix` and `phase-prompt` so the proven scoring is one source
+/// of truth. Candidates = coding-fix frames surfaced by fusion recall; scored by
+/// the intent-isolated action fingerprint (the breakthrough) + target overlap.
+fn best_fix_for(brain: &mut sca_core::said_file::SaidFile, problem: &str) -> Option<(String, f32)> {
+    let (fusion_cands, _kw) = sca_core::ask::ask(brain, problem, 25, false, None);
     let candidate_ids: Vec<String> = fusion_cands.iter()
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
         .map(|c| c.doc_id.clone())
         .collect();
     if candidate_ids.is_empty() {
-        return emit_no_fix(json, min_similarity);
+        return None;
     }
-
-    // INTENT-ISOLATED matching (the breakthrough): score each candidate by how
-    // close its stored ACTION residue is to the query's action residue, AND by
-    // target-noun overlap. Action agreement separates "add X" from "document X";
-    // target overlap picks the right paraphrase. Both pure 1-bit .said.
-    //
-    // Action match uses the PROVEN mechanism: 1-bit fingerprint Hamming over the
-    // residue (validated in tests/test_intent_separation.rs at +0.19/+0.375
-    // margins). We fingerprint-rank the query's action residue against the
-    // companion `fixaction::` frames written at learn time, giving an intent
-    // similarity per fix. (Token Jaccard was too weak — it missed "expose"≈"add".)
     let q_action = sca_core::ask::action_residue(problem);
     let action_fp: std::collections::HashMap<String, f32> = if q_action.is_empty() {
         std::collections::HashMap::new()
     } else {
         brain.rank_by_fingerprint(&q_action, 100).into_iter()
-            // keep only action-companion frames; key by their id16 suffix
             .filter_map(|(d, s)| d.strip_prefix(FIX_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
             .collect()
     };
@@ -6580,18 +6585,14 @@ fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: 
         .filter(|t| t.len() >= 3 && !q_action_toks.contains(&t.to_lowercase()))
         .map(|t| t.to_lowercase())
         .collect();
-
     let mut best: Option<(String, f32)> = None;
     for doc_id in candidate_ids {
         let body = brain.get(&doc_id).unwrap_or_default();
         let (c_problem, _edits, c_action) = split_fix_body(&body);
         let c_action_toks: std::collections::HashSet<String> =
             c_action.split_whitespace().map(|s| s.to_string()).collect();
-        // Action (intent) similarity: 1-bit fingerprint Hamming over residue.
-        // The fix's id16 is the suffix of its doc_id ("fix::<id16>").
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(&doc_id);
         let action_score = action_fp.get(id16).copied().unwrap_or(0.0);
-        // Target overlap: candidate's target tokens (problem minus action residue).
         let c_target_toks: std::collections::HashSet<String> = c_problem
             .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/'))
             .filter(|t| t.len() >= 3)
@@ -6602,18 +6603,52 @@ fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: 
             let overlap = c_target_toks.iter().filter(|t| q_target_toks.contains(*t)).count();
             overlap as f32 / c_target_toks.len() as f32
         };
-        // Intent is THE discriminator: when a distractor shares the target nouns
-        // ("document the cores endpoint" vs "add the cores endpoint"), target
-        // overlap is identical for both, so all separation must come from the
-        // action fingerprint (1-bit Hamming over the residue — the proven
-        // mechanism). Weight action dominant; target only breaks ties among
-        // same-intent candidates.
         let score = 0.9 * action_score + 0.1 * target_score;
         if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
             best = Some((doc_id, score));
         }
     }
+    best
+}
 
+/// ORCHESTRATOR — emit a phase prompt filled with task + recalled project memory.
+fn cmd_phase_prompt(path: Option<&str>, phase: &str, task: &str, extra: Option<&str>, json: bool) -> Result<(), String> {
+    use sca_core::coding_memory::{Phase, fill_phase_prompt};
+    let ph = Phase::parse(phase)
+        .ok_or_else(|| format!("unknown phase '{}' (use: plan|design|code|test|repair)", phase))?;
+    let mut brain = open_brain(path)?;
+
+    // Recall the most relevant verified iteration's FULL story as context — this
+    // is what lets a weak LLM run the workflow: .said supplies the whole story.
+    let mut context = String::new();
+    if let Some((doc_id, score)) = best_fix_for(&mut brain, task) {
+        let body = brain.get(&doc_id).unwrap_or_default();
+        let note = fix_note(&body);
+        if !note.is_empty() {
+            context.push_str(&format!("# Recalled verified iteration (match {:.2})\n{}\n", score, note));
+        }
+    }
+    // Append any caller-supplied extra (e.g. gate error output for repair).
+    if let Some(e) = extra {
+        if !e.trim().is_empty() {
+            context.push_str(&format!("\n# Current attempt context\n{}\n", e.trim()));
+        }
+    }
+    let prompt = fill_phase_prompt(ph.default_prompt(), task, &context);
+    if json {
+        println!("{}", serde_json::json!({
+            "ok": true, "phase": ph.name(), "task": task,
+            "has_recalled_context": !context.is_empty(), "prompt": prompt,
+        }));
+    } else {
+        println!("{}", prompt);
+    }
+    Ok(())
+}
+
+fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    let best = best_fix_for(&mut brain, problem);
     match best {
         Some((doc_id, score)) if score >= min_similarity => {
             let body = brain.get(&doc_id).unwrap_or_default();
