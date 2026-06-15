@@ -1781,6 +1781,47 @@ impl SaidFile {
         results
     }
 
+    /// Rank documents by PURE SCA fingerprint similarity to `query` — the
+    /// semantic-shape axis, NOT literal token overlap.
+    ///
+    /// Unlike `recall`/`ask` (which fuse symbol + grep + semantic and are
+    /// therefore dominated by shared words), this forces the engine's
+    /// `PureSemantic` route: embed the query, quantize to 1-bit, and rank by
+    /// Hamming distance over fingerprints. The returned score is
+    /// `1.0 - normalized_hamming` in `[0.0, 1.0]` — 1.0 = identical shape.
+    ///
+    /// This is what `suggest-fix` needs: "have I solved a ticket of this SHAPE
+    /// before?" must not reward two unrelated tickets that merely share a class
+    /// name, nor punish the same fix phrased differently. Read-only: it does not
+    /// log queries or mutate brain state.
+    pub fn rank_by_fingerprint(&mut self, query: &str, top_k: usize) -> Vec<(String, f32)> {
+        // Ensure the static encoder is loaded — on a freshly-opened brain it is
+        // lazy, so encode_query returns None until try_auto_load_encoder runs
+        // (same guard build_index uses).
+        #[cfg(feature = "static-embed")]
+        {
+            if self.engine.encode_query("test").is_none() {
+                let _ = self.engine.try_auto_load_encoder();
+            }
+        }
+        let q_emb = match self.engine.encode_query(query) {
+            Some(emb) => emb,
+            None => return Vec::new(),
+        };
+        self.ensure_corpus_cached();
+        if self.corpus_ids.is_empty() {
+            return Vec::new();
+        }
+        // Force pure-semantic routing so the score is fingerprint distance only
+        // (no lexical/grep fusion), then restore the prior route.
+        self.engine.core.set_force_route("PureSemantic");
+        let results = self.engine.core.search_unified_quantized(&q_emb, query, top_k);
+        // Reset routing to default (auto). "" / unknown maps to None in
+        // set_force_route, which is the auto router.
+        self.engine.core.set_force_route("");
+        results
+    }
+
     /// Run brain dream cycle (cross-timescale learning).
     pub fn dream(&mut self, min_queries: u64) -> bool {
         let corpus_mean = self.engine.core.get_corpus_mean().to_vec();
@@ -2454,6 +2495,13 @@ impl SaidFile {
     #[cfg(feature = "static-embed")]
     pub fn load_encoder(&mut self, path: &str) -> Result<(), String> {
         self.engine.load_static_encoder(path)
+    }
+
+    /// Auto-load the encoder: embedded compile-time model first, then well-known
+    /// file paths. Returns true if an encoder is now available. Use this when no
+    /// explicit path is known (tests, embedded deployments).
+    pub fn auto_load_encoder(&mut self) -> bool {
+        self.engine.try_auto_load_encoder()
     }
 
     /// Stub when static-embed feature is not enabled.

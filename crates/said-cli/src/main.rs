@@ -174,34 +174,38 @@ enum Commands {
         /// File to reindex
         file: String,
     },
-    /// Record a fix CASE: a ticket shape + the `said edit` change-set that
-    /// built+passed. ONLY call this after a real build/test gate is green — the
-    /// case becomes replayable by `suggest-fix`. Stored as a `fixcase`-tagged
-    /// frame fingerprinted on the ticket text.
-    RecordFix {
-        /// The ticket text/summary (this is what gets fingerprinted)
+    /// CODING MEMORY — learn a verified fix. Stores a problem→fix recipe in the
+    /// Procedural pillar (TRIGGER=problem, STEPS=change-set, OUTCOME=success).
+    /// ONLY call after a real build/test gate is green — `success` is the sole
+    /// recorded outcome and the sole ground truth. Recalled later, memory-first,
+    /// by `recall-fix`. No ticket number needed; describe the problem plainly.
+    LearnFix {
+        /// The problem this fix solved, in plain words (the recall key).
         #[arg(long)]
-        ticket: String,
-        /// The change-set JSON (the `edits` array applied via `said edit`)
+        problem: String,
+        /// The change-set JSON (the `edits` array applied via `said edit`).
         #[arg(long)]
         edits: Option<String>,
-        /// Read the change-set JSON from a file instead of --edits
+        /// Read the change-set JSON from a file instead of --edits (recommended
+        /// on Windows PowerShell, which mangles inline JSON quotes).
         #[arg(long)]
         edits_file: Option<String>,
-        /// Optional label (e.g. a PR number) for traceability
+        /// Optional provenance tag (e.g. a PR number). Never required, never the
+        /// lookup key — just a breadcrumb for traceability.
         #[arg(long)]
         label: Option<String>,
     },
-    /// Suggest a known-good fix for a ticket WITHOUT calling an LLM: fingerprint
-    /// the ticket, find the most-similar past `fixcase` (recorded after a green
-    /// build), and return its change-set + similarity. Read-only — the caller
-    /// decides whether to replay it. Returns no match below the threshold.
-    SuggestFix {
-        /// The ticket text/summary to find a known-good fix for
+    /// CODING MEMORY — recall a verified fix for a problem WITHOUT calling an LLM.
+    /// Describe the problem; `.said` returns a known-good fix recipe if it has
+    /// seen the same SHAPE before (built+passed). Uses action/intent-isolated
+    /// 1-bit matching so "add an endpoint" never matches "document an endpoint".
+    /// Returns no match below the threshold → caller falls through to the LLM.
+    RecallFix {
+        /// The problem to find a known-good fix for, in plain words.
         #[arg(long)]
-        ticket: String,
-        /// Minimum similarity (0.0–1.0) to return a match. Default 0.85.
-        #[arg(long, default_value_t = 0.85)]
+        problem: String,
+        /// Minimum match score (0.0–1.0) to return a fix. Default 0.55.
+        #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
     },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
@@ -1219,10 +1223,10 @@ fn main() {
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
-        Commands::RecordFix { ref ticket, ref edits, ref edits_file, ref label } =>
-            cmd_record_fix(cli.path.as_deref(), ticket, edits.as_deref(), edits_file.as_deref(), label.as_deref(), cli.json),
-        Commands::SuggestFix { ref ticket, min_similarity } =>
-            cmd_suggest_fix(cli.path.as_deref(), ticket, min_similarity, cli.json),
+        Commands::LearnFix { ref problem, ref edits, ref edits_file, ref label } =>
+            cmd_learn_fix(cli.path.as_deref(), problem, edits.as_deref(), edits_file.as_deref(), label.as_deref(), cli.json),
+        Commands::RecallFix { ref problem, min_similarity } =>
+            cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -6343,31 +6347,71 @@ fn file_stem_or(p: &Path) -> String {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Fix-replay: record-fix (write a green-build case) + suggest-fix (read)
+// Coding memory — learn-fix (store a verified fix in the Procedural pillar) +
+// recall-fix (memory-first retrieval with action/intent-isolated matching).
+//
+// Built on .said's native Procedural pillar (TRIGGER→STEPS→OUTCOME), NOT a
+// bespoke frame type. A verified fix IS a procedural memory: the problem is the
+// trigger, the change-set is the steps, OUTCOME=success is the gate result.
+// Retrieval uses the proven intent-separation breakthrough: match the problem's
+// action/intent residue separately from its target nouns so "add an endpoint"
+// never recalls "document an endpoint". See docs/coding-memory-design.md.
 // ---------------------------------------------------------------------------
 
-/// Separator between the ticket text (fingerprinted) and the change-set JSON
-/// inside a `fixcase` frame's content. The ticket comes first so the frame's
-/// SCA fingerprint reflects the ticket SHAPE, which is what we match on.
-const FIXCASE_SEP: &str = "\n<<<SAID-FIXCASE-EDITS>>>\n";
-const FIXCASE_TAG: &str = "fixcase";
+/// Markers inside a coding-memory frame body. The body is human-readable
+/// (procedural convention) AND carries the machine-readable change-set + the
+/// action-residue used for intent matching.
+const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
+const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 
-/// Build a fixcase frame body from ticket + change-set JSON.
-fn make_fixcase_body(ticket: &str, edits_json: &str) -> String {
-    format!("{}{}{}", ticket.trim(), FIXCASE_SEP, edits_json.trim())
+/// Build a coding-memory frame body: a procedural TRIGGER→STEPS→OUTCOME recipe
+/// followed by the machine-readable change-set JSON and the action residue.
+fn make_fix_body(problem: &str, edits_json: &str, action: &str) -> String {
+    let steps = match serde_json::from_str::<serde_json::Value>(edits_json) {
+        Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
+            .map(|(i, e)| {
+                let mode = e.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+                let file = e.get("file").and_then(|v| v.as_str()).unwrap_or("?");
+                let tgt = e.get("symbol").and_then(|v| v.as_str())
+                    .or_else(|| e.get("anchor").and_then(|v| v.as_str())).unwrap_or("");
+                format!("  {}. {} {} {}", i + 1, mode, file, tgt)
+            })
+            .collect::<Vec<_>>().join("\n"),
+        _ => "  (change-set)".to_string(),
+    };
+    format!(
+        "TRIGGER: {}\nSTEPS:\n{}\nOUTCOME: success — built+passed{}{}{}{}",
+        problem.trim(), steps,
+        FIX_EDITS_SEP, edits_json.trim(),
+        FIX_ACTION_SEP, action.trim(),
+    )
 }
 
-/// Split a fixcase frame body back into (ticket, edits_json). If the separator
-/// is absent (legacy/plain frame), the whole body is the ticket and edits empty.
-fn split_fixcase_body(body: &str) -> (&str, &str) {
-    match body.split_once(FIXCASE_SEP) {
-        Some((t, e)) => (t.trim(), e.trim()),
-        None => (body.trim(), ""),
-    }
+/// Pull (problem, edits_json, action) back out of a coding-memory frame body.
+fn split_fix_body(body: &str) -> (String, String, String) {
+    let (recipe_plus, action) = match body.split_once(FIX_ACTION_SEP) {
+        Some((a, b)) => (a, b.trim().to_string()),
+        None => (body, String::new()),
+    };
+    let (recipe, edits) = match recipe_plus.split_once(FIX_EDITS_SEP) {
+        Some((a, b)) => (a, b.trim().to_string()),
+        None => (recipe_plus, String::new()),
+    };
+    // The problem is the TRIGGER: line.
+    let problem = recipe.lines().next()
+        .and_then(|l| l.strip_prefix("TRIGGER: "))
+        .unwrap_or("").trim().to_string();
+    (problem, edits, action)
 }
 
-fn cmd_record_fix(
-    path: Option<&str>, ticket: &str, edits: Option<&str>, edits_file: Option<&str>,
+const FIX_PILLAR_TAG: &str = "pillar:procedural";
+const FIX_SUCCESS_TAG: &str = "procedural:outcome=success";
+const FIX_KIND_TAG: &str = "coding-fix";
+const FIX_ACTION_TAG: &str = "coding-fix-action";
+const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
+
+fn cmd_learn_fix(
+    path: Option<&str>, problem: &str, edits: Option<&str>, edits_file: Option<&str>,
     label: Option<&str>, json: bool,
 ) -> Result<(), String> {
     let edits_json = match (edits, edits_file) {
@@ -6376,79 +6420,155 @@ fn cmd_record_fix(
         (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| format!("read --edits-file {}: {}", f, e))?,
         (None, None) => return Err("missing --edits or --edits-file".into()),
     };
-    // Strip a leading UTF-8 BOM (common on Windows-written files) — serde_json
-    // rejects it as invalid JSON otherwise.
+    // Strip a leading UTF-8 BOM (Windows-written files) — serde rejects it.
     let edits_json = edits_json.trim_start_matches('\u{feff}').trim().to_string();
-    // Validate it's JSON so we never store garbage as a "known-good" case.
     if serde_json::from_str::<serde_json::Value>(&edits_json).is_err() {
         return Err("--edits is not valid JSON".into());
     }
     let mut brain = open_brain(path)?;
-    let body = make_fixcase_body(ticket, &edits_json);
-    // Deterministic-ish doc_id from a content hash + optional label.
+    let action = sca_core::ask::action_residue(problem);
+    let body = make_fix_body(problem, &edits_json, &action);
     let hash = blake3::hash(body.as_bytes()).to_hex();
-    let doc_id = format!("fixcase::{}", &hash.as_str()[..16]);
-    brain.remember_as(&doc_id, &body, Some("fixcase"));
-    brain.add_tag(&doc_id, FIXCASE_TAG);
+    let id16 = hash.as_str()[..16].to_string();
+    let doc_id = format!("fix::{}", id16);
+    brain.remember_as(&doc_id, &body, Some("coding-fix"));
+    // Native Procedural pillar tags + success (the only recorded outcome).
+    brain.add_tag(&doc_id, FIX_PILLAR_TAG);
+    brain.add_tag(&doc_id, FIX_SUCCESS_TAG);
+    brain.add_tag(&doc_id, FIX_KIND_TAG);
+    // Optional provenance breadcrumb — never the lookup key.
     if let Some(l) = label { brain.add_tag(&doc_id, &format!("pr:{}", l)); }
+    // Companion ACTION-RESIDUE frame so recall can fingerprint-match intent with
+    // the proven 1-bit mechanism (rank_by_fingerprint on the residue). Its
+    // content is ONLY the action residue, so its fingerprint reflects intent, not
+    // the target nouns. Linked back to the fix via the shared id16.
+    if !action.is_empty() {
+        let action_id = format!("{}{}", FIX_ACTION_ID_PREFIX, id16);
+        brain.remember_as(&action_id, &action, Some("coding-fix-action"));
+        brain.add_tag(&action_id, FIX_ACTION_TAG);
+    }
     let _ = brain.build_index();
-    brain.save().map_err(|e| e)?;
+    brain.save()?;
     if json {
-        println!("{}", serde_json::json!({ "ok": true, "recorded": doc_id, "label": label }));
+        println!("{}", serde_json::json!({ "ok": true, "learned": doc_id, "label": label }));
     } else {
-        println!("Recorded fixcase {} (label: {})", doc_id, label.unwrap_or("-"));
+        println!("Learned fix {} (provenance: {})", doc_id, label.unwrap_or("-"));
     }
     Ok(())
 }
 
-fn cmd_suggest_fix(path: Option<&str>, ticket: &str, min_similarity: f32, json: bool) -> Result<(), String> {
+fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
-    // Rank with the same 3-engine fusion `said ask` uses (sym + grep + SCA) —
-    // it surfaces fixcase frames that pure SCA query misses — then keep only
-    // fixcase-tagged frames. Results are sorted best-first by confidence.
-    let (cands, _kw) = sca_core::ask::ask(&mut brain, ticket, 25, false, None);
+
+    // Candidate set: coding-fix frames (Procedural, outcome=success). We surface
+    // them via the standard fusion recall, then keep only our kind. This anchors
+    // on literal+semantic relevance so unrelated fixes never win.
+    let (fusion_cands, _kw) = sca_core::ask::ask(&mut brain, problem, 25, false, None);
+    let candidate_ids: Vec<String> = fusion_cands.iter()
+        .filter(|c| brain.frames.get_meta(&c.doc_id)
+            .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
+        .map(|c| c.doc_id.clone())
+        .collect();
+    if candidate_ids.is_empty() {
+        return emit_no_fix(json, min_similarity);
+    }
+
+    // INTENT-ISOLATED matching (the breakthrough): score each candidate by how
+    // close its stored ACTION residue is to the query's action residue, AND by
+    // target-noun overlap. Action agreement separates "add X" from "document X";
+    // target overlap picks the right paraphrase. Both pure 1-bit .said.
+    //
+    // Action match uses the PROVEN mechanism: 1-bit fingerprint Hamming over the
+    // residue (validated in tests/test_intent_separation.rs at +0.19/+0.375
+    // margins). We fingerprint-rank the query's action residue against the
+    // companion `fixaction::` frames written at learn time, giving an intent
+    // similarity per fix. (Token Jaccard was too weak — it missed "expose"≈"add".)
+    let q_action = sca_core::ask::action_residue(problem);
+    let action_fp: std::collections::HashMap<String, f32> = if q_action.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        brain.rank_by_fingerprint(&q_action, 100).into_iter()
+            // keep only action-companion frames; key by their id16 suffix
+            .filter_map(|(d, s)| d.strip_prefix(FIX_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
+            .collect()
+    };
+    let q_action_toks: std::collections::HashSet<String> =
+        q_action.split_whitespace().map(|s| s.to_string()).collect();
+    let q_target_toks: std::collections::HashSet<String> = problem
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/'))
+        .filter(|t| t.len() >= 3 && !q_action_toks.contains(&t.to_lowercase()))
+        .map(|t| t.to_lowercase())
+        .collect();
+
     let mut best: Option<(String, f32)> = None;
-    for c in &cands {
-        let is_fixcase = brain.frames.get_meta(&c.doc_id)
-            .map(|m| m.tags.iter().any(|t| t == FIXCASE_TAG))
-            .unwrap_or(false);
-        if is_fixcase {
-            best = Some((c.doc_id.clone(), c.confidence));
-            break;
+    for doc_id in candidate_ids {
+        let body = brain.get(&doc_id).unwrap_or_default();
+        let (c_problem, _edits, c_action) = split_fix_body(&body);
+        let c_action_toks: std::collections::HashSet<String> =
+            c_action.split_whitespace().map(|s| s.to_string()).collect();
+        // Action (intent) similarity: 1-bit fingerprint Hamming over residue.
+        // The fix's id16 is the suffix of its doc_id ("fix::<id16>").
+        let id16 = doc_id.strip_prefix("fix::").unwrap_or(&doc_id);
+        let action_score = action_fp.get(id16).copied().unwrap_or(0.0);
+        // Target overlap: candidate's target tokens (problem minus action residue).
+        let c_target_toks: std::collections::HashSet<String> = c_problem
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/'))
+            .filter(|t| t.len() >= 3)
+            .map(|t| t.to_lowercase())
+            .filter(|t| !c_action_toks.contains(t))
+            .collect();
+        let target_score = if c_target_toks.is_empty() { 0.0 } else {
+            let overlap = c_target_toks.iter().filter(|t| q_target_toks.contains(*t)).count();
+            overlap as f32 / c_target_toks.len() as f32
+        };
+        // Intent is THE discriminator: when a distractor shares the target nouns
+        // ("document the cores endpoint" vs "add the cores endpoint"), target
+        // overlap is identical for both, so all separation must come from the
+        // action fingerprint (1-bit Hamming over the residue — the proven
+        // mechanism). Weight action dominant; target only breaks ties among
+        // same-intent candidates.
+        let score = 0.9 * action_score + 0.1 * target_score;
+        if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
+            best = Some((doc_id, score));
         }
     }
+
     match best {
         Some((doc_id, score)) if score >= min_similarity => {
             let body = brain.get(&doc_id).unwrap_or_default();
-            let (matched_ticket, edits_json) = split_fixcase_body(&body);
-            let edits: serde_json::Value = serde_json::from_str(edits_json)
+            let (matched_problem, edits_json, _action) = split_fix_body(&body);
+            let edits: serde_json::Value = serde_json::from_str(&edits_json)
                 .unwrap_or(serde_json::Value::Null);
             let label = brain.frames.get_meta(&doc_id)
                 .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned());
             if json {
                 println!("{}", serde_json::json!({
-                    "ok": true, "match": {
-                        "similarity": score, "doc_id": doc_id, "label": label,
-                        "matched_ticket": matched_ticket, "edits": edits,
-                        "note": "isomorphic to a fix that built+passed; review before replay",
+                    "ok": true, "fix": {
+                        "score": score, "doc_id": doc_id, "provenance": label,
+                        "matched_problem": matched_problem, "edits": edits,
+                        "note": "verified fix (built+passed) for a problem of this shape; gate still verifies on apply",
                     }
                 }));
             } else {
-                println!("Match ({:.2}) {}  label={}", score, doc_id, label.unwrap_or_else(|| "-".into()));
-                println!("  ticket: {}", matched_ticket);
-                println!("  edits:  {}", edits_json);
+                println!("Fix ({:.2}) {}  provenance={}", score, doc_id, label.unwrap_or_else(|| "-".into()));
+                println!("  problem: {}", matched_problem);
+                println!("  edits:   {}", edits_json);
             }
         }
-        _ => {
-            if json {
-                println!("{}", serde_json::json!({ "ok": true, "match": serde_json::Value::Null }));
-            } else {
-                println!("No known-good fix above similarity {:.2} — fall through to the LLM.", min_similarity);
-            }
-        }
+        _ => return emit_no_fix(json, min_similarity),
     }
     Ok(())
 }
+
+fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
+    if json {
+        println!("{}", serde_json::json!({ "ok": true, "fix": serde_json::Value::Null }));
+    } else {
+        println!("No known fix above score {:.2} — fall through to the LLM.", min_similarity);
+    }
+    Ok(())
+}
+
 
 fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String> {
     let file_path = Path::new(file).canonicalize()

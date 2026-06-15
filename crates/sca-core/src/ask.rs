@@ -91,6 +91,35 @@ pub fn ask_extract_keywords(query: &str) -> (Vec<String>, Vec<String>) {
     (lower, original)
 }
 
+/// Split a coding-problem description into its ACTION/intent residue by removing
+/// TARGET-like tokens (code identifiers, paths, CamelCase/ALLCAPS nouns, tokens
+/// with digits). The residue is verb/intent-dominated.
+///
+/// This is the proven intent-separation breakthrough: whole-text 1-bit
+/// fingerprints can't tell "add an endpoint" from "document an endpoint" (the
+/// nouns drown the verb), but fingerprinting the action residue separately DOES
+/// separate intent — cleanly, within the 1-bit substrate, no full floats.
+/// Measured in `tests/test_intent_separation.rs`. The caller passes one plain
+/// string; `.said` derives the action field with this — zero user effort.
+pub fn action_residue(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.split_whitespace() {
+        let tok = raw.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '/');
+        if tok.is_empty() { continue; }
+        let first_upper = tok.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+        let is_target =
+            tok.contains('/') ||                                       // path / route
+            tok.contains('_') ||                                       // snake_case
+            tok.chars().any(|c| c.is_ascii_digit()) ||                 // has digits
+            (first_upper && tok.chars().skip(1).any(|c| c.is_uppercase())) || // CamelCase/ALLCAPS
+            tok.chars().filter(|c| c.is_uppercase()).count() >= 2;     // mixed caps
+        if !is_target {
+            out.push(tok.to_lowercase());
+        }
+    }
+    out.join(" ")
+}
+
 /// Generate candidate symbol-name spellings from keyword lists.
 /// See the CLI docstring for the full enumeration strategy — matches it
 /// verbatim so CLI and MCP produce identical symbol candidates.
