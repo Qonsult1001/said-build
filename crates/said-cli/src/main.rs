@@ -6611,34 +6611,42 @@ fn best_fix_for(brain: &mut sca_core::said_file::SaidFile, problem: &str) -> Opt
     best
 }
 
-/// ORCHESTRATOR — emit a phase prompt filled with task + recalled project memory.
-fn cmd_phase_prompt(path: Option<&str>, phase: &str, task: &str, extra: Option<&str>, json: bool) -> Result<(), String> {
+/// Build a filled phase prompt: parse phase, recall the most relevant verified
+/// iteration's FULL story as context (what lets a weak LLM run the workflow),
+/// append caller extra, fill the template. Used by `phase-prompt` (the external
+/// LLM agent fetches this prompt + recalled memory and runs the model itself).
+fn build_phase_prompt(
+    brain: &mut sca_core::said_file::SaidFile, phase: &str, task: &str, extra: Option<&str>,
+) -> Result<(sca_core::coding_memory::Phase, String, bool), String> {
     use sca_core::coding_memory::{Phase, fill_phase_prompt};
     let ph = Phase::parse(phase)
         .ok_or_else(|| format!("unknown phase '{}' (use: plan|design|code|test|repair)", phase))?;
-    let mut brain = open_brain(path)?;
-
-    // Recall the most relevant verified iteration's FULL story as context — this
-    // is what lets a weak LLM run the workflow: .said supplies the whole story.
     let mut context = String::new();
-    if let Some((doc_id, score)) = best_fix_for(&mut brain, task) {
+    if let Some((doc_id, score)) = best_fix_for(brain, task) {
         let body = brain.get(&doc_id).unwrap_or_default();
         let note = fix_note(&body);
         if !note.is_empty() {
             context.push_str(&format!("# Recalled verified iteration (match {:.2})\n{}\n", score, note));
         }
     }
-    // Append any caller-supplied extra (e.g. gate error output for repair).
     if let Some(e) = extra {
         if !e.trim().is_empty() {
             context.push_str(&format!("\n# Current attempt context\n{}\n", e.trim()));
         }
     }
+    let has_ctx = !context.is_empty();
     let prompt = fill_phase_prompt(ph.default_prompt(), task, &context);
+    Ok((ph, prompt, has_ctx))
+}
+
+/// ORCHESTRATOR — emit a phase prompt filled with task + recalled project memory.
+fn cmd_phase_prompt(path: Option<&str>, phase: &str, task: &str, extra: Option<&str>, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    let (ph, prompt, has_ctx) = build_phase_prompt(&mut brain, phase, task, extra)?;
     if json {
         println!("{}", serde_json::json!({
             "ok": true, "phase": ph.name(), "task": task,
-            "has_recalled_context": !context.is_empty(), "prompt": prompt,
+            "has_recalled_context": has_ctx, "prompt": prompt,
         }));
     } else {
         println!("{}", prompt);
