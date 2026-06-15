@@ -119,8 +119,13 @@ Rules (non-negotiable):
 - Make the smallest change that fully solves the task. Do NOT add unrequested features, error handling for impossible cases, or speculative abstractions.
 - Match the surrounding code's style and naming.
 - Default to no comments; add one only where the WHY is non-obvious.
-- Apply changes as anchored edits (insert/replace at a named symbol or exact-text anchor).
-Output the concrete change-set (the edits to apply). Do not claim it works — the build/test gate verifies that next."#;
+
+Output the change-set as JSON ONLY, in this exact shape:
+{"edits":[{"file":"<path relative to repo root>","mode":"<insert-after-text|insert-before-text|replace-text>","anchor":"<an EXACT, UNIQUE existing line/substring in the file>","content":"<the new code>"}]}
+- "anchor" must be copied VERBATIM from the current file so it resolves uniquely.
+- "insert-after-text"/"insert-before-text": content is inserted relative to the anchor line.
+- "replace-text": the first occurrence of "anchor" is replaced by "content".
+Do not claim it works — the build/test gate verifies that next."#;
 
 pub const TEST: &str = r#"You are verifying a coding change. The build/test gate is the sole judge of correctness.
 
@@ -144,7 +149,11 @@ TASK:
 GATE FAILURE + PROJECT MEMORY (the error output, prior attempts, and known errors-to-avoid from past iterations):
 {{context}}
 
-Diagnose the ROOT CAUSE from the error before changing anything. Then produce a surgical change-set that addresses it. If an approach already failed (see the memory above), do NOT repeat it — try a different one. Output the corrective change-set only; the gate re-verifies."#;
+Diagnose the ROOT CAUSE from the error before changing anything. Then produce a surgical change-set that addresses it. If an approach already failed (see the memory above), do NOT repeat it — try a different one.
+
+Output the corrective change-set as JSON ONLY, same shape as the code step:
+{"edits":[{"file":"<path>","mode":"<insert-after-text|insert-before-text|replace-text>","anchor":"<exact existing substring>","content":"<new code>"}]}
+The gate re-verifies."#;
 
 /// The 10-section coding-iteration template a verified iteration is stored as.
 /// Modelled on Claude Code's `DEFAULT_SESSION_MEMORY_TEMPLATE`, adapted for a

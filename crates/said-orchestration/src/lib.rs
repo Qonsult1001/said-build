@@ -23,11 +23,13 @@
 //! build/test gate ([`gate`]) is the SOLE judge of correctness — the LLM only
 //! proposes; memory + prompts only inform.
 
+pub mod apply;
 pub mod compress;
 pub mod gate;
 pub mod recall;
 pub mod steps;
 
+pub use apply::apply_change_set;
 pub use gate::{GateOutcome, GateRunner};
 pub use steps::{run, RunConfig, RunOutcome, StepLog};
 

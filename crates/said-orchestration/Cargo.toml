@@ -5,6 +5,10 @@ edition = "2021"
 description = "Closed-loop coding orchestrator for .said — drives ANY external LLM through the Claude-Code lifecycle (plan/design/code/test/repair) using said-prompts (the playbook) + .said memory (the story) + said-llm (the model). A SEPARATE process per the BYO-LLM rule; the core .said binary never calls an LLM."
 license = "MIT"
 
+[[bin]]
+name = "said-orchestrate"
+path = "src/bin/said-orchestrate.rs"
+
 [dependencies]
 # Memory: recall verified iterations, apply edits, record outcomes.
 sca-core = { path = "../sca-core", features = ["static-embed", "code"] }
