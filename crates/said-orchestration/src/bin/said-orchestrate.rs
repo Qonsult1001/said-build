@@ -14,8 +14,7 @@
 //! + SAID_LLM_BASE_URL + SAID_LLM_MODEL, or ANTHROPIC_API_KEY + ANTHROPIC_MODEL.
 
 use sca_core::said_file::SaidFile;
-use said_llm::LlmConfig;
-use said_orchestration::{apply_change_set, steps, GateRunner};
+use said_orchestration::{apply_change_set, config, steps, GateRunner};
 
 fn arg(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -24,23 +23,6 @@ fn arg(flag: &str) -> Option<String> {
 
 fn split_cmd(s: &str) -> Vec<String> {
     s.split_whitespace().map(|x| x.to_string()).collect()
-}
-
-fn llm_config_from_env() -> Result<LlmConfig, String> {
-    if std::env::var("GROQ_API_KEY").is_ok() {
-        let model = std::env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".into());
-        return LlmConfig::groq_from_env(&model).ok_or_else(|| "GROQ_API_KEY set but config failed".into());
-    }
-    if std::env::var("OPENAI_API_KEY").is_ok() {
-        let base = std::env::var("SAID_LLM_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into());
-        let model = std::env::var("SAID_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
-        return LlmConfig::openai_from_env(&model, &base).ok_or_else(|| "OPENAI_API_KEY set but config failed".into());
-    }
-    if let Ok(model) = std::env::var("ANTHROPIC_MODEL") {
-        if let Some(c) = LlmConfig::anthropic_from_env(&model) { return Ok(c); }
-    }
-    Err("no LLM configured: set GROQ_API_KEY (+GROQ_MODEL), or OPENAI_API_KEY + \
-         SAID_LLM_BASE_URL + SAID_LLM_MODEL, or ANTHROPIC_API_KEY + ANTHROPIC_MODEL".into())
 }
 
 fn main() {
@@ -58,7 +40,9 @@ fn run() -> Result<(), String> {
     let test = arg("--test").unwrap_or_default();
     let max_attempts: u32 = arg("--max-attempts").and_then(|s| s.parse().ok()).unwrap_or(3);
 
-    let cfg = llm_config_from_env()?;
+    // LLM config: a `[llm]` TOML file (--llm-config) if given, else env vars.
+    // Keys in the file use ${ENV} placeholders so they never sit in plaintext.
+    let cfg = config::resolve(arg("--llm-config").as_deref())?;
     let provider = said_llm::provider_from_config(&cfg).map_err(|e| format!("llm provider: {}", e))?;
 
     let mut brain = SaidFile::open(&brain_path).map_err(|e| format!("open brain: {}", e))?;

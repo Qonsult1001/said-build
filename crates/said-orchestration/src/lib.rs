@@ -25,6 +25,7 @@
 
 pub mod apply;
 pub mod compress;
+pub mod config;
 pub mod gate;
 pub mod recall;
 pub mod source;
