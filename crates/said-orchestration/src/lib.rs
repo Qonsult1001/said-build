@@ -27,6 +27,7 @@ pub mod apply;
 pub mod compress;
 pub mod gate;
 pub mod recall;
+pub mod source;
 pub mod steps;
 
 pub use apply::apply_change_set;

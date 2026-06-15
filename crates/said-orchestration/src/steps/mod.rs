@@ -34,11 +34,26 @@ pub struct RunConfig {
     pub max_attempts: u32,
     /// The build/test gate (the sole judge of correctness).
     pub gate: GateRunner,
+    /// Project root (for reading real source into the code/repair context).
+    pub repo_root: String,
+    /// Repo-relative files the task is likely to touch. Their ACTUAL content is
+    /// injected into the code/repair prompt so the model anchors on real lines
+    /// (Claude's "Read before Edit" rule). Empty = no source surfaced (the model
+    /// relies on recall only, or it's a new-file task).
+    pub files: Vec<String>,
 }
 
 impl RunConfig {
     pub fn new(brain_path: impl Into<String>, task: impl Into<String>, gate: GateRunner) -> Self {
-        Self { brain_path: brain_path.into(), task: task.into(), max_attempts: 3, gate }
+        let repo_root = gate.cwd.clone();
+        Self {
+            brain_path: brain_path.into(),
+            task: task.into(),
+            max_attempts: 3,
+            gate,
+            repo_root,
+            files: Vec::new(),
+        }
     }
 }
 
@@ -73,6 +88,11 @@ where
 {
     let mut log: Vec<StepLog> = Vec::new();
 
+    // Real source for the code/repair phases — Claude's "Read before Edit": the
+    // model anchors on ACTUAL file lines, not invented ones. Read once, reused.
+    let src = crate::source::source_context(&cfg.repo_root, &cfg.files);
+    let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
+
     // 1. PLAN — read-only.
     let plan = plan::run(brain, provider, &cfg.task).await?;
     log.push(StepLog { step: "plan", detail: plan.output.clone() });
@@ -81,15 +101,24 @@ where
     let design = design::run(brain, provider, &cfg.task).await?;
     log.push(StepLog { step: "design", detail: design.output.clone() });
 
-    // 3. CODE — produce + apply the change-set.
-    let coded = code::run(brain, provider, &cfg.task).await?;
+    // 3. CODE — produce + apply the change-set (with real source in context).
+    let coded = code::run(brain, provider, &cfg.task, src_opt).await?;
     log.push(StepLog { step: "code", detail: coded.output.clone() });
-    apply(&coded.output).map_err(|e| format!("apply (code): {}", e))?;
+    // An apply failure (bad/unsafe anchor) is REPAIRABLE, not fatal — treat it
+    // like a gate failure so the repair loop fixes the anchor. `pending_failure`
+    // carries an apply error into the loop's repair branch (skips the gate run
+    // since nothing valid was applied).
+    let mut pending_failure: Option<String> = apply(&coded.output).err().map(|e| format!("apply (code) failed: {}", e));
 
     // 4. TEST → 5. REPAIR loop. The gate is the sole judge.
     let mut attempts = 1u32;
     loop {
-        let outcome = test::run(&cfg.gate);
+        // If a prior apply failed, that's the failure to repair; otherwise run
+        // the gate.
+        let outcome = match pending_failure.take() {
+            Some(apply_err) => crate::gate::GateOutcome { green: false, output: apply_err, failed_step: "apply".into() },
+            None => test::run(&cfg.gate),
+        };
         log.push(StepLog { step: "test", detail: format!("green={} ({})", outcome.green, outcome.failed_step) });
         if outcome.green {
             // 6. LEARN — LLM authors the structured iteration note, .said
@@ -107,10 +136,20 @@ where
             log.push(StepLog { step: "stop", detail: "max attempts reached; not merging red".into() });
             return Ok(RunOutcome { green: false, attempts, log });
         }
-        // REPAIR — feed the gate error + recalled errors-to-avoid back.
-        let fix = repair::run(brain, provider, &cfg.task, &outcome.output).await?;
+        // REPAIR — feed the gate error + real source + recalled errors-to-avoid
+        // back. Re-read source each attempt (a prior apply changed the file, so
+        // anchors must reflect the CURRENT state — Claude re-reads after a write).
+        let cur_src = crate::source::source_context(&cfg.repo_root, &cfg.files);
+        let repair_extra = if cur_src.is_empty() {
+            outcome.output.clone()
+        } else {
+            format!("# Gate failure\n{}\n\n{}", outcome.output, cur_src)
+        };
+        let fix = repair::run(brain, provider, &cfg.task, &repair_extra).await?;
         log.push(StepLog { step: "repair", detail: fix.output.clone() });
-        apply(&fix.output).map_err(|e| format!("apply (repair): {}", e))?;
+        // A repair apply failure is also repairable — carry it into the next
+        // iteration instead of aborting (bounded by max_attempts).
+        pending_failure = apply(&fix.output).err().map(|e| format!("apply (repair) failed: {}", e));
         attempts += 1;
     }
 }

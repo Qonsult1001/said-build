@@ -121,10 +121,12 @@ Rules (non-negotiable):
 - Default to no comments; add one only where the WHY is non-obvious.
 
 Output the change-set as JSON ONLY, in this exact shape:
-{"edits":[{"file":"<path relative to repo root>","mode":"<insert-after-text|insert-before-text|replace-text>","anchor":"<an EXACT, UNIQUE existing line/substring in the file>","content":"<the new code>"}]}
-- "anchor" must be copied VERBATIM from the current file so it resolves uniquely.
-- "insert-after-text"/"insert-before-text": content is inserted relative to the anchor line.
-- "replace-text": the first occurrence of "anchor" is replaced by "content".
+{"edits":[{"file":"<path relative to repo root>","mode":"<insert-after-text|insert-before-text|replace-text>","anchor":"<an EXACT, UNIQUE existing line/substring from the CURRENT SOURCE shown above>","content":"<the new code>"}]}
+- For "insert-after-text", pick "anchor" by copying ONE line VERBATIM from the "SAFE anchor lines" menu in the context above. Those are pre-vetted complete statement-enders. Do NOT reconstruct, shorten, or merge lines — copy one exactly as listed. If no menu is present, copy an existing line that ends in `;`, `}`, or `{` from the source.
+- NEVER anchor on the first line of a multi-line statement (e.g. an `app.MapGet(...)` whose `.AllowAnonymous();` is on the NEXT line) — that splits the statement and breaks the build.
+- "content" MUST be a COMPLETE, COMPILABLE statement — include every required terminator (e.g. a trailing `;`) and any required call (e.g. `.AllowAnonymous();` for an anonymous endpoint). A half-written line will fail the build.
+- Prefer ONE precise edit over several. Each edit must stand on its own.
+- "insert-after-text"/"insert-before-text": content is inserted relative to the anchor line. "replace-text": the first occurrence of "anchor" is replaced by "content".
 Do not claim it works — the build/test gate verifies that next."#;
 
 pub const TEST: &str = r#"You are verifying a coding change. The build/test gate is the sole judge of correctness.

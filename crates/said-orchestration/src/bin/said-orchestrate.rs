@@ -64,12 +64,26 @@ fn run() -> Result<(), String> {
     let mut brain = SaidFile::open(&brain_path).map_err(|e| format!("open brain: {}", e))?;
     brain.auto_load_encoder();
 
+    // Files to surface into the code/repair context (Claude's "Read before
+    // Edit"): comma-separated, repo-relative. Optional — without it the model
+    // relies on recall only and may hallucinate anchors.
+    let files: Vec<String> = arg("--files")
+        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+        .unwrap_or_default();
+
     let gate = GateRunner {
         cwd: repo.clone(),
         build: split_cmd(&build),
         test: if test.trim().is_empty() { Vec::new() } else { split_cmd(&test) },
     };
-    let run_cfg = steps::RunConfig { brain_path, task: task.clone(), max_attempts, gate };
+    let run_cfg = steps::RunConfig {
+        brain_path,
+        task: task.clone(),
+        max_attempts,
+        gate,
+        repo_root: repo.clone(),
+        files,
+    };
 
     let repo_for_apply = repo.clone();
     let apply = move |change_set: &str| apply_change_set(&repo_for_apply, change_set).map(|_| ());

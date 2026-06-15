@@ -92,21 +92,89 @@ fn extract_json(s: &str) -> Option<serde_json::Value> {
     None
 }
 
+/// Find the actual file line matching `anchor`, tolerating whitespace
+/// differences (Claude's `findActualString` idea). Returns the file's real
+/// substring so resolve/replace operate on exact bytes. Exact match first; then
+/// a whitespace-collapsed comparison per line.
+fn resolve_anchor_tolerant(content: &str, anchor: &str) -> Option<String> {
+    // Exact substring (fast path — what resolve_text_anchor uses).
+    if content.lines().any(|l| l.contains(anchor)) {
+        return Some(anchor.to_string());
+    }
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let na = norm(anchor);
+    if na.is_empty() {
+        return None;
+    }
+    // Single-line whitespace-tolerant match.
+    for line in content.lines() {
+        if norm(line).contains(&na) {
+            return Some(line.trim().to_string());
+        }
+    }
+    // MULTI-LINE match: the model often collapses a multi-line statement (e.g.
+    // `app.MapGet(...)\n  .AllowAnonymous();`) into one anchor line, joining the
+    // parts with or without a space. Compare with ALL whitespace removed so the
+    // join style doesn't matter; on a hit, return the LAST line of the span — the
+    // statement-ending line, the safe insert-after anchor (Advisory's lesson).
+    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let sa = strip(anchor);
+    let lines: Vec<&str> = content.lines().collect();
+    for start in 0..lines.len() {
+        let mut window = String::new();
+        for end in start..lines.len().min(start + 8) {
+            window.push_str(&strip(lines[end]));
+            if window.contains(&sa) {
+                return Some(lines[end].trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// True if `file_line` ends a complete statement/block — safe to insert AFTER
+/// without splitting a multi-line statement. Guards the multi-line hazard: a
+/// `app.MapGet(...)` whose `.AllowAnonymous();` is on the next line is NOT a safe
+/// insert-after anchor (Advisory's RealEndpointAnchors lesson). Statement-enders
+/// end in ; } { (or a line comment / blank).
+fn ends_statement(content: &str, anchor: &str) -> bool {
+    // Find the actual file line containing the (already-resolved) anchor.
+    let line = content.lines().find(|l| l.contains(anchor)).unwrap_or(anchor);
+    let t = line.trim_end();
+    t.ends_with(';') || t.ends_with('}') || t.ends_with('{') || t.is_empty()
+        || t.ends_with("*/")
+}
+
 /// Resolve one text-anchored edit to a bounded `EditOp` over the file content.
 fn to_edit_op(content: &str, e: &ChangeEdit) -> Result<EditOp, String> {
     match e.mode.as_str() {
         "insert-after-text" => {
-            let line = edit::resolve_text_anchor(content, &e.anchor)?;
+            let anchor = resolve_anchor_tolerant(content, &e.anchor)
+                .ok_or_else(|| format!("anchor text not found: {:?}", e.anchor))?;
+            // Guard: inserting after a line that does NOT end a statement would
+            // split a multi-line statement (the build-break we hit live). Reject
+            // so repair picks a statement-ending anchor instead.
+            if !ends_statement(content, &anchor) {
+                return Err(format!(
+                    "unsafe insert-after anchor (mid-statement — does not end in ; }} or {{): {:?}. \
+                     Anchor on a line that ENDS a complete statement.",
+                    anchor
+                ));
+            }
+            let line = edit::resolve_text_anchor(content, &anchor)?;
             Ok(EditOp::InsertAfterLine { line, text: e.content.clone() })
         }
         "insert-before-text" => {
-            let line = edit::resolve_text_anchor(content, &e.anchor)?;
+            let anchor = resolve_anchor_tolerant(content, &e.anchor)
+                .ok_or_else(|| format!("anchor text not found: {:?}", e.anchor))?;
+            let line = edit::resolve_text_anchor(content, &anchor)?;
             Ok(EditOp::InsertBeforeLine { line, text: e.content.clone() })
         }
-        "replace-text" => Ok(EditOp::ReplaceSubstring {
-            needle: e.anchor.clone(),
-            replacement: e.content.clone(),
-        }),
+        "replace-text" => {
+            let needle = resolve_anchor_tolerant(content, &e.anchor)
+                .ok_or_else(|| format!("anchor text not found: {:?}", e.anchor))?;
+            Ok(EditOp::ReplaceSubstring { needle, replacement: e.content.clone() })
+        }
         other => Err(format!(
             "unsupported mode '{}' (orchestrator apply handles text-anchored modes: \
              insert-after-text | insert-before-text | replace-text)",
@@ -170,6 +238,34 @@ mod tests {
         let got = std::fs::read_to_string(&f).unwrap();
         assert!(got.contains("hello said"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multiline_anchor_resolves_to_ending_line() {
+        // Model collapsed a 2-line statement into one anchor; resolver should
+        // map it to the statement-ending line (.AllowAnonymous();).
+        let content = "app.MapGet(\"/api/health\", () => Results.Ok(new { status = \"ok\" }))\n   .AllowAnonymous();\napp.Run();\n";
+        let collapsed = "app.MapGet(\"/api/health\", () => Results.Ok(new { status = \"ok\" })).AllowAnonymous();";
+        let resolved = resolve_anchor_tolerant(content, collapsed).unwrap();
+        assert_eq!(resolved, ".AllowAnonymous();");
+        // And it's a valid statement-ender → insert-after is allowed.
+        let e = ChangeEdit { file: "f".into(), mode: "insert-after-text".into(), anchor: collapsed.into(), content: "x".into() };
+        assert!(to_edit_op(content, &e).is_ok());
+    }
+
+    #[test]
+    fn rejects_mid_statement_insert_after() {
+        // Anchor on the FIRST line of a multi-line statement → must be rejected.
+        let content = "app.MapGet(\"/x\", () => 1)\n   .AllowAnonymous();\n";
+        let e = ChangeEdit {
+            file: "f".into(), mode: "insert-after-text".into(),
+            anchor: "app.MapGet(\"/x\", () => 1)".into(), content: "y".into(),
+        };
+        assert!(to_edit_op(content, &e).is_err());
+        // Anchoring on the statement-ending line is fine.
+        let mut e2 = e.clone();
+        e2.anchor = ".AllowAnonymous();".into();
+        assert!(to_edit_op(content, &e2).is_ok());
     }
 
     #[test]

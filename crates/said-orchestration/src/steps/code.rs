@@ -18,6 +18,9 @@ pub async fn run(
     brain: &mut sca_core::said_file::SaidFile,
     provider: &dyn LlmProvider,
     task: &str,
+    source: Option<&str>,
 ) -> Result<PhaseResult, String> {
-    run_phase(brain, provider, Phase::Code, task, None).await
+    // `source` = the real file content (Claude's "Read before Edit") so the model
+    // anchors on actual lines. Goes into the phase context as extra.
+    run_phase(brain, provider, Phase::Code, task, source).await
 }
