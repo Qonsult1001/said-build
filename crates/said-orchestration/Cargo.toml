@@ -1,0 +1,23 @@
+[package]
+name = "said-orchestration"
+version = "0.1.0"
+edition = "2021"
+description = "Closed-loop coding orchestrator for .said — drives ANY external LLM through the Claude-Code lifecycle (plan/design/code/test/repair) using said-prompts (the playbook) + .said memory (the story) + said-llm (the model). A SEPARATE process per the BYO-LLM rule; the core .said binary never calls an LLM."
+license = "MIT"
+
+[dependencies]
+# Memory: recall verified iterations, apply edits, record outcomes.
+sca-core = { path = "../sca-core", features = ["static-embed", "code"] }
+# Prompts: the canonical phase prompts (plan/design/code/test/repair).
+said-prompts = { path = "../said-prompts" }
+# LLM: the BYO-LLM provider plugin (Anthropic / OpenAI-compatible / Claude-CLI).
+said-llm = { path = "../said-llm" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+# Run the loop against a deterministic stub LLM in tests (no network).
+said-llm = { path = "../said-llm", features = ["stub-llm"] }

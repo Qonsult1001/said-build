@@ -230,22 +230,6 @@ enum Commands {
         #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
     },
-    /// ORCHESTRATOR — emit the standard PROMPT for a lifecycle phase, filled with
-    /// the task + recalled project memory (prior iterations/conventions/errors).
-    /// This is the "playbook": send the output to ANY external LLM to run the
-    /// Claude-Code workflow phase-by-phase. The build/test gate (not this prompt)
-    /// is the judge of correctness. Phases: plan|design|code|test|repair.
-    PhasePrompt {
-        /// Which phase: plan | design | code | test | repair.
-        phase: String,
-        /// The coding task / problem, in plain words.
-        #[arg(long)]
-        task: String,
-        /// Extra context to append (e.g. gate error output for the repair phase),
-        /// in addition to what .said recalls from memory.
-        #[arg(long)]
-        extra: Option<String>,
-    },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
@@ -1266,8 +1250,6 @@ fn main() {
                 note_file.as_deref(), files.as_deref(), errors.as_deref(), learnings.as_deref(), label.as_deref(), cli.json),
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
-        Commands::PhasePrompt { ref phase, ref task, ref extra } =>
-            cmd_phase_prompt(cli.path.as_deref(), phase, task, extra.as_deref(), cli.json),
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -6609,49 +6591,6 @@ fn best_fix_for(brain: &mut sca_core::said_file::SaidFile, problem: &str) -> Opt
         }
     }
     best
-}
-
-/// Build a filled phase prompt: parse phase, recall the most relevant verified
-/// iteration's FULL story as context (what lets a weak LLM run the workflow),
-/// append caller extra, fill the template. Used by `phase-prompt` (the external
-/// LLM agent fetches this prompt + recalled memory and runs the model itself).
-fn build_phase_prompt(
-    brain: &mut sca_core::said_file::SaidFile, phase: &str, task: &str, extra: Option<&str>,
-) -> Result<(sca_core::coding_memory::Phase, String, bool), String> {
-    use sca_core::coding_memory::{Phase, fill_phase_prompt};
-    let ph = Phase::parse(phase)
-        .ok_or_else(|| format!("unknown phase '{}' (use: plan|design|code|test|repair)", phase))?;
-    let mut context = String::new();
-    if let Some((doc_id, score)) = best_fix_for(brain, task) {
-        let body = brain.get(&doc_id).unwrap_or_default();
-        let note = fix_note(&body);
-        if !note.is_empty() {
-            context.push_str(&format!("# Recalled verified iteration (match {:.2})\n{}\n", score, note));
-        }
-    }
-    if let Some(e) = extra {
-        if !e.trim().is_empty() {
-            context.push_str(&format!("\n# Current attempt context\n{}\n", e.trim()));
-        }
-    }
-    let has_ctx = !context.is_empty();
-    let prompt = fill_phase_prompt(ph.default_prompt(), task, &context);
-    Ok((ph, prompt, has_ctx))
-}
-
-/// ORCHESTRATOR — emit a phase prompt filled with task + recalled project memory.
-fn cmd_phase_prompt(path: Option<&str>, phase: &str, task: &str, extra: Option<&str>, json: bool) -> Result<(), String> {
-    let mut brain = open_brain(path)?;
-    let (ph, prompt, has_ctx) = build_phase_prompt(&mut brain, phase, task, extra)?;
-    if json {
-        println!("{}", serde_json::json!({
-            "ok": true, "phase": ph.name(), "task": task,
-            "has_recalled_context": has_ctx, "prompt": prompt,
-        }));
-    } else {
-        println!("{}", prompt);
-    }
-    Ok(())
 }
 
 fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {

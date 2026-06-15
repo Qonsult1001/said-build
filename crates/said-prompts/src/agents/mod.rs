@@ -6,3 +6,4 @@
 //! (Anthropic's Explore / Plan / Verification model adapted for .said).
 
 pub mod answerer;
+pub mod coding;

@@ -29,6 +29,9 @@
 //! function and wiring it into [`assemble`].
 
 pub mod agents;
+/// Coding-lifecycle phase prompts (plan/design/code/test/repair) — re-exported
+/// for native callers (the said-orchestration agent, said-cli, MCP).
+pub use agents::coding;
 pub mod conversation;
 pub mod core;
 pub mod mcp;

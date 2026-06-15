@@ -1,0 +1,170 @@
+//! The Claude-Code lifecycle, ONE FILE PER STEP, run in a fixed order.
+//!
+//! This module is the single place that shows exactly which steps are always
+//! followed and in what sequence. Each sub-module is one step; [`run`] is the
+//! pipeline. Adding/removing/reordering a step is a visible change here.
+//!
+//! Order (always):
+//!   1. [`plan`]   — read-only exploration + approach        (Claude: plan mode)
+//!   2. [`design`] — structure consistent with conventions   (Claude: design)
+//!   3. [`code`]   — surgical edits                           (Claude: code)
+//!   4. [`test`]   — run the gate                             (Claude: verify)
+//!   5. [`repair`] — on red, fix + re-gate (bounded loop)     (Claude: repair)
+//!   6. [`learn`]  — on green, store the iteration            (Claude: memory)
+
+pub mod plan;
+pub mod design;
+pub mod code;
+pub mod test;
+pub mod repair;
+pub mod learn;
+
+use crate::gate::GateRunner;
+use crate::PhaseResult;
+use said_llm::{CompletionRequest, LlmProvider};
+use said_prompts::coding::{phase_prompt, CodingContext, Phase};
+
+/// Configuration for one orchestration run.
+pub struct RunConfig {
+    /// Path to the `.said` brain (project memory).
+    pub brain_path: String,
+    /// The coding task in plain words.
+    pub task: String,
+    /// Max repair attempts before giving up (the loop never merges red).
+    pub max_attempts: u32,
+    /// The build/test gate (the sole judge of correctness).
+    pub gate: GateRunner,
+}
+
+impl RunConfig {
+    pub fn new(brain_path: impl Into<String>, task: impl Into<String>, gate: GateRunner) -> Self {
+        Self { brain_path: brain_path.into(), task: task.into(), max_attempts: 3, gate }
+    }
+}
+
+/// A record of what one step did (for the caller's transcript / audit).
+#[derive(Debug, Clone)]
+pub struct StepLog {
+    pub step: &'static str,
+    pub detail: String,
+}
+
+/// The result of a full run.
+#[derive(Debug, Clone)]
+pub struct RunOutcome {
+    pub green: bool,
+    pub attempts: u32,
+    pub log: Vec<StepLog>,
+}
+
+/// Run the full lifecycle in the fixed order. `apply` is the caller-supplied
+/// closure that turns a code/repair step's change-set output into actual file
+/// edits (kept injectable so the orchestrator stays testable and the apply
+/// strategy — `said edit` anchored ops — is pluggable). Returns the outcome;
+/// green ONLY when the gate passes.
+pub async fn run<A>(
+    brain: &mut sca_core::said_file::SaidFile,
+    provider: &dyn LlmProvider,
+    cfg: &RunConfig,
+    mut apply: A,
+) -> Result<RunOutcome, String>
+where
+    A: FnMut(&str) -> Result<(), String>,
+{
+    let mut log: Vec<StepLog> = Vec::new();
+
+    // 1. PLAN — read-only.
+    let plan = plan::run(brain, provider, &cfg.task).await?;
+    log.push(StepLog { step: "plan", detail: plan.output.clone() });
+
+    // 2. DESIGN — structure/conventions.
+    let design = design::run(brain, provider, &cfg.task).await?;
+    log.push(StepLog { step: "design", detail: design.output.clone() });
+
+    // 3. CODE — produce + apply the change-set.
+    let coded = code::run(brain, provider, &cfg.task).await?;
+    log.push(StepLog { step: "code", detail: coded.output.clone() });
+    apply(&coded.output).map_err(|e| format!("apply (code): {}", e))?;
+
+    // 4. TEST → 5. REPAIR loop. The gate is the sole judge.
+    let mut attempts = 1u32;
+    loop {
+        let outcome = test::run(&cfg.gate);
+        log.push(StepLog { step: "test", detail: format!("green={} ({})", outcome.green, outcome.failed_step) });
+        if outcome.green {
+            // 6. LEARN — LLM authors the structured iteration note, .said
+            //    compresses + stores it (Claude's session-memory move). The
+            //    transcript is the whole verified story for the extraction.
+            let transcript = format!(
+                "TASK: {}\n\n## Plan\n{}\n\n## Design\n{}\n\n## Code (verified change-set)\n{}\n\n## Gate\n{}",
+                cfg.task, plan.output, design.output, coded.output, outcome.output
+            );
+            learn::run(brain, provider, &cfg.task, &transcript, &coded.output).await?;
+            log.push(StepLog { step: "learn", detail: "authored + compressed + stored iteration".into() });
+            return Ok(RunOutcome { green: true, attempts, log });
+        }
+        if attempts >= cfg.max_attempts {
+            log.push(StepLog { step: "stop", detail: "max attempts reached; not merging red".into() });
+            return Ok(RunOutcome { green: false, attempts, log });
+        }
+        // REPAIR — feed the gate error + recalled errors-to-avoid back.
+        let fix = repair::run(brain, provider, &cfg.task, &outcome.output).await?;
+        log.push(StepLog { step: "repair", detail: fix.output.clone() });
+        apply(&fix.output).map_err(|e| format!("apply (repair): {}", e))?;
+        attempts += 1;
+    }
+}
+
+/// Shared: build a phase prompt (said-prompts) filled with recalled memory
+/// (sca-core), call the LLM (said-llm), return the model's free-form output.
+/// Every step routes through here so the compose-three-pieces logic lives once.
+pub(crate) async fn run_phase(
+    brain: &mut sca_core::said_file::SaidFile,
+    provider: &dyn LlmProvider,
+    phase: Phase,
+    task: &str,
+    extra: Option<&str>,
+) -> Result<PhaseResult, String> {
+    let mut context = String::new();
+    if let Some(hit) = crate::recall::best_iteration(brain, task) {
+        context.push_str(&format!(
+            "# Recalled verified iteration (match {:.2})\n{}\n",
+            hit.score, hit.note
+        ));
+    }
+    if let Some(e) = extra {
+        if !e.trim().is_empty() {
+            context.push_str(&format!("\n# Current attempt context\n{}\n", e.trim()));
+        }
+    }
+    let had_ctx = !context.is_empty();
+    let prompt = phase_prompt(phase, &CodingContext { task: task.to_string(), context });
+
+    let req = CompletionRequest {
+        system: "You are a coding assistant driven by .said memory. Follow the instructions \
+                 exactly. Return your answer as JSON: {\"output\": \"<your full answer>\"}."
+            .to_string(),
+        user: prompt.clone(),
+        cacheable_prelude: None,
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": { "output": { "type": "string" } },
+            "required": ["output"],
+            "additionalProperties": false
+        }),
+        schema_name: "phase_output".to_string(),
+        max_output_tokens: 4096,
+        temperature: 0.2,
+    };
+    let resp = provider
+        .complete(&req)
+        .await
+        .map_err(|e| format!("llm completion ({}): {}", phase.name(), e))?;
+    let output = resp
+        .json
+        .get("output")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&resp.raw)
+        .to_string();
+    Ok(PhaseResult { phase: phase.name(), prompt, output, had_recalled_context: had_ctx })
+}
