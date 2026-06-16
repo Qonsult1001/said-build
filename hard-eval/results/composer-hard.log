@@ -1,0 +1,11 @@
+h1_lru  algorithmic  pass=1  att=2  529s
+h2_intervals  bugfix  pass=1  att=1  55s
+h3_store  feature  pass=1  att=1  46s
+h4_ratelimiter  scratch  pass=1  att=1  100s
+=== composer done -> /g/development/said-build/hard-eval/results/composer.csv ===
+ticket,type,tag,model,pass,attempts,secs
+h1_lru,algorithmic,composer,composer-2.5,1,2,529
+h2_intervals,bugfix,composer,composer-2.5,1,1,55
+h3_store,feature,composer,composer-2.5,1,1,46
+h1_lru,algorithmic,composer,composer-2.5,1,1,583
+h4_ratelimiter,scratch,composer,composer-2.5,1,1,100

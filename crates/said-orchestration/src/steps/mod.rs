@@ -100,16 +100,15 @@ where
     // Real source for the code/repair phases — Claude's "Read before Edit". When
     // memory has a verified iteration for this SHAPE, append its LEARNING (the
     // approach/gotchas note) + the reference implementation as authoritative
-    // guidance the model adapts. The gate is still the judge.
+    // guidance the model ADAPTS. We NEVER replay the stored diff verbatim: a fix
+    // is never exact across codebases, and a paste that only works on an identical
+    // file proves nothing. The moat is transferred UNDERSTANDING — the model adapts
+    // the learning to THIS codebase; the gate is still the judge.
     let mut src = crate::source::source_context(&cfg.repo_root, &cfg.files);
     if let Some(hit) = &recalled {
         log.push(StepLog { step: "memory", detail: format!("transferring verified learning (match {:.2})", hit.score) });
-        src.push_str(&format!(
-            "\n# VERIFIED LEARNING from memory (match {:.2}) — a previous GREEN solution to a task of this SHAPE.\n\
-             This is the known-good APPROACH and a reference implementation. ADAPT it to the current file/codebase \
-             (names, anchors, surrounding code differ); reuse the verified logic/structure rather than re-deriving.\n\
-             ## What was learned + the recipe\n{}\n## Reference verified change-set\n{}\n",
-            hit.score, hit.note, hit.edits_json));
+        src.push('\n');
+        src.push_str(&said_prompts::coding::fill_memory_injection(hit.score, &hit.note, &hit.edits_json));
     }
     let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
 
@@ -205,14 +204,9 @@ pub(crate) async fn run_phase(
     // (plan/design/test) return {"output":"..."} and we unwrap it.
     let emits_change_set = matches!(phase, Phase::Code | Phase::Repair);
     let system = if emits_change_set {
-        "You are a coding assistant driven by .said memory. Follow the instructions exactly. \
-         Output ONLY the change-set JSON the instructions specify (a top-level {\"edits\":[...]} \
-         object). No prose, no markdown."
-            .to_string()
+        said_prompts::coding::SYSTEM_CHANGESET.to_string()
     } else {
-        "You are a coding assistant driven by .said memory. Follow the instructions exactly. \
-         Return your answer as JSON: {\"output\": \"<your full answer>\"}."
-            .to_string()
+        said_prompts::coding::SYSTEM_PROSE.to_string()
     };
 
     let req = CompletionRequest {

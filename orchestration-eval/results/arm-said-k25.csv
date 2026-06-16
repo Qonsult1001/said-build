@@ -1,0 +1,8 @@
+ticket,bucket,arm,model,pass,attempts,secs
+r1,recurring,said-k2.5,kimi-k2.5,0,0,47
+r2,recurring,said-k2.5,kimi-k2.5,0,0,102
+r3,recurring,said-k2.5,kimi-k2.5,0,0,193
+r4,recurring,said-k2.5,kimi-k2.5,0,0,46
+r5,recurring,said-k2.5,kimi-k2.5,0,0,43
+r6,recurring,said-k2.5,kimi-k2.5,0,0,43
+n1,novel,said-k2.5,kimi-k2.5,0,0,67

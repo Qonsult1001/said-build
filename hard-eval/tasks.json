@@ -1,0 +1,10 @@
+{ "tasks": [
+  { "id":"h1_lru","type":"algorithmic","files":"src/h1_lru.js",
+    "task":"Implement the LRUCache class in src/h1_lru.js per its spec: O(1) get/put, get counts as a use, put updates count as a use, evict least-recently-used when over capacity, get returns -1 if absent. Make node test/h1_lru.test.js pass." },
+  { "id":"h2_intervals","type":"bugfix","files":"src/h2_intervals.js",
+    "task":"Fix the bugs in mergeIntervals in src/h2_intervals.js so node test/h2_intervals.test.js passes: it must sort by start first, merge touching intervals (<= boundary), and must not mutate the input arrays." },
+  { "id":"h3_store","type":"feature","files":"src/h3_store.js",
+    "task":"Add TTL expiry to the Store class in src/h3_store.js: set(k,v,ttlMs) expires the key ttlMs after set (using this.now()); expired keys are absent for get/has/size and cleaned lazily; non-TTL keys never expire; re-set refreshes ttl. Do not break existing behaviour. Make node test/h3_store.test.js pass." },
+  { "id":"h4_ratelimiter","type":"scratch","files":"src/h4_ratelimiter.js",
+    "task":"Implement the token-bucket RateLimiter in src/h4_ratelimiter.js per spec: starts full, continuous fractional refill at refillPerSec capped at capacity, tryRemove(n,now) deducts only if enough tokens (else false, no deduction), available(now) returns current tokens. Make node test/h4_ratelimiter.test.js pass." }
+] }

@@ -1,0 +1,5 @@
+ticket,type,tag,model,pass,attempts,secs
+h1_lru,algorithmic,said-gptoss,openai/gpt-oss-120b,0,5,65
+h2_intervals,bugfix,said-gptoss,openai/gpt-oss-120b,1,1,9
+h3_store,feature,said-gptoss,openai/gpt-oss-120b,1,1,11
+h4_ratelimiter,scratch,said-gptoss,openai/gpt-oss-120b,1,1,12

@@ -1,0 +1,30 @@
+{
+  "_comment": "12 gate-checkable JS tickets for the K2.5(.said) vs Composer-2.5 paired test. Each: a stubbed src file + a node test gate that is RED until the function is implemented. 6 recurring (same shape: implement one pure function to spec) + 6 novel (varied shapes). Gate = `node test/<id>.test.js` exits 0.",
+  "tickets": [
+    { "id": "r1", "bucket": "recurring", "file": "src/r1.js", "fn": "add",
+      "task": "Implement add(a, b) in src/r1.js to return the sum of two numbers." },
+    { "id": "r2", "bucket": "recurring", "file": "src/r2.js", "fn": "max",
+      "task": "Implement max(arr) in src/r2.js to return the largest number in a non-empty array." },
+    { "id": "r3", "bucket": "recurring", "file": "src/r3.js", "fn": "reverse",
+      "task": "Implement reverse(s) in src/r3.js to return the input string reversed." },
+    { "id": "r4", "bucket": "recurring", "file": "src/r4.js", "fn": "isEven",
+      "task": "Implement isEven(n) in src/r4.js to return true if n is an even integer, else false." },
+    { "id": "r5", "bucket": "recurring", "file": "src/r5.js", "fn": "sum",
+      "task": "Implement sum(arr) in src/r5.js to return the sum of all numbers in the array (0 for empty)." },
+    { "id": "r6", "bucket": "recurring", "file": "src/r6.js", "fn": "countVowels",
+      "task": "Implement countVowels(s) in src/r6.js to return the number of vowels (a,e,i,o,u, case-insensitive) in the string." },
+
+    { "id": "n1", "bucket": "novel", "file": "src/n1.js", "fn": "fib",
+      "task": "Implement fib(n) in src/n1.js returning the nth Fibonacci number (fib(0)=0, fib(1)=1)." },
+    { "id": "n2", "bucket": "novel", "file": "src/n2.js", "fn": "isPalindrome",
+      "task": "Implement isPalindrome(s) in src/n2.js: true if s reads the same forwards and backwards ignoring case and non-alphanumeric chars." },
+    { "id": "n3", "bucket": "novel", "file": "src/n3.js", "fn": "romanToInt",
+      "task": "Implement romanToInt(s) in src/n3.js converting a Roman numeral string (I,V,X,L,C,D,M) to its integer value." },
+    { "id": "n4", "bucket": "novel", "file": "src/n4.js", "fn": "groupBy",
+      "task": "Implement groupBy(arr, keyFn) in src/n4.js returning an object mapping each keyFn(item) to the array of items with that key, preserving order." },
+    { "id": "n5", "bucket": "novel", "file": "src/n5.js", "fn": "debounceCount",
+      "task": "Implement debounceCount(events, windowMs) in src/n5.js: given an array of {t} timestamps (ms, ascending), return how many events remain after collapsing any event within windowMs of the previously KEPT event (the first is always kept)." },
+    { "id": "n6", "bucket": "novel", "file": "src/n6.js", "fn": "parseQuery",
+      "task": "Implement parseQuery(qs) in src/n6.js parsing a URL query string like 'a=1&b=two&a=3' into an object; repeated keys become an array in order: {a:['1','3'], b:'two'}. Leading '?' is optional. Empty string -> {}." }
+  ]
+}

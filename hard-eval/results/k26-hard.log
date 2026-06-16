@@ -1,0 +1,11 @@
+h1_lru  algorithmic  pass=0  att=0  34s
+rm: cannot remove '/g/development/said-build/hard-eval/repo/src/h3_index.js': Permission denied
+h2_intervals  bugfix  pass=0  att=1  58s
+h3_store  feature  pass=1  att=1  70s
+h4_ratelimiter  scratch  pass=0  att=5  59s
+=== said-k26 done -> /g/development/said-build/hard-eval/results/said-k26.csv ===
+ticket,type,tag,model,pass,attempts,secs
+h1_lru,algorithmic,said-k26,moonshotai/kimi-k2.6,0,0,34
+h2_intervals,bugfix,said-k26,moonshotai/kimi-k2.6,0,1,58
+h3_store,feature,said-k26,moonshotai/kimi-k2.6,1,1,70
+h4_ratelimiter,scratch,said-k26,moonshotai/kimi-k2.6,0,5,59

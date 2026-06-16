@@ -1,0 +1,5 @@
+ticket,type,tag,model,pass,attempts,secs
+h1_lru,algorithmic,said-k26,moonshotai/kimi-k2.6,0,0,34
+h2_intervals,bugfix,said-k26,moonshotai/kimi-k2.6,0,1,58
+h3_store,feature,said-k26,moonshotai/kimi-k2.6,1,1,70
+h4_ratelimiter,scratch,said-k26,moonshotai/kimi-k2.6,0,5,59

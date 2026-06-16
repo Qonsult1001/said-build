@@ -1,0 +1,13 @@
+ticket,bucket,arm,model,pass,attempts,secs
+r1,recurring,said-k2.6-instant,kimi-k2.6,1,1,30
+r2,recurring,said-k2.6-instant,kimi-k2.6,1,1,30
+r3,recurring,said-k2.6-instant,kimi-k2.6,1,1,43
+r4,recurring,said-k2.6-instant,kimi-k2.6,1,1,42
+r5,recurring,said-k2.6-instant,kimi-k2.6,1,1,25
+r6,recurring,said-k2.6-instant,kimi-k2.6,1,2,41
+n1,novel,said-k2.6-instant,kimi-k2.6,1,1,43
+n2,novel,said-k2.6-instant,kimi-k2.6,1,1,51
+n3,novel,said-k2.6-instant,kimi-k2.6,1,1,34
+n4,novel,said-k2.6-instant,kimi-k2.6,1,1,27
+n5,novel,said-k2.6-instant,kimi-k2.6,1,2,52
+n6,novel,said-k2.6-instant,kimi-k2.6,1,1,47

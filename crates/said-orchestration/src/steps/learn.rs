@@ -39,9 +39,7 @@ pub async fn run(
         .replace("{{transcript}}", transcript.trim())
         .replace("{{template}}", ITERATION_TEMPLATE);
     let req = CompletionRequest {
-        system: "You write concise, info-dense coding-iteration memory notes. Output ONLY the \
-                 filled-in template as JSON: {\"note\": \"<the full note>\"}."
-            .to_string(),
+        system: said_prompts::coding::SYSTEM_LEARN.to_string(),
         user,
         cacheable_prelude: None,
         schema: serde_json::json!({
@@ -51,7 +49,7 @@ pub async fn run(
             "additionalProperties": false
         }),
         schema_name: "iteration_note".to_string(),
-        max_output_tokens: 4096,
+        max_output_tokens: 32768,
         temperature: 0.2,
         json_object: true,
     };
