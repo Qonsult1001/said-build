@@ -88,9 +88,29 @@ where
 {
     let mut log: Vec<StepLog> = Vec::new();
 
-    // Real source for the code/repair phases — Claude's "Read before Edit": the
-    // model anchors on ACTUAL file lines, not invented ones. Read once, reused.
-    let src = crate::source::source_context(&cfg.repo_root, &cfg.files);
+    // ── 0. MEMORY: transfer the LEARNING (not the literal diff) ──────────────
+    // A stored fix never applies byte-for-byte across codebases (different files,
+    // anchors, surrounding code). What TRANSFERS is the LEARNING — the verified
+    // approach, gotchas, and a reference implementation — which the LLM ADAPTS to
+    // THIS codebase. So memory TEACHES the model the known-good pattern; the gate
+    // still verifies. This is the moat: .said makes a weak model succeed by
+    // transferring verified learning, not by pasting stale code.
+    let recalled = crate::recall::best_iteration(brain, &cfg.task);
+
+    // Real source for the code/repair phases — Claude's "Read before Edit". When
+    // memory has a verified iteration for this SHAPE, append its LEARNING (the
+    // approach/gotchas note) + the reference implementation as authoritative
+    // guidance the model adapts. The gate is still the judge.
+    let mut src = crate::source::source_context(&cfg.repo_root, &cfg.files);
+    if let Some(hit) = &recalled {
+        log.push(StepLog { step: "memory", detail: format!("transferring verified learning (match {:.2})", hit.score) });
+        src.push_str(&format!(
+            "\n# VERIFIED LEARNING from memory (match {:.2}) — a previous GREEN solution to a task of this SHAPE.\n\
+             This is the known-good APPROACH and a reference implementation. ADAPT it to the current file/codebase \
+             (names, anchors, surrounding code differ); reuse the verified logic/structure rather than re-deriving.\n\
+             ## What was learned + the recipe\n{}\n## Reference verified change-set\n{}\n",
+            hit.score, hit.note, hit.edits_json));
+    }
     let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
 
     // 1. PLAN — read-only.
@@ -206,7 +226,7 @@ pub(crate) async fn run_phase(
             "additionalProperties": false
         }),
         schema_name: "phase_output".to_string(),
-        max_output_tokens: 4096,
+        max_output_tokens: 32768,
         temperature: 0.2,
         // Permissive JSON (json_object), not strict schema (strict mode fails on
         // Groq for arbitrary code content). Proven in Advisory's GroqCycle.

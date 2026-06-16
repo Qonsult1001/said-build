@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 const FIX_KIND_TAG: &str = "coding-fix";
 const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
 const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
+const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 
 /// A recalled verified iteration.
 pub struct Recalled {
@@ -20,11 +21,23 @@ pub struct Recalled {
     /// The full human-readable iteration note (everything before the machine
     /// payload) — the whole story the LLM reloads.
     pub note: String,
+    /// The stored VERIFIED change-set JSON (the edits that built+passed). This is
+    /// what fix-replay applies directly — the moat (no LLM re-derivation).
+    pub edits_json: String,
 }
 
 /// The full iteration note (everything before the machine payload markers).
 fn iteration_note(body: &str) -> String {
     body.split(FIX_EDITS_SEP).next().unwrap_or(body).trim().to_string()
+}
+
+/// The stored change-set JSON (between the edits + action markers).
+fn iteration_edits(body: &str) -> String {
+    let after = match body.split_once(FIX_EDITS_SEP) {
+        Some((_, b)) => b,
+        None => return String::new(),
+    };
+    after.split(FIX_ACTION_SEP).next().unwrap_or(after).trim().to_string()
 }
 
 /// The stored problem (TASK: line) for target-token extraction.
@@ -101,7 +114,11 @@ pub fn best_iteration(brain: &mut SaidFile, task: &str) -> Option<Recalled> {
         };
         let score = 0.9 * action_score + 0.1 * target_score;
         if best.as_ref().map(|b| score > b.score).unwrap_or(true) {
-            best = Some(Recalled { doc_id: doc_id.clone(), score, note: iteration_note(&body) });
+            best = Some(Recalled {
+                doc_id: doc_id.clone(), score,
+                note: iteration_note(&body),
+                edits_json: iteration_edits(&body),
+            });
         }
     }
     best
