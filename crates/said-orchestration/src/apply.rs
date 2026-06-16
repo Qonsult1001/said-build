@@ -132,6 +132,40 @@ fn resolve_anchor_tolerant(content: &str, anchor: &str) -> Option<String> {
     None
 }
 
+/// Find the EXACT substring in `content` to replace for a replace-text edit,
+/// tolerating whitespace/newline differences in the model's anchor. Returns the
+/// real substring from the file (single OR multi-line) so ReplaceSubstring removes
+/// exactly it. Without this, a multi-line anchor collapses to one line and only
+/// part gets replaced (file corruption).
+fn resolve_replace_needle(content: &str, anchor: &str) -> Option<String> {
+    // 1. Exact substring already present.
+    if content.contains(anchor) {
+        return Some(anchor.to_string());
+    }
+    // 2. Whitespace-insensitive search: strip all whitespace from anchor, then
+    //    scan the file for the substring whose stripped form contains it, and
+    //    return that exact original span. Walk windows by char index.
+    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let sa = strip(anchor);
+    if sa.is_empty() { return None; }
+    let chars: Vec<char> = content.chars().collect();
+    // Precompute, for each start index, the stripped length needed.
+    for start in 0..chars.len() {
+        let mut stripped = String::new();
+        let mut end = start;
+        while end < chars.len() && stripped.len() < sa.len() {
+            if !chars[end].is_whitespace() { stripped.push(chars[end]); }
+            end += 1;
+        }
+        if stripped == sa {
+            // Trim trailing whitespace-only chars from the span for a clean needle.
+            let span: String = chars[start..end].iter().collect();
+            return Some(span);
+        }
+    }
+    None
+}
+
 /// True if `file_line` ends a complete statement/block — safe to insert AFTER
 /// without splitting a multi-line statement. Guards the multi-line hazard: a
 /// `app.MapGet(...)` whose `.AllowAnonymous();` is on the next line is NOT a safe
@@ -171,7 +205,12 @@ fn to_edit_op(content: &str, e: &ChangeEdit) -> Result<EditOp, String> {
             Ok(EditOp::InsertBeforeLine { line, text: e.content.clone() })
         }
         "replace-text" => {
-            let needle = resolve_anchor_tolerant(content, &e.anchor)
+            // For replace-text the needle must be the EXACT substring to remove —
+            // multi-line included. resolve_anchor_tolerant collapses to a single
+            // line (fine for insert anchors, WRONG here: it'd replace only part of
+            // a multi-line anchor and corrupt the file). Find the real multi-line
+            // span instead.
+            let needle = resolve_replace_needle(content, &e.anchor)
                 .ok_or_else(|| format!("anchor text not found: {:?}", e.anchor))?;
             Ok(EditOp::ReplaceSubstring { needle, replacement: e.content.clone() })
         }
@@ -251,6 +290,23 @@ mod tests {
         // And it's a valid statement-ender → insert-after is allowed.
         let e = ChangeEdit { file: "f".into(), mode: "insert-after-text".into(), anchor: collapsed.into(), content: "x".into() };
         assert!(to_edit_op(content, &e).is_ok());
+    }
+
+    #[test]
+    fn multiline_replace_text_removes_whole_span() {
+        // The bug: a multi-line replace anchor must replace ALL its lines, not one.
+        let dir = std::env::temp_dir().join(format!("said_repl_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("r.js");
+        std::fs::write(&f, "function add() {\n  throw new Error('x');\n}\nmodule.exports={add};\n").unwrap();
+        // Model's anchor differs in whitespace; replacement is the real impl.
+        let out = r#"{"edits":[{"file":"r.js","mode":"replace-text","anchor":"function add() {\n  throw new Error('x');\n}","content":"function add(a,b){ return a+b; }"}]}"#;
+        apply_change_set(dir.to_str().unwrap(), out).unwrap();
+        let got = std::fs::read_to_string(&f).unwrap();
+        assert!(got.contains("return a+b"), "impl present");
+        assert!(!got.contains("throw new Error"), "old body fully removed");
+        assert_eq!(got.matches("function add").count(), 1, "no duplicated function");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

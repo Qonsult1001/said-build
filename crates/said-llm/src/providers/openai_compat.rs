@@ -75,10 +75,17 @@ impl OpenAICompatibleProvider {
         let is_groq = self.base_url.contains("groq");
         let is_openrouter = self.base_url.contains("openrouter");
         let effort = std::env::var("SAID_LLM_REASONING_EFFORT").unwrap_or_else(|_| "medium".into());
+        // "off"/"none"/"instant" disables reasoning (instant mode) — much faster
+        // on thinking models like k2.5 (thinking is the latency).
+        let reasoning_on = !matches!(effort.as_str(), "off" | "none" | "instant" | "");
 
+        // Temperature: k2.5 THINKING mode wants 1.0 (official rec); 0.2 is "too
+        // conservative, lower quality". SAID_LLM_TEMPERATURE overrides per run.
+        let temperature = std::env::var("SAID_LLM_TEMPERATURE").ok()
+            .and_then(|s| s.parse::<f32>().ok()).unwrap_or(req.temperature);
         let mut body = json!({
             "model": self.model,
-            "temperature": req.temperature,
+            "temperature": temperature,
             "response_format": response_format,
             "messages": [
                 { "role": "system", "content": system },
@@ -87,12 +94,17 @@ impl OpenAICompatibleProvider {
         });
         if is_groq {
             body["max_completion_tokens"] = json!(req.max_output_tokens);
-            body["reasoning_effort"] = json!(effort);
+            if reasoning_on { body["reasoning_effort"] = json!(effort); }
         } else {
             body["max_tokens"] = json!(req.max_output_tokens);
         }
         if is_openrouter {
-            body["reasoning"] = json!({ "effort": effort });
+            if reasoning_on {
+                body["reasoning"] = json!({ "effort": effort });
+            } else {
+                // Instant mode: explicitly disable reasoning.
+                body["reasoning"] = json!({ "enabled": false });
+            }
             if let Ok(order) = std::env::var("SAID_LLM_PROVIDER_ORDER") {
                 let providers: Vec<&str> = order.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
                 if !providers.is_empty() {
@@ -182,6 +194,18 @@ impl LlmProvider for OpenAICompatibleProvider {
     async fn complete(&self, req: &CompletionRequest) -> LlmResult<CompletionResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         let body = self.build_body(req);
+        // Monitoring (SAID_LLM_DEBUG): print what we're sending + live timing so a
+        // slow/hanging call is immediately visible (model, provider pin, effort).
+        let dbg = std::env::var("SAID_LLM_DEBUG").is_ok();
+        if dbg {
+            let prov = body.get("provider").and_then(|p| p.get("order"))
+                .map(|o| o.to_string()).unwrap_or_else(|| "default".into());
+            eprintln!("[llm] -> POST {} model={} provider={} effort={} temp={} max={}",
+                url, self.model, prov,
+                body.get("reasoning").and_then(|r| r.get("effort")).and_then(|v| v.as_str())
+                    .or(body.get("reasoning_effort").and_then(|v| v.as_str())).unwrap_or("-"),
+                req.temperature, req.max_output_tokens);
+        }
         let start = Instant::now();
         let resp = self
             .client
@@ -200,6 +224,9 @@ impl LlmProvider for OpenAICompatibleProvider {
             url: url.clone(),
             message: e.to_string(),
         })?;
+        if dbg {
+            eprintln!("[llm] <- {} in {:.1}s ({} bytes)", status, start.elapsed().as_secs_f32(), raw.len());
+        }
         if !status.is_success() {
             if status.as_u16() == 401 || status.as_u16() == 403 {
                 return Err(LlmError::Llm(format!("openai-compat auth failure: {}", raw)));
