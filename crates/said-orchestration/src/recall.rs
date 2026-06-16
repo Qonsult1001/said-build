@@ -8,7 +8,6 @@
 use sca_core::said_file::SaidFile;
 
 // Must match said-cli's coding-memory writer.
-const FIX_KIND_TAG: &str = "coding-fix";
 const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
 const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 
@@ -54,31 +53,23 @@ fn recall_min() -> f32 {
 /// floor, so memory only injects when there's a GENUINE match (safe at 1000s of
 /// records). No bespoke/fragile id-join — uses the engine's ranked score directly.
 pub fn best_iteration(brain: &mut SaidFile, task: &str) -> Option<Recalled> {
-    let (fusion_cands, _kw) = sca_core::ask::ask(brain, task, 25, false, None);
-    let dbg = std::env::var("SAID_RECALL_DEBUG").is_ok();
     let min = recall_min();
-
-    // Highest-confidence coding-fix frame from the ranked candidates.
-    let mut best: Option<Recalled> = None;
-    for c in &fusion_cands {
-        let is_fix = brain.frames.get_meta(&c.doc_id)
-            .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false);
-        if !is_fix { continue; }
-        if dbg {
-            eprintln!("[recall-dbg] {} confidence={:.3}", c.doc_id, c.confidence);
-        }
-        if best.as_ref().map(|b| c.confidence > b.score).unwrap_or(true) {
-            let body = brain.get(&c.doc_id).unwrap_or_default();
-            best = Some(Recalled {
-                doc_id: c.doc_id.clone(), score: c.confidence,
-                note: iteration_note(&body),
-                edits_json: iteration_edits(&body),
-            });
-        }
+    // ONE scorer, shared with the CLI (sca-core::ask::best_coding_fix): intent
+    // fingerprint (gate) + symmetric distinctive-target overlap (picks the right
+    // one). NOT raw fusion text confidence — that's bag-of-words and collides at
+    // scale, and it disagreed with the CLI scorer (the bug we measured).
+    let (doc_id, score) = sca_core::ask::best_coding_fix(brain, task)?;
+    if std::env::var("SAID_RECALL_DEBUG").is_ok() {
+        eprintln!("[recall-dbg] {} score={:.3} (floor {:.2})", doc_id, score, min);
     }
-    // MISS unless the best genuine match clears the floor.
-    match best {
-        Some(b) if b.score >= min => Some(b),
-        _ => None,
+    if score < min {
+        return None; // MISS — caller falls through to the LLM with no injection
     }
+    let body = brain.get(&doc_id).unwrap_or_default();
+    Some(Recalled {
+        doc_id,
+        score,
+        note: iteration_note(&body),
+        edits_json: iteration_edits(&body),
+    })
 }

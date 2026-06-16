@@ -6539,58 +6539,11 @@ fn cmd_learn_fix(
 }
 
 /// Find the best-matching coding-fix for a problem, returning (doc_id, score).
-/// Shared by `recall-fix` and `phase-prompt` so the proven scoring is one source
-/// of truth. Candidates = coding-fix frames surfaced by fusion recall; scored by
-/// the intent-isolated action fingerprint (the breakthrough) + target overlap.
+/// Shared by `recall-fix` and `phase-prompt`. Delegates to the ONE coding-fix
+/// scorer in sca-core (`ask::best_coding_fix`) so the CLI and the orchestrator can
+/// never diverge — the bug we measured was two different scorers disagreeing.
 fn best_fix_for(brain: &mut sca_core::said_file::SaidFile, problem: &str) -> Option<(String, f32)> {
-    let (fusion_cands, _kw) = sca_core::ask::ask(brain, problem, 25, false, None);
-    let candidate_ids: Vec<String> = fusion_cands.iter()
-        .filter(|c| brain.frames.get_meta(&c.doc_id)
-            .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
-        .map(|c| c.doc_id.clone())
-        .collect();
-    if candidate_ids.is_empty() {
-        return None;
-    }
-    let q_action = sca_core::ask::action_residue(problem);
-    let action_fp: std::collections::HashMap<String, f32> = if q_action.is_empty() {
-        std::collections::HashMap::new()
-    } else {
-        brain.rank_by_fingerprint(&q_action, 100).into_iter()
-            .filter_map(|(d, s)| d.strip_prefix(FIX_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
-            .collect()
-    };
-    let q_action_toks: std::collections::HashSet<String> =
-        q_action.split_whitespace().map(|s| s.to_string()).collect();
-    let q_target_toks: std::collections::HashSet<String> = problem
-        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/'))
-        .filter(|t| t.len() >= 3 && !q_action_toks.contains(&t.to_lowercase()))
-        .map(|t| t.to_lowercase())
-        .collect();
-    let mut best: Option<(String, f32)> = None;
-    for doc_id in candidate_ids {
-        let body = brain.get(&doc_id).unwrap_or_default();
-        let (c_problem, _edits, c_action) = split_fix_body(&body);
-        let c_action_toks: std::collections::HashSet<String> =
-            c_action.split_whitespace().map(|s| s.to_string()).collect();
-        let id16 = doc_id.strip_prefix("fix::").unwrap_or(&doc_id);
-        let action_score = action_fp.get(id16).copied().unwrap_or(0.0);
-        let c_target_toks: std::collections::HashSet<String> = c_problem
-            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/'))
-            .filter(|t| t.len() >= 3)
-            .map(|t| t.to_lowercase())
-            .filter(|t| !c_action_toks.contains(t))
-            .collect();
-        let target_score = if c_target_toks.is_empty() { 0.0 } else {
-            let overlap = c_target_toks.iter().filter(|t| q_target_toks.contains(*t)).count();
-            overlap as f32 / c_target_toks.len() as f32
-        };
-        let score = 0.9 * action_score + 0.1 * target_score;
-        if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
-            best = Some((doc_id, score));
-        }
-    }
-    best
+    sca_core::ask::best_coding_fix(brain, problem)
 }
 
 fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
