@@ -4315,6 +4315,7 @@ name = "said-orchestration"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "blake3",
  "said-llm",
  "said-prompts",
  "sca-core",

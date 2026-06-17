@@ -70,5 +70,17 @@ pub async fn run(
     //    is exactly what we removed.)
     sca_core::ask::learn_coding_fix(brain, task, &note, change_set, None);
     brain.save().map_err(|e| format!("save brain: {}", e))?;
+
+    // OPT-IN CONTRIBUTION (default OFF): when — and ONLY when — the operator has
+    // explicitly enabled contribution, also write the SCRUBBED learning to the
+    // configured lake, to later build the shared code/python/csharp.said Hub brains.
+    // Default is no-op: nothing leaves the machine. This honors Rule 1 (offline by
+    // default) — see crate::sink for the consent gate + scrubbing.
+    if let Some(sink) = crate::sink::contribution_sink() {
+        let action = sca_core::ask::action_residue(task);
+        if let Some(rec) = crate::sink::scrub_learning(task, &note, change_set, &action) {
+            sink.push(&rec);
+        }
+    }
     Ok(())
 }

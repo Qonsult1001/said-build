@@ -28,6 +28,7 @@ pub mod compress;
 pub mod config;
 pub mod gate;
 pub mod recall;
+pub mod sink;
 pub mod source;
 pub mod steps;
 
