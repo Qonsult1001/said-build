@@ -407,17 +407,21 @@ pub fn learn_coding_fix(
 /// shared semantic scorer ([`best_coding_fix`]). Caller falls through to its LLM on
 /// None. Shared by CLI `recall-fix`, MCP, and orchestration so all see the same store.
 pub fn recall_coding_fix(brain: &mut SaidFile, problem: &str, min_score: f32) -> Option<RecalledFix> {
-    let (doc_id, score) = best_coding_fix(brain, problem)?;
-    if score < min_score {
-        return None;
-    }
-    let body = brain.get(&doc_id).unwrap_or_default();
-    Some(RecalledFix {
-        doc_id,
-        score,
-        note: fix_note(&body),
-        edits_json: fix_edits(&body),
-    })
+    recall_coding_fixes(brain, problem, 1, min_score).into_iter().next()
+}
+
+/// RECALL TOP-K — the K best verified fixes clearing `min_score`, highest first. The
+/// semantic top-k contract (measured recall@5 = 100% at 1000 records): a caller can
+/// inject several candidates and let the model pick/adapt, rescuing cases where the
+/// right learning isn't rank-1. `recall_coding_fix` is the k=1 wrapper.
+pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_score: f32) -> Vec<RecalledFix> {
+    best_coding_fixes(brain, problem, k).into_iter()
+        .filter(|(_, score)| *score >= min_score)
+        .map(|(doc_id, score)| {
+            let body = brain.get(&doc_id).unwrap_or_default();
+            RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score }
+        })
+        .collect()
 }
 
 /// The single coding-fix scorer. Returns the best-matching coding-fix `doc_id` and

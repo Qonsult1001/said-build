@@ -177,6 +177,33 @@ Honest caveats:
 - Bulk-storing N fixes is O(N²) today (each `learn-fix` rebuilds the whole SCA index).
   Not a hot path — production stores one fix per green gate — but a real bulk-load cost.
 
+## UPDATE (2026-06-17): top-1 vs top-5 INJECTION — A/B (the recall@5 payoff, end-to-end)
+
+recall@5 was only a measurement; the orchestrator injected only the rank-1 learning.
+We wired top-k injection (`SAID_INJECT_TOPK`, default now **5**) and A/B-tested whether
+injecting the top-5 actually rescues a real run when the right fix isn't rank-1. Setup:
+a brain where the genuine verified LRU fix sits at **rank 3**, and ranks 1–2 are WRONG
+incomplete-LRU decoys (plain `Map`, no eviction — fail the tests). gpt-oss-120b, same
+brain, same perturbed repo, only `SAID_INJECT_TOPK` differs:
+
+| Scenario | top-1 inject | top-5 inject |
+|---|---|---|
+| Clean rank-1 brain (the real fix IS #1) | ✅ GREEN, 1 attempt | ✅ GREEN, 1 attempt |
+| Rank-3 brain (wrong decoys at #1–2) | ❌ **RED, 5 attempts** | ✅ **GREEN, 1 attempt** |
+
+**top-5 strictly dominates:** it matches top-1 on the easy case and RESCUES the case
+where the right learning isn't rank-1 — top-1 hands the model a wrong decoy and fails;
+top-5 includes the real fix at rank 3, the model picks/adapts it, the gate passes. This
+is the end-to-end payoff of the recall@5 = 100% measurement. Default is now top-5
+(`said-orchestration::recall::inject_topk`); set `SAID_INJECT_TOPK=1` for a minimal
+prompt on a small/clean store.
+
+Separate finding (brain hygiene): the orchestrator's LEARN step auto-stores each green
+iteration, and a compressed auto-stored note can outrank the original hand-authored fix
+at rank-1 with a WEAKER note, causing a later warm run to regress. Top-k injection
+mitigates this (the better note is still in the top-5), but LEARN-step note quality at
+the rank-1 position is the next thing to harden.
+
 ## Engineering fixes made during this eval
 - max_output_tokens 8192 → 32768 (big change-sets were truncating mid-JSON;
   models support 65,536).

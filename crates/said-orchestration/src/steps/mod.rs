@@ -95,20 +95,35 @@ where
     // THIS codebase. So memory TEACHES the model the known-good pattern; the gate
     // still verifies. This is the moat: .said makes a weak model succeed by
     // transferring verified learning, not by pasting stale code.
-    let recalled = crate::recall::best_iteration(brain, &cfg.task);
+    // Recall the top-K verified learnings (default K=1; SAID_INJECT_TOPK=5 injects
+    // the top-5 — the semantic top-k contract, recall@5 = 100% at 1000 records).
+    let topk = crate::recall::inject_topk();
+    let recalled = crate::recall::best_iterations(brain, &cfg.task, topk);
 
     // Real source for the code/repair phases — Claude's "Read before Edit". When
-    // memory has a verified iteration for this SHAPE, append its LEARNING (the
+    // memory has verified iterations for this SHAPE, append their LEARNING (the
     // approach/gotchas note) + the reference implementation as authoritative
     // guidance the model ADAPTS. We NEVER replay the stored diff verbatim: a fix
     // is never exact across codebases, and a paste that only works on an identical
     // file proves nothing. The moat is transferred UNDERSTANDING — the model adapts
-    // the learning to THIS codebase; the gate is still the judge.
+    // the learning to THIS codebase; the gate is still the judge. With K>1 we inject
+    // several candidates (labeled by rank) and let the model pick the one that fits,
+    // rescuing cases where the right learning isn't rank-1.
     let mut src = crate::source::source_context(&cfg.repo_root, &cfg.files);
-    if let Some(hit) = &recalled {
-        log.push(StepLog { step: "memory", detail: format!("transferring verified learning (match {:.2})", hit.score) });
-        src.push('\n');
-        src.push_str(&said_prompts::coding::fill_memory_injection(hit.score, &hit.note, &hit.edits_json));
+    if !recalled.is_empty() {
+        let detail = if recalled.len() == 1 {
+            format!("transferring verified learning (match {:.2})", recalled[0].score)
+        } else {
+            format!("transferring top-{} verified learnings (best match {:.2})", recalled.len(), recalled[0].score)
+        };
+        log.push(StepLog { step: "memory", detail });
+        for (i, hit) in recalled.iter().enumerate() {
+            src.push('\n');
+            if recalled.len() > 1 {
+                src.push_str(&format!("# Candidate learning #{} of {}\n", i + 1, recalled.len()));
+            }
+            src.push_str(&said_prompts::coding::fill_memory_injection(hit.score, &hit.note, &hit.edits_json));
+        }
     }
     let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
 
