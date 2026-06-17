@@ -1,0 +1,13 @@
+ticket,run,target_doc,rank_in_topk
+lru,1,fix::f6fade95701f6ea1,1
+ratelimiter,1,fix::5676f3700a8b8b81,1
+intervals,1,fix::e6ea686df64cdf2a,2
+ttl,1,fix::15c8bf07da356821,1
+lru,2,fix::f6fade95701f6ea1,1
+ratelimiter,2,fix::5676f3700a8b8b81,1
+intervals,2,fix::e6ea686df64cdf2a,2
+ttl,2,fix::15c8bf07da356821,1
+lru,3,fix::f6fade95701f6ea1,1
+ratelimiter,3,fix::5676f3700a8b8b81,1
+intervals,3,fix::e6ea686df64cdf2a,2
+ttl,3,fix::15c8bf07da356821,1

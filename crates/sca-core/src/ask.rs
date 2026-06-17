@@ -436,63 +436,73 @@ pub fn recall_coding_fix(brain: &mut SaidFile, problem: &str, min_score: f32) ->
 /// action-fingerprint bonus adds intent agreement.
 /// score = rel_ask_conf × (0.4 + 0.5·semantic + 0.1·intent).
 pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f32)> {
-    let (fusion_cands, _kw) = ask(brain, problem, 25, false, None);
-    // Keep ask's ranking + confidence for coding-fix frames only.
+    best_coding_fixes(brain, problem, 1).into_iter().next()
+}
+
+/// Top-K coding-fix candidates for `problem`, highest score first. The semantic
+/// top-k contract: callers don't need precision@1 — they read the top 5/10 and the
+/// right learning is among them (the orchestrator injects the best; an agent can
+/// review several). At scale the neighborhood is wide and near-duplicates abound, so
+/// returning a ranked list is the honest interface. Empty when no coding-fix frames.
+///
+/// Neighborhood and fingerprint widths scale with the corpus so a crowded store
+/// doesn't truncate the true match out of the candidate pool before scoring.
+pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(String, f32)> {
+    // Widen the ask neighborhood + fingerprint pools with corpus size: at 10 records
+    // 25 is plenty; at 1000s the right fix can sit past rank 25, so scale the fetch.
+    let n = brain.frames.active_count();
+    let fetch = (n / 2).clamp(50, 1000);
+
+    let (fusion_cands, _kw) = ask(brain, problem, fetch, false, None);
     let ranked: Vec<(String, f32)> = fusion_cands.iter()
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
         .map(|c| (c.doc_id.clone(), c.confidence))
         .collect();
     if ranked.is_empty() {
-        return None;
+        return Vec::new();
     }
     let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
 
-    // SEMANTIC discriminator: pure-semantic 1-bit fingerprint similarity of the FULL
-    // problem text against every frame. Keyed by fix:: doc_id (the problem-bearing
-    // frame). This is the signal that separates LRU from LFU where words tie.
-    let sem_fp: HashMap<String, f32> = brain.rank_by_fingerprint(problem, 200)
+    // SEMANTIC discriminator: pure-semantic 1-bit fingerprint of the FULL problem
+    // against every frame — separates near-twins (LRU vs LFU) where words tie.
+    let sem_fp: HashMap<String, f32> = brain.rank_by_fingerprint(problem, fetch)
         .into_iter().collect();
     // INTENT bonus: action-isolated fingerprint (separates "add" from "document").
     let q_action = action_residue(problem);
     let action_fp: HashMap<String, f32> = if q_action.is_empty() {
         HashMap::new()
     } else {
-        brain.rank_by_fingerprint(&q_action, 200).into_iter()
+        brain.rank_by_fingerprint(&q_action, fetch).into_iter()
             .filter_map(|(d, s)| d.strip_prefix(FIX_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
             .collect()
     };
 
     let dbg = std::env::var("SAID_FIX_SCORE_DEBUG").is_ok();
-    let mut best: Option<(String, f32)> = None;
-    for (doc_id, conf) in &ranked {
+    let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
         let rel_conf = conf / top_conf;
-        // Semantic similarity of the problem to this fix frame (the fix:: frame, or
-        // its action companion as a fallback if the fix frame wasn't fingerprinted).
         let semantic = sem_fp.get(doc_id).copied()
             .or_else(|| sem_fp.get(&format!("{}{}", FIX_ACTION_ID_PREFIX, id16)).copied())
             .unwrap_or(0.0);
-        // ask confidence = right neighborhood (spine); then TWO orthogonal `.said`
-        // discriminators pick the right one within it: the semantic fingerprint of
-        // the PROBLEM (meaning) and the action fingerprint (isolated INTENT). Both
-        // are 1-bit hierarchical signals and both matter — on an adversarial twin
-        // (an LFU fix whose text mentions "least-recently-used") the problem semantic
-        // can lean the wrong way while the action fingerprint correctly favors the
-        // true LRU intent, so they are weighted comparably.
+        // ask confidence = right neighborhood (spine); the semantic fingerprint of the
+        // PROBLEM (meaning) + the action fingerprint (isolated INTENT) pick the right
+        // one within it. Weighted comparably so an adversarial twin (an LFU fix that
+        // mentions "least-recently-used") is out-voted by intent.
         let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
         if dbg {
             eprintln!("[fix-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
                 doc_id, conf, rel_conf, semantic, intent, score);
         }
-        if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
-            best = Some((doc_id.clone(), score));
-        }
-    }
-    best
+        (doc_id.clone(), score)
+    }).collect();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k.max(1));
+    scored
 }
 
-// best_coding_fix is validated end-to-end by the decoy harness
-// (hard-eval/recall-measure.sh) — it needs a brain with the static encoder loaded
-// (the semantic fingerprint signal), which a pure unit test cannot provide.
+// best_coding_fix(es) are validated end-to-end by the decoy + scale harnesses
+// (hard-eval/recall-measure.sh, recall-scale.sh) — they need a brain with the static
+// encoder loaded (the semantic fingerprint signal), which a pure unit test cannot give.

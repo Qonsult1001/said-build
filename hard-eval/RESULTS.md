@@ -142,8 +142,36 @@ weak model, memory still flips the hard task RED→GREEN by transferring LEARNIN
 model adapts (never a pasted diff). (See memory/learning-quality-is-the-moat,
 recall-bottleneck-measured.)
 
-Honest scope: warm proof + recall precision are on small brains (≤10 fixes). The
-mechanism is correct; scale to 1000s of records is the next validation.
+## UPDATE (2026-06-17): SCALE — does recall hold in a crowded store?
+
+The open question was whether 7/7 recall holds at hundreds–thousands of records, where
+the candidate neighborhood is crowded and near-duplicates abound. Tested with
+[`hard-eval/recall-scale.sh`](recall-scale.sh): plant 4 known targets (LRU, rate
+limiter, merge-intervals bugfix, TTL store), bulk-store N generated decoys across ~50
+coding domains, then query each target with a **paraphrase** (not the stored text) and
+measure recall@1/@5/@10 over 3 runs.
+
+**The contract is semantic top-k, not precision@1:** the orchestrator/agent reads the
+top 5–10 candidates, so "the right learning in the top-5" is a good result.
+
+| Store size | recall@1 | recall@5 | recall@10 |
+|---|---|---|---|
+| N=300 (610 frames), 3 runs | 9/12 (75%) | **12/12 (100%)** | **12/12 (100%)** |
+| N=1000, 3 runs | 9/12 (75%) | **12/12 (100%)** | **12/12 (100%)** |
+
+**The right learning is always in the top-5, even at 1000 records — and N=300 vs N=1000
+gave identical recall@5/@10.** The 1-bit semantic fingerprint discriminates fine in a
+crowded store; growing the store 3× did not degrade it. The one consistent rank-2 is
+the merge-intervals *bugfix* (phrased with no distinctive acronym) — it loses #1 to a
+near-twin but is reliably #2, caught by any top-k ≥ 2. The scorer now returns top-k
+(`best_coding_fixes`) and widens its candidate neighborhood with corpus size so the
+true match isn't truncated out of the pool before scoring.
+
+Honest caveats:
+- recall@1 is 75% on paraphrase queries; the product relies on top-k (≥5), where it is
+  100%. Don't gate on precision@1.
+- Bulk-storing N fixes is O(N²) today (each `learn-fix` rebuilds the whole SCA index).
+  Not a hot path — production stores one fix per green gate — but a real bulk-load cost.
 
 ## Engineering fixes made during this eval
 - max_output_tokens 8192 → 32768 (big change-sets were truncating mid-JSON;
