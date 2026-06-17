@@ -159,8 +159,30 @@ const INJECT_DIRECTIVE_SOFT: &str =
 /// verbatim (only re-target it). Below this, the softer adapt-the-approach framing.
 pub const INJECT_STRONG_MIN: f32 = 0.85;
 
+/// SELECTIVE-injection caps (Claude's documented rule: "injecting everything would
+/// overflow the context window"). A bloated injection — note that embeds the full
+/// solution PLUS the full change-set — measurably DERAILS a small model (gpt-oss-20b
+/// regressed an already-solvable task until the injection was made lean). Bound both:
+/// the note teaches (approach + gotchas), the reference shows the shape, neither floods.
+const INJECT_NOTE_MAX: usize = 2400;   // ~600 tokens of learning — the gotchas, not the codebase
+const INJECT_EDITS_MAX: usize = 2000;  // ~500 tokens of reference — the shape, not a second full paste
+
+/// Keep the head of `s` up to `max` chars on a line boundary; append a marker if cut.
+fn cap(s: &str, max: usize) -> String {
+    if s.len() <= max { return s.to_string(); }
+    let mut kept = String::new();
+    for line in s.lines() {
+        if kept.len() + line.len() + 1 > max { break; }
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    kept.push_str("… (truncated — adapt the approach above; the gate verifies)\n");
+    kept
+}
+
 /// Fill the memory-injection preamble, scaling the directive by match confidence
-/// (Claude's "strong prior vs. weak prior" treatment).
+/// (Claude's "strong prior vs. weak prior" treatment) and BOUNDING the injected
+/// content so it teaches without overflowing a small model.
 pub fn fill_memory_injection(score: f32, note: &str, edits: &str) -> String {
     let directive = if score >= INJECT_STRONG_MIN {
         INJECT_DIRECTIVE_STRONG
@@ -170,8 +192,8 @@ pub fn fill_memory_injection(score: f32, note: &str, edits: &str) -> String {
     MEMORY_INJECTION
         .replace("{{score}}", &format!("{:.2}", score))
         .replace("{{directive}}", directive)
-        .replace("{{note}}", note)
-        .replace("{{edits}}", edits)
+        .replace("{{note}}", &cap(note, INJECT_NOTE_MAX))
+        .replace("{{edits}}", &cap(edits, INJECT_EDITS_MAX))
 }
 
 pub const CODE: &str = r#"You are implementing a coding task. The current source is shown in the context below — IMPORTANT: do not propose changes to code you have not read. Anchor every edit on lines that actually appear in it.
@@ -271,7 +293,9 @@ _The system components involved and how they fit together._
 _What worked, what to avoid. Do not duplicate other sections._
 
 # Key Results
-_The concrete verified change-set/output that built+passed. Exact where it matters._
+_The verified OUTCOME in 1-3 lines: what passed, and the single most important
+decision/invariant that made it pass. Do NOT paste the full implementation here — the
+verified change-set is stored separately as the reference. Keep this a summary, not code._
 
 # Worklog
 _Step by step, terse: what was attempted and done._
@@ -333,5 +357,16 @@ mod tests {
         let soft = fill_memory_injection(0.55, "note", "edits");
         assert!(soft.contains("related, known-good APPROACH"));
         assert!(!soft.contains("essentially the same task"));
+    }
+
+    #[test]
+    fn injection_is_bounded() {
+        // SELECTIVE injection (Claude's overflow rule): a huge note + huge edits
+        // must be capped, not dumped whole — a bloated injection derails small models.
+        let huge_note = "line of learning\n".repeat(1000);   // ~17 KB
+        let huge_edits = "x".repeat(50_000);                  // 50 KB
+        let out = fill_memory_injection(0.95, &huge_note, &huge_edits);
+        assert!(out.len() < 8_000, "injection must be bounded, got {}", out.len());
+        assert!(out.contains("truncated"), "should mark truncation");
     }
 }

@@ -192,10 +192,47 @@ impl LlmProvider for OpenAICompatibleProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> LlmResult<CompletionResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
         let body = self.build_body(req);
-        // Monitoring (SAID_LLM_DEBUG): print what we're sending + live timing so a
-        // slow/hanging call is immediately visible (model, provider pin, effort).
+        match self.post_once(req, body.clone()).await {
+            Ok(r) => Ok(r),
+            // ROBUSTNESS for weaker models: smaller models (e.g. gpt-oss-20b) don't
+            // reliably honor server-side `response_format` JSON validation OR they
+            // emit an unsolicited tool call — Groq 400s with `json_validate_failed` /
+            // `json_generate` / `tool_use_failed` BEFORE returning content, so the
+            // null-content fallback can't help. Retry ONCE without `response_format`
+            // (plain text): prose phases ARE the answer, and change-set phases extract
+            // JSON from prose downstream. The 120b never needs this; the 20b does.
+            Err(LlmError::Llm(msg)) if is_format_rejection(&msg) => {
+                let mut relaxed = body;
+                if let Some(obj) = relaxed.as_object_mut() {
+                    obj.remove("response_format");
+                    obj.remove("tools");
+                    obj.remove("tool_choice");
+                }
+                if std::env::var("SAID_LLM_DEBUG").is_ok() {
+                    eprintln!("[llm] format-rejection -> retrying without response_format (plain text)");
+                }
+                self.post_once(req, relaxed).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// True if a Groq/OpenAI 400 is about JSON-mode / tool-call formatting (recoverable
+/// by retrying as plain text), not a genuine bad request.
+fn is_format_rejection(msg: &str) -> bool {
+    msg.contains("json_validate_failed")
+        || msg.contains("json_generate")
+        || msg.contains("Failed to generate JSON")
+        || msg.contains("Failed to validate JSON")
+        || msg.contains("tool_use_failed")
+}
+
+impl OpenAICompatibleProvider {
+    /// One POST + parse. Factored out so `complete` can retry with a relaxed body.
+    async fn post_once(&self, req: &CompletionRequest, body: serde_json::Value) -> LlmResult<CompletionResponse> {
+        let url = format!("{}/chat/completions", self.base_url);
         let dbg = std::env::var("SAID_LLM_DEBUG").is_ok();
         if dbg {
             let prov = body.get("provider").and_then(|p| p.get("order"))
@@ -215,15 +252,9 @@ impl LlmProvider for OpenAICompatibleProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| LlmError::Http {
-                url: url.clone(),
-                message: e.to_string(),
-            })?;
+            .map_err(|e| LlmError::Http { url: url.clone(), message: e.to_string() })?;
         let status = resp.status();
-        let raw = resp.text().await.map_err(|e| LlmError::Http {
-            url: url.clone(),
-            message: e.to_string(),
-        })?;
+        let raw = resp.text().await.map_err(|e| LlmError::Http { url: url.clone(), message: e.to_string() })?;
         if dbg {
             eprintln!("[llm] <- {} in {:.1}s ({} bytes)", status, start.elapsed().as_secs_f32(), raw.len());
         }
@@ -247,6 +278,16 @@ impl LlmProvider for OpenAICompatibleProvider {
 mod tests {
     use super::*;
     use crate::config::LlmProviderKind;
+
+    #[test]
+    fn detects_format_rejections_only() {
+        assert!(is_format_rejection("openai-compat HTTP 400: {\"code\":\"json_validate_failed\"}"));
+        assert!(is_format_rejection("...Failed to generate JSON..."));
+        assert!(is_format_rejection("...code\":\"tool_use_failed\"..."));
+        // genuine bad requests must NOT be treated as recoverable
+        assert!(!is_format_rejection("openai-compat HTTP 400: invalid model"));
+        assert!(!is_format_rejection("openai-compat rate limit"));
+    }
 
     fn provider() -> OpenAICompatibleProvider {
         let cfg = LlmConfig {
