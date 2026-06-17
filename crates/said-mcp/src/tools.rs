@@ -1065,6 +1065,66 @@ pub struct LspSymbolsTool {
     pub query: String,
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CODING MEMORY — the shared learning store the orchestrator learns from.
+// recall_fix + learn_fix call the SAME sca_core helpers as the CLI and
+// said-orchestration, so an agent contributes to and reads from ONE store.
+// Both are LLM-free (Rule 2): the calling agent drives its own LLM.
+// ════════════════════════════════════════════════════════════════════════════
+
+#[mcp_tool(
+    name = "recall_fix",
+    description = "CODING MEMORY — recall a verified fix for a problem WITHOUT calling an \
+                   LLM. Describe the coding problem; .said returns a known-good fix recipe \
+                   (the full iteration note + the verified change-set) if it has seen the \
+                   same SHAPE before (built+passed). Uses .said's 1-bit semantic + \
+                   intent fingerprints, so 'LRU cache' won't match an 'LFU cache'. Returns \
+                   no match below the threshold → drive your own LLM and, once the gate is \
+                   green, store it with learn_fix. Same store + scorer the orchestrator uses.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct RecallFixTool {
+    /// The coding problem in plain words (the recall key).
+    pub problem: String,
+    /// Minimum match confidence to return a fix (default 0.45). Below it: no match.
+    #[serde(default)]
+    pub min_score: Option<f32>,
+}
+
+#[mcp_tool(
+    name = "learn_fix",
+    description = "CODING MEMORY — store a VERIFIED coding iteration so any future caller \
+                   (you, the orchestrator, the CLI) can reload it instead of re-deriving. \
+                   ONLY call after a real build/test gate is GREEN — success is the sole \
+                   recorded outcome. Stores the full story (problem + learnings + the \
+                   verified change-set) in the native Procedural pillar, blake3-keyed, \
+                   byte-identical to `said learn-fix`. IMPORTANT: capture the NON-OBVIOUS \
+                   invariant in `learnings` (the gotcha a textbook version gets wrong), \
+                   not a generic summary — that is what lets a future model adapt it right.",
+    destructive_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct LearnFixTool {
+    /// The problem this iteration solved, in plain words (the recall key).
+    pub problem: String,
+    /// The verified change-set JSON (the `edits` array that built+passed).
+    pub edits: String,
+    /// Optional: what worked / what to avoid — the non-obvious invariant + the
+    /// textbook trap. The highest-value field for future adaptation.
+    #[serde(default)]
+    pub learnings: Option<String>,
+    /// Optional: important files/functions touched and why.
+    #[serde(default)]
+    pub files: Option<String>,
+    /// Optional: errors hit + how they were fixed; approaches that failed.
+    #[serde(default)]
+    pub errors: Option<String>,
+    /// Optional provenance breadcrumb (e.g. a PR number). Never the lookup key.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
@@ -1072,7 +1132,8 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
-                      LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool]);
+                      LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
+                      RecallFixTool, LearnFixTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
@@ -1080,6 +1141,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
+                      RecallFixTool, LearnFixTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,

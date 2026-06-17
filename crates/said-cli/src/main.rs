@@ -6385,23 +6385,22 @@ fn file_stem_or(p: &Path) -> String {
 /// coding-iteration note (modelled on Claude Code's session memory, adapted for
 /// code) followed by the machine-readable change-set JSON and the action-residue
 /// used for intent matching.
-const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
-const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
-
 /// A learned coding iteration. Required: problem + edits. Optional context fields
 /// mirror Claude Code's SessionMemory sections so recall reloads FULL context.
+/// (The frame format, tags, blake3 id, and Procedural pillar live in the ONE shared
+/// writer `sca_core::ask::learn_coding_fix`; this struct is just CLI input.)
 struct FixIteration<'a> {
-    problem: &'a str,
     edits_json: &'a str,
     files: Option<&'a str>,      // Claude: "Files and Functions"
     errors: Option<&'a str>,     // Claude: "Errors & Corrections"
     learnings: Option<&'a str>,  // Claude: "Learnings"
-    action: &'a str,             // intent residue (machine, for matching)
 }
 
-/// Build the human-readable iteration note + machine payload. Mirrors Claude
-/// Code's session-memory template, adapted for a single verified code fix.
-fn make_fix_body(it: &FixIteration) -> String {
+/// Assemble the human-readable NOTE from the explicit --files/--errors/--learnings
+/// fields (the story for an LLM to reload). The TASK line + machine payload (edits +
+/// intent residue) are added by the shared writer `sca_core::ask::learn_coding_fix`,
+/// so this is note-only — no payload, no hashing, no tags here.
+fn make_fix_note(it: &FixIteration) -> String {
     let steps = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
         Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
             .map(|(i, e)| {
@@ -6414,64 +6413,18 @@ fn make_fix_body(it: &FixIteration) -> String {
             .collect::<Vec<_>>().join("\n"),
         _ => "  (change-set)".to_string(),
     };
-    let mut body = format!("TASK: {}\n", it.problem.trim());
-    if let Some(f) = it.files { if !f.trim().is_empty() { body.push_str(&format!("FILES: {}\n", f.trim())); } }
-    body.push_str(&format!("STEPS:\n{}\n", steps));
-    if let Some(e) = it.errors { if !e.trim().is_empty() { body.push_str(&format!("ERRORS: {}\n", e.trim())); } }
-    if let Some(l) = it.learnings { if !l.trim().is_empty() { body.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
-    body.push_str("RESULT: success — built+passed");
-    body.push_str(FIX_EDITS_SEP);
-    body.push_str(it.edits_json.trim());
-    body.push_str(FIX_ACTION_SEP);
-    body.push_str(it.action.trim());
-    body
+    let mut note = String::new();
+    if let Some(f) = it.files { if !f.trim().is_empty() { note.push_str(&format!("FILES: {}\n", f.trim())); } }
+    note.push_str(&format!("STEPS:\n{}\n", steps));
+    if let Some(e) = it.errors { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    if let Some(l) = it.learnings { if !l.trim().is_empty() { note.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
+    note.push_str("RESULT: success — built+passed");
+    note
 }
 
-/// Build a frame body from a full CLIENT-AUTHORED iteration note (the 10-section
-/// template filled in, like Claude's session memory). The note is stored as the
-/// story verbatim; we prepend a TASK: line so `problem` round-trips, then append
-/// the machine payload (edits + intent residue).
-fn make_fix_body_from_note(problem: &str, note: &str, edits_json: &str, action: &str) -> String {
-    let mut body = format!("TASK: {}\n\n", problem.trim());
-    body.push_str(note.trim());
-    body.push_str(FIX_EDITS_SEP);
-    body.push_str(edits_json.trim());
-    body.push_str(FIX_ACTION_SEP);
-    body.push_str(action.trim());
-    body
-}
-
-/// Pull (problem, edits_json, action) back out of a coding-memory frame body.
-/// The full human-readable note (with FILES/ERRORS/LEARNINGS) is everything
-/// before FIX_EDITS_SEP and is returned verbatim by `recall-fix` as `context`.
-fn split_fix_body(body: &str) -> (String, String, String) {
-    let (note_plus, action) = match body.split_once(FIX_ACTION_SEP) {
-        Some((a, b)) => (a, b.trim().to_string()),
-        None => (body, String::new()),
-    };
-    let (note, edits) = match note_plus.split_once(FIX_EDITS_SEP) {
-        Some((a, b)) => (a, b.trim().to_string()),
-        None => (note_plus, String::new()),
-    };
-    // The problem is the TASK: line.
-    let problem = note.lines().next()
-        .and_then(|l| l.strip_prefix("TASK: "))
-        .unwrap_or("").trim().to_string();
-    (problem, edits, action)
-}
-
-/// Return the full human-readable iteration note (everything before the machine
-/// payload) — the FULL context an LLM reloads on recall.
-fn fix_note(body: &str) -> String {
-    let note = body.split(FIX_EDITS_SEP).next().unwrap_or(body);
-    note.trim().to_string()
-}
-
-const FIX_PILLAR_TAG: &str = "pillar:procedural";
-const FIX_SUCCESS_TAG: &str = "procedural:outcome=success";
-const FIX_KIND_TAG: &str = "coding-fix";
-const FIX_ACTION_TAG: &str = "coding-fix-action";
-const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
+// Frame format, tags, separators, and the doc_id hash all live in the ONE shared
+// writer/reader in sca_core::ask (learn_coding_fix / recall_coding_fix) so the CLI,
+// MCP, and orchestration never drift. Nothing to define here.
 
 #[allow(clippy::too_many_arguments)]
 fn cmd_learn_fix(
@@ -6491,7 +6444,6 @@ fn cmd_learn_fix(
         return Err("--edits is not valid JSON".into());
     }
     let mut brain = open_brain(path)?;
-    let action = sca_core::ask::action_residue(problem);
     // The stored story: a full client-authored iteration NOTE (the 10-section
     // template filled in, like Claude's session memory) when --note-file is given,
     // otherwise the structured note we assemble from the explicit fields. Either
@@ -6503,32 +6455,18 @@ fn cmd_learn_fix(
             .trim_start_matches('\u{feff}').trim().to_string()),
         None => None,
     };
-    let body = match &note {
-        Some(n) => make_fix_body_from_note(problem, n, &edits_json, &action),
-        None => make_fix_body(&FixIteration {
-            problem, edits_json: &edits_json, files, errors, learnings, action: &action,
+    // Assemble the human-readable NOTE (the story), then hand it to the ONE shared
+    // writer (sca_core::ask::learn_coding_fix) which appends the machine payload,
+    // hashes with blake3, and stores it in the native Procedural pillar — byte-
+    // identical to what MCP learn_fix and said-orchestration::learn write, so all
+    // three share ONE learning store.
+    let note = match &note {
+        Some(n) => n.clone(),
+        None => make_fix_note(&FixIteration {
+            edits_json: &edits_json, files, errors, learnings,
         }),
     };
-    let hash = blake3::hash(body.as_bytes()).to_hex();
-    let id16 = hash.as_str()[..16].to_string();
-    let doc_id = format!("fix::{}", id16);
-    brain.remember_as(&doc_id, &body, Some("coding-fix"));
-    // Native Procedural pillar tags + success (the only recorded outcome).
-    brain.add_tag(&doc_id, FIX_PILLAR_TAG);
-    brain.add_tag(&doc_id, FIX_SUCCESS_TAG);
-    brain.add_tag(&doc_id, FIX_KIND_TAG);
-    // Optional provenance breadcrumb — never the lookup key.
-    if let Some(l) = label { brain.add_tag(&doc_id, &format!("pr:{}", l)); }
-    // Companion ACTION-RESIDUE frame so recall can fingerprint-match intent with
-    // the proven 1-bit mechanism (rank_by_fingerprint on the residue). Its
-    // content is ONLY the action residue, so its fingerprint reflects intent, not
-    // the target nouns. Linked back to the fix via the shared id16.
-    if !action.is_empty() {
-        let action_id = format!("{}{}", FIX_ACTION_ID_PREFIX, id16);
-        brain.remember_as(&action_id, &action, Some("coding-fix-action"));
-        brain.add_tag(&action_id, FIX_ACTION_TAG);
-    }
-    let _ = brain.build_index();
+    let doc_id = sca_core::ask::learn_coding_fix(&mut brain, problem, &note, &edits_json, label);
     brain.save()?;
     if json {
         println!("{}", serde_json::json!({ "ok": true, "learned": doc_id, "label": label }));
@@ -6538,43 +6476,31 @@ fn cmd_learn_fix(
     Ok(())
 }
 
-/// Find the best-matching coding-fix for a problem, returning (doc_id, score).
-/// Shared by `recall-fix` and `phase-prompt`. Delegates to the ONE coding-fix
-/// scorer in sca-core (`ask::best_coding_fix`) so the CLI and the orchestrator can
-/// never diverge — the bug we measured was two different scorers disagreeing.
-fn best_fix_for(brain: &mut sca_core::said_file::SaidFile, problem: &str) -> Option<(String, f32)> {
-    sca_core::ask::best_coding_fix(brain, problem)
-}
-
 fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
-    let best = best_fix_for(&mut brain, problem);
-    match best {
-        Some((doc_id, score)) if score >= min_similarity => {
-            let body = brain.get(&doc_id).unwrap_or_default();
-            let (matched_problem, edits_json, _action) = split_fix_body(&body);
-            // The FULL iteration context (TASK/FILES/STEPS/ERRORS/LEARNINGS/RESULT)
-            // — this is what saves any LLM from re-deriving; it's the context window.
-            let context = fix_note(&body);
-            let edits: serde_json::Value = serde_json::from_str(&edits_json)
+    // The ONE shared reader (sca_core::ask::recall_coding_fix): semantic scorer +
+    // shared frame format, identical to what MCP and the orchestrator use.
+    match sca_core::ask::recall_coding_fix(&mut brain, problem, min_similarity) {
+        Some(hit) => {
+            let edits: serde_json::Value = serde_json::from_str(&hit.edits_json)
                 .unwrap_or(serde_json::Value::Null);
-            let label = brain.frames.get_meta(&doc_id)
+            let label = brain.frames.get_meta(&hit.doc_id)
                 .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned());
             if json {
                 println!("{}", serde_json::json!({
                     "ok": true, "fix": {
-                        "score": score, "doc_id": doc_id, "provenance": label,
-                        "matched_problem": matched_problem, "context": context, "edits": edits,
+                        "score": hit.score, "doc_id": hit.doc_id, "provenance": label,
+                        "context": hit.note, "edits": edits,
                         "note": "verified fix (built+passed) for a problem of this shape; gate still verifies on apply",
                     }
                 }));
             } else {
-                println!("Fix ({:.2}) {}  provenance={}", score, doc_id, label.unwrap_or_else(|| "-".into()));
-                println!("{}", context);
-                println!("  edits:   {}", edits_json);
+                println!("Fix ({:.2}) {}  provenance={}", hit.score, hit.doc_id, label.unwrap_or_else(|| "-".into()));
+                println!("{}", hit.note);
+                println!("  edits:   {}", hit.edits_json);
             }
         }
-        _ => return emit_no_fix(json, min_similarity),
+        None => return emit_no_fix(json, min_similarity),
     }
     Ok(())
 }

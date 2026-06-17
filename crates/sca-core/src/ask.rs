@@ -297,10 +297,128 @@ pub fn ask(
 // `.said`'s 1-bit hierarchical SEMANTIC fingerprint of the problem to pick the right
 // one within it (separates near-twins by meaning, not shared words).
 
-/// Marker strings for the stored coding-fix frames (must match what `learn-fix`
-/// writes and what said-orchestration::learn uses).
+/// Marker strings for the stored coding-fix frames. ONE source of truth so the CLI
+/// (`learn-fix`/`recall-fix`), the MCP tools, and said-orchestration::learn all write
+/// and read byte-compatible frames into the SAME learning store.
 pub const FIX_KIND_TAG: &str = "coding-fix";
+pub const FIX_ACTION_TAG: &str = "coding-fix-action";
+pub const FIX_PILLAR_TAG: &str = "pillar:procedural";
+pub const FIX_SUCCESS_TAG: &str = "procedural:outcome=success";
 pub const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
+const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
+const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
+
+/// A recalled verified coding-fix: the full human-readable note (the story an LLM
+/// reloads), the verified change-set JSON, and the match score.
+pub struct RecalledFix {
+    pub doc_id: String,
+    pub score: f32,
+    /// Everything before the machine payload — TASK + FILES/STEPS/ERRORS/LEARNINGS.
+    pub note: String,
+    /// The stored verified change-set JSON (the edits that built+passed).
+    pub edits_json: String,
+}
+
+/// 16-hex-char BLAKE3 of the body for the frame doc_id — the canonical `.said`
+/// content hash (same as ingest/dedup/frame-checksums use). NOT FNV: the whole
+/// protocol is blake3, and a divergent hash here would be a latent footgun.
+fn fix_hash(s: &str) -> String {
+    blake3::hash(s.as_bytes()).to_hex().as_str()[..16].to_string()
+}
+
+/// Assemble the coding-fix frame body: a TASK line (recall key) + the human note
+/// (verbatim) + the machine payload (edits + intent residue), joined by the markers.
+/// `note` is the full human-readable story (may already start with sections); we
+/// prepend `TASK:` so `problem` always round-trips.
+fn fix_body(problem: &str, note: &str, edits_json: &str, action: &str) -> String {
+    let mut body = format!("TASK: {}\n\n", problem.trim());
+    body.push_str(note.trim());
+    body.push_str(FIX_EDITS_SEP);
+    body.push_str(edits_json.trim());
+    body.push_str(FIX_ACTION_SEP);
+    body.push_str(action.trim());
+    body
+}
+
+/// The full human note (everything before the machine payload markers).
+pub fn fix_note(body: &str) -> String {
+    body.split(FIX_EDITS_SEP).next().unwrap_or(body).trim().to_string()
+}
+
+/// The stored change-set JSON (between the edits and action markers).
+pub fn fix_edits(body: &str) -> String {
+    let after = match body.split_once(FIX_EDITS_SEP) {
+        Some((_, b)) => b,
+        None => return String::new(),
+    };
+    after.split(FIX_ACTION_SEP).next().unwrap_or(after).trim().to_string()
+}
+
+/// LEARN — store a verified coding iteration into the shared learning store.
+/// `note` is the human-readable story (sections like FILES/STEPS/ERRORS/LEARNINGS,
+/// or a full 10-section iteration note); `edits_json` is the verified change-set.
+/// Writes the coding-fix frame + its action-residue companion (for intent matching),
+/// rebuilds the index, and returns the doc_id. ONLY call after a green gate — the
+/// stored outcome is always success. Shared by CLI, MCP, and orchestration so every
+/// caller contributes to ONE store the others recall from.
+pub fn learn_coding_fix(
+    brain: &mut SaidFile,
+    problem: &str,
+    note: &str,
+    edits_json: &str,
+    label: Option<&str>,
+) -> String {
+    let action = action_residue(problem);
+    let body = fix_body(problem, note, edits_json, &action);
+    let id16 = fix_hash(&body);
+    let doc_id = format!("fix::{}", id16);
+    // Native PROCEDURAL pillar (not just the tag): a coding-fix is an action
+    // sequence with an outcome, so it must live in the Procedural pillar so
+    // recall_by_pillar(Procedural) finds it — `remember_as` would leave it in the
+    // default pillar with only a tag. Tags carried alongside for filtering.
+    let mut tags = vec![
+        FIX_PILLAR_TAG.to_string(),
+        FIX_SUCCESS_TAG.to_string(),
+        FIX_KIND_TAG.to_string(),
+    ];
+    if let Some(l) = label {
+        if !l.trim().is_empty() {
+            tags.push(format!("pr:{}", l.trim()));
+        }
+    }
+    brain.remember_with_pillar(
+        Some(&doc_id), &body, Some(FIX_KIND_TAG),
+        crate::frames::Pillar::Procedural, tags,
+    );
+    // Action-residue companion: its content is ONLY the intent residue, so its
+    // fingerprint reflects WHAT IS BEING DONE, not the target nouns. Also Procedural.
+    if !action.is_empty() {
+        let action_id = format!("{}{}", FIX_ACTION_ID_PREFIX, id16);
+        brain.remember_with_pillar(
+            Some(&action_id), &action, Some(FIX_ACTION_TAG),
+            crate::frames::Pillar::Procedural, vec![FIX_ACTION_TAG.to_string()],
+        );
+    }
+    let _ = brain.build_index();
+    doc_id
+}
+
+/// RECALL — the best verified fix for `problem`, or None below `min_score`. Uses the
+/// shared semantic scorer ([`best_coding_fix`]). Caller falls through to its LLM on
+/// None. Shared by CLI `recall-fix`, MCP, and orchestration so all see the same store.
+pub fn recall_coding_fix(brain: &mut SaidFile, problem: &str, min_score: f32) -> Option<RecalledFix> {
+    let (doc_id, score) = best_coding_fix(brain, problem)?;
+    if score < min_score {
+        return None;
+    }
+    let body = brain.get(&doc_id).unwrap_or_default();
+    Some(RecalledFix {
+        doc_id,
+        score,
+        note: fix_note(&body),
+        edits_json: fix_edits(&body),
+    })
+}
 
 /// The single coding-fix scorer. Returns the best-matching coding-fix `doc_id` and
 /// its score in [0,1], or None if there are no coding-fix candidates. Caller applies

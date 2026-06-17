@@ -14,6 +14,30 @@ Lives in [`crates/said-orchestration`](../../crates/said-orchestration/). It is 
 
 The orchestrator itself ([`steps/mod.rs`](../../crates/said-orchestration/src/steps/mod.rs)) is just the loop that wires them together. Each lifecycle step is one file under [`steps/`](../../crates/said-orchestration/src/steps/).
 
+## One shared learning store (CLI · MCP · orchestrator)
+
+Coding-fix memory is written and read through **one** pair of functions in
+[`sca_core::ask`](../../crates/sca-core/src/ask.rs):
+
+- `learn_coding_fix(brain, problem, note, edits_json, label)` — store a verified iteration
+- `recall_coding_fix(brain, problem, min_score)` — recall the best match (semantic scorer)
+
+Every surface calls these, so they can never drift:
+
+| Surface | Write | Read |
+|---|---|---|
+| CLI | `said learn-fix` | `said recall-fix` |
+| MCP (for agents) | `learn_fix` tool | `recall_fix` tool |
+| Orchestrator | `steps/learn.rs` (step 6) | `steps` step 0 (`recall::best_iteration`) |
+
+A frame written by any one is byte-identical and recallable by all the others:
+
+- **blake3 doc_id** (`fix::<16hex>`) — the canonical `.said` content hash, same as ingest/dedup/frame-checksums. (Orchestration's old FNV-1a hash was removed — divergent hashing is a latent footgun.)
+- **Native Procedural pillar** — a coding-fix is an action-with-outcome, so it is stored via `remember_with_pillar(Pillar::Procedural, …)` (not merely tagged), so `recall_by_pillar(Procedural)` finds it. Tags carried alongside: `pillar:procedural`, `procedural:outcome=success`, `coding-fix`, optional `pr:<label>`.
+- **Body layout:** `TASK: …` + the human note (FILES/STEPS/ERRORS/LEARNINGS or a full iteration note) + `FIX_EDITS_SEP` + the verified change-set JSON + `FIX_ACTION_SEP` + the intent residue. A companion `fixaction::<16hex>` frame holds only the action residue (intent fingerprint).
+
+**Rule 2 holds:** the CLI and MCP are LLM-free. `recall_fix`/`learn_fix` are pure memory; an MCP agent (e.g. Claude) recalls a learning, drives **its own** LLM, and on a green gate stores the result with `learn_fix` — contributing to the same store the standalone orchestrator learns from. The LLM-driving loop itself is the separate `said-orchestrate` process (BYO-LLM key).
+
 ## The lifecycle (fixed order)
 
 From [`steps/mod.rs:run`](../../crates/said-orchestration/src/steps/mod.rs) — one file per step, run in this order every time:

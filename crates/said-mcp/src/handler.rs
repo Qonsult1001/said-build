@@ -529,6 +529,8 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::LspRefsTool(t) => self.handle_lsp_refs(t),
             SaidTools::LspHoverTool(t) => self.handle_lsp_hover(t),
             SaidTools::LspSymbolsTool(t) => self.handle_lsp_symbols(t),
+            SaidTools::RecallFixTool(t) => self.handle_recall_fix(t),
+            SaidTools::LearnFixTool(t) => self.handle_learn_fix(t),
             #[cfg(feature = "forge")]
             SaidTools::ForgeListTool(t) => self.handle_forge_list(t),
             #[cfg(feature = "forge")]
@@ -1361,6 +1363,65 @@ impl SaidServerHandler {
                 "lsp_symbols: said-mcp was built without the `lsp` feature.".to_string()
             )]))
         }
+    }
+
+    // ── CODING MEMORY ───────────────────────────────────────────────────────
+    // recall_fix / learn_fix call the SAME sca_core helpers as the CLI and the
+    // orchestrator, so the MCP agent shares ONE learning store with them.
+
+    fn handle_recall_fix(&self, t: RecallFixTool) -> Result<CallToolResult, CallToolError> {
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let min = t.min_score.unwrap_or(0.45);
+        match sca_core::ask::recall_coding_fix(&mut brain, &t.problem, min) {
+            Some(hit) => {
+                let label = brain.frames.get_meta(&hit.doc_id)
+                    .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned())
+                    .unwrap_or_else(|| "-".into());
+                let body = format!(
+                    "Fix ({:.2}) {}  provenance={}\n\n{}\n\n## Verified change-set\n{}",
+                    hit.score, hit.doc_id, label, hit.note, hit.edits_json,
+                );
+                Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+            }
+            None => Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                "No known fix above score {:.2} for \"{}\" — drive your own LLM, then store \
+                 the verified result with learn_fix.",
+                min, t.problem,
+            ))])),
+        }
+    }
+
+    fn handle_learn_fix(&self, t: LearnFixTool) -> Result<CallToolResult, CallToolError> {
+        // Validate the change-set is JSON before storing (same guard as the CLI).
+        let edits = t.edits.trim_start_matches('\u{feff}').trim();
+        if serde_json::from_str::<serde_json::Value>(edits).is_err() {
+            return Err(CallToolError::from_message(
+                "learn_fix: `edits` is not valid JSON (expected the change-set array)".to_string(),
+            ));
+        }
+        // Assemble the human note from the optional fields (FILES/ERRORS/LEARNINGS).
+        let mut note = String::new();
+        if let Some(f) = t.files.as_deref() { if !f.trim().is_empty() { note.push_str(&format!("FILES: {}\n", f.trim())); } }
+        if let Some(e) = t.errors.as_deref() { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+        if let Some(l) = t.learnings.as_deref() { if !l.trim().is_empty() { note.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
+        note.push_str("RESULT: success — built+passed");
+
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        // The ONE shared writer: blake3 id, native Procedural pillar, byte-identical
+        // to `said learn-fix` and said-orchestration::learn.
+        let doc_id = sca_core::ask::learn_coding_fix(
+            &mut brain, &t.problem, &note, edits, t.label.as_deref(),
+        );
+        brain.save().map_err(CallToolError::from_message)?;
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "Learned fix {} (provenance: {}). Stored in the Procedural pillar; future \
+             recall_fix / orchestrator runs can reuse it.",
+            doc_id, t.label.as_deref().unwrap_or("-"),
+        ))]))
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

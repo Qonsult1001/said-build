@@ -15,15 +15,6 @@ use sca_core::said_file::SaidFile;
 use said_llm::{CompletionRequest, LlmProvider};
 use said_prompts::coding::{ITERATION_TEMPLATE, LEARN};
 
-// Must match said-cli's coding-memory + said-orchestration::recall.
-const FIX_KIND_TAG: &str = "coding-fix";
-const FIX_PILLAR_TAG: &str = "pillar:procedural";
-const FIX_SUCCESS_TAG: &str = "procedural:outcome=success";
-const FIX_ACTION_TAG: &str = "coding-fix-action";
-const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
-const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
-const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
-
 /// Author (via the LLM) + compress + store the verified iteration. `transcript`
 /// is the completed work (task + plan + code + gate result) the LLM summarizes.
 /// `change_set` is the verified edits output, stored as the machine payload.
@@ -72,38 +63,12 @@ pub async fn run(
     // 2. .said compresses it (per-section cap + cycle-out).
     let note = compress_note(&authored);
 
-    // 3. Store as a Procedural-pillar coding-fix frame + action companion. The
-    //    body is: TASK line (for recall) + the compressed note + machine payload.
-    let action = sca_core::ask::action_residue(task);
-    let mut body = format!("TASK: {}\n\n", task.trim());
-    body.push_str(&note);
-    body.push_str(FIX_EDITS_SEP);
-    body.push_str(change_set.trim());
-    body.push_str(FIX_ACTION_SEP);
-    body.push_str(action.trim());
-
-    let id16 = short_hash(&body);
-    let doc_id = format!("fix::{}", id16);
-    brain.remember_as(&doc_id, &body, Some("coding-fix"));
-    brain.add_tag(&doc_id, FIX_PILLAR_TAG);
-    brain.add_tag(&doc_id, FIX_SUCCESS_TAG);
-    brain.add_tag(&doc_id, FIX_KIND_TAG);
-    if !action.is_empty() {
-        let action_id = format!("{}{}", FIX_ACTION_ID_PREFIX, id16);
-        brain.remember_as(&action_id, &action, Some("coding-fix-action"));
-        brain.add_tag(&action_id, FIX_ACTION_TAG);
-    }
-    let _ = brain.build_index();
+    // 3. Store via the ONE shared writer (sca_core::ask::learn_coding_fix) so the
+    //    frame format, tags, and blake3 doc_id are byte-identical to what the CLI
+    //    `learn-fix` and the MCP learn_fix tool write — all three contribute to the
+    //    SAME learning store. (No bespoke body assembly / hashing here; that drift
+    //    is exactly what we removed.)
+    sca_core::ask::learn_coding_fix(brain, task, &note, change_set, None);
     brain.save().map_err(|e| format!("save brain: {}", e))?;
     Ok(())
-}
-
-/// 16-hex-char FNV-1a of the body (no extra deps; deterministic).
-fn short_hash(s: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x00000100000001B3);
-    }
-    format!("{:016x}", h)
 }
