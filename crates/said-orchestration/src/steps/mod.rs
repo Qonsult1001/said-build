@@ -95,36 +95,40 @@ where
     // THIS codebase. So memory TEACHES the model the known-good pattern; the gate
     // still verifies. This is the moat: .said makes a weak model succeed by
     // transferring verified learning, not by pasting stale code.
-    // Recall the top-K verified learnings (default K=1; SAID_INJECT_TOPK=5 injects
-    // the top-5 — the semantic top-k contract, recall@5 = 100% at 1000 records).
+    // FAILURE-TRIGGERED RECALL (try cold, consult memory only on failure).
+    // We RECALL the top-K verified learnings now (cheap, no LLM) and hold them, but
+    // we do NOT inject them into the first attempt. The local model tries the task
+    // COLD first — the tasks it can already do never see memory (no distraction, no
+    // regression by construction). Only when the gate goes RED do we inject the
+    // learning into the repair phase and loop. This mirrors "try, fail, then look it
+    // up", and spends recall only where it's needed.
     let topk = crate::recall::inject_topk();
     let recalled = crate::recall::best_iterations(brain, &cfg.task, topk);
-
-    // Real source for the code/repair phases — Claude's "Read before Edit". When
-    // memory has verified iterations for this SHAPE, append their LEARNING (the
-    // approach/gotchas note) + the reference implementation as authoritative
-    // guidance the model ADAPTS. We NEVER replay the stored diff verbatim: a fix
-    // is never exact across codebases, and a paste that only works on an identical
-    // file proves nothing. The moat is transferred UNDERSTANDING — the model adapts
-    // the learning to THIS codebase; the gate is still the judge. With K>1 we inject
-    // several candidates (labeled by rank) and let the model pick the one that fits,
-    // rescuing cases where the right learning isn't rank-1.
-    let mut src = crate::source::source_context(&cfg.repo_root, &cfg.files);
     if !recalled.is_empty() {
-        let detail = if recalled.len() == 1 {
-            format!("transferring verified learning (match {:.2})", recalled[0].score)
-        } else {
-            format!("transferring top-{} verified learnings (best match {:.2})", recalled.len(), recalled[0].score)
-        };
-        log.push(StepLog { step: "memory", detail });
-        for (i, hit) in recalled.iter().enumerate() {
-            src.push('\n');
-            if recalled.len() > 1 {
-                src.push_str(&format!("# Candidate learning #{} of {}\n", i + 1, recalled.len()));
-            }
-            src.push_str(&said_prompts::coding::fill_memory_injection(hit.score, &hit.note, &hit.edits_json));
-        }
+        log.push(StepLog {
+            step: "memory",
+            detail: format!("recalled {} learning(s) (best {:.2}) — held for repair if the cold attempt fails",
+                recalled.len(), recalled[0].score),
+        });
     }
+
+    // Build the memory-injection block ONCE (used only if the cold attempt fails).
+    let memory_block: Option<String> = if recalled.is_empty() {
+        None
+    } else {
+        let mut m = String::new();
+        for (i, hit) in recalled.iter().enumerate() {
+            if recalled.len() > 1 {
+                m.push_str(&format!("# Candidate learning #{} of {}\n", i + 1, recalled.len()));
+            }
+            m.push_str(&said_prompts::coding::fill_memory_injection(hit.score, &hit.note, &hit.edits_json));
+            m.push('\n');
+        }
+        Some(m)
+    };
+
+    // First attempt is COLD: real source only (Claude's "Read before Edit"), no memory.
+    let src = crate::source::source_context(&cfg.repo_root, &cfg.files);
     let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
 
     // 1. PLAN — read-only.
@@ -170,15 +174,24 @@ where
             log.push(StepLog { step: "stop", detail: "max attempts reached; not merging red".into() });
             return Ok(RunOutcome { green: false, attempts, log });
         }
-        // REPAIR — feed the gate error + real source + recalled errors-to-avoid
-        // back. Re-read source each attempt (a prior apply changed the file, so
-        // anchors must reflect the CURRENT state — Claude re-reads after a write).
+        // REPAIR — the cold attempt failed, so NOW consult memory: feed the gate
+        // error + current source + the held verified learning. Re-read source each
+        // attempt (a prior apply changed the file, so anchors must reflect the
+        // CURRENT state — Claude re-reads after a write). The learning is injected on
+        // EVERY repair attempt (it's the known-good approach for this failure).
         let cur_src = crate::source::source_context(&cfg.repo_root, &cfg.files);
-        let repair_extra = if cur_src.is_empty() {
-            outcome.output.clone()
-        } else {
-            format!("# Gate failure\n{}\n\n{}", outcome.output, cur_src)
-        };
+        let mut repair_extra = format!("# Gate failure\n{}", outcome.output);
+        if !cur_src.is_empty() {
+            repair_extra.push_str("\n\n");
+            repair_extra.push_str(&cur_src);
+        }
+        if let Some(mem) = &memory_block {
+            if attempts == 1 {
+                log.push(StepLog { step: "memory", detail: "cold attempt failed — injecting verified learning into repair".into() });
+            }
+            repair_extra.push_str("\n\n");
+            repair_extra.push_str(mem);
+        }
         let fix = repair::run(brain, provider, &cfg.task, &repair_extra).await?;
         log.push(StepLog { step: "repair", detail: fix.output.clone() });
         // A repair apply failure is also repairable — carry it into the next

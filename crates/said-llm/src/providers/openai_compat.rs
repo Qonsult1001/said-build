@@ -146,8 +146,18 @@ impl OpenAICompatibleProvider {
                     .and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).unwrap_or("?");
                 LlmError::Llm(format!("empty completion (no content/reasoning; finish_reason={})", fr))
             })?;
+        // STRUCTURED + UNSTRUCTURED "just works" (global tool standard): the model
+        // may return clean JSON (json_object/json_schema mode) OR prose (a weaker
+        // model, or our format-rejection fallback that dropped response_format).
+        // Resolve to a usable JSON value either way instead of hard-erroring:
+        //   1. whole content parses as JSON  -> use it
+        //   2. a JSON object/array is embedded in prose -> extract it
+        //   3. otherwise -> wrap the prose as {"output": "<text>"} so prose phases
+        //      (plan/design/test) and any string-output caller still get their answer.
         let parsed_json: serde_json::Value = serde_json::from_str(content)
-            .map_err(|e| LlmError::Llm(format!("json parse: {}", e)))?;
+            .ok()
+            .or_else(|| extract_embedded_json(content))
+            .unwrap_or_else(|| serde_json::json!({ "output": content }));
         let usage = body.get("usage");
         let tok = TokenUsage {
             input_tokens: usage
@@ -219,6 +229,35 @@ impl LlmProvider for OpenAICompatibleProvider {
     }
 }
 
+/// Find the first balanced JSON object/array embedded in arbitrary text (e.g. a model
+/// that wrapped its JSON in prose or ```json fences). Returns None if none parses.
+fn extract_embedded_json(s: &str) -> Option<serde_json::Value> {
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'{' && b != b'[' { continue; }
+        let close = if b == b'{' { b'}' } else { b']' };
+        let (mut depth, mut in_str, mut esc) = (0i32, false, false);
+        for (j, &c) in bytes.iter().enumerate().skip(i) {
+            if in_str {
+                if esc { esc = false; }
+                else if c == b'\\' { esc = true; }
+                else if c == b'"' { in_str = false; }
+            } else if c == b'"' { in_str = true; }
+            else if c == b { depth += 1; }
+            else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s[i..=j]) {
+                        return Some(v);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    None
+}
+
 /// True if a Groq/OpenAI 400 is about JSON-mode / tool-call formatting (recoverable
 /// by retrying as plain text), not a genuine bad request.
 fn is_format_rejection(msg: &str) -> bool {
@@ -278,6 +317,17 @@ impl OpenAICompatibleProvider {
 mod tests {
     use super::*;
     use crate::config::LlmProviderKind;
+
+    #[test]
+    fn extracts_or_wraps_json() {
+        // clean json
+        assert_eq!(extract_embedded_json(r#"{"a":1}"#).unwrap()["a"], 1);
+        // json embedded in prose / fences
+        let v = extract_embedded_json("Here you go:\n```json\n{\"edits\":[1,2]}\n```\nDone").unwrap();
+        assert!(v["edits"].is_array());
+        // no json present -> None (caller wraps as {"output": prose})
+        assert!(extract_embedded_json("just prose, no json here").is_none());
+    }
 
     #[test]
     fn detects_format_rejections_only() {
