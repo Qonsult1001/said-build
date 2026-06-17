@@ -235,7 +235,19 @@ impl ScaEngine {
     /// - IDF is finalized once after all docs
     #[cfg(feature = "static-embed")]
     pub fn index_batch(&mut self, doc_ids: &[String], texts: &[String]) -> Result<(), String> {
-        self.index_batch_with_progress(doc_ids, texts, |_, _, _| {})
+        self.index_batch_with_progress_modal(doc_ids, texts, false, |_, _, _| {})
+    }
+
+    /// Incremental index: APPEND `doc_ids`/`texts` to the existing index, quantized
+    /// against the ALREADY-PERSISTED corpus mean (no clear, no mean recompute). The
+    /// caller (`SaidFile::build_index`) uses this for new frames when a mean already
+    /// exists and growth is below the recompute threshold — the documented
+    /// "recompute on growth" design (3.1). Same SCA pipeline; only the mean/std/IDF
+    /// are reused+merged instead of recomputed, so the new fingerprints are directly
+    /// comparable to the existing corpus.
+    #[cfg(feature = "static-embed")]
+    pub fn index_batch_incremental(&mut self, doc_ids: &[String], texts: &[String]) -> Result<(), String> {
+        self.index_batch_with_progress_modal(doc_ids, texts, true, |_, _, _| {})
     }
 
     /// Streaming variant of index_batch with flat-memory mmap storage and
@@ -253,6 +265,26 @@ impl ScaEngine {
         &mut self,
         doc_ids: &[String],
         texts: &[String],
+        progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(usize, usize, usize),
+    {
+        // Public API preserved: full rebuild (recompute mean/std/IDF).
+        self.index_batch_with_progress_modal(doc_ids, texts, false, progress)
+    }
+
+    /// The one indexing pipeline. `preserve_mean=false`: full build (recompute the
+    /// corpus mean/std + replace IDF) — for first build or "recompute on growth".
+    /// `preserve_mean=true`: incremental APPEND against the existing persisted mean
+    /// (merge IDF, reuse std) — so new fingerprints stay comparable to the corpus
+    /// without re-quantizing everything. ONE method, no parallel index path.
+    #[cfg(feature = "static-embed")]
+    fn index_batch_with_progress_modal<F>(
+        &mut self,
+        doc_ids: &[String],
+        texts: &[String],
+        preserve_mean: bool,
         mut progress: F,
     ) -> Result<(), String>
     where
@@ -283,11 +315,19 @@ impl ScaEngine {
             all_doc_words.push(words);
         }
 
-        // Compute IDF: ln((N+1)/(freq+1)) + 1.0 — matches Python exactly
+        // Compute IDF: ln((N+1)/(freq+1)) + 1.0 — matches Python exactly.
+        // Incremental: MERGE the new docs' IDF into the existing table (keep prior
+        // terms) rather than replacing it; full build: replace.
         let n = n_docs as f32;
-        self.word_idf = doc_freq.into_iter()
-            .map(|(w, freq)| (w, ((n + 1.0) / (freq + 1.0)).ln() + 1.0))
-            .collect();
+        let new_idf = doc_freq.into_iter()
+            .map(|(w, freq)| (w, ((n + 1.0) / (freq + 1.0)).ln() + 1.0));
+        if preserve_mean {
+            for (w, idf) in new_idf {
+                self.word_idf.entry(w).or_insert(idf);
+            }
+        } else {
+            self.word_idf = new_idf.collect();
+        }
 
         // B. Stream per-doc: chunk → encode → doc mean → write to mmap temp
         //    RAM stays flat — each doc's passages and embeddings freed immediately.
@@ -337,28 +377,39 @@ impl ScaEngine {
         }
         scratch.flush()?;
 
-        // C. Corpus mean from all passage sums (NOT doc means)
-        let corpus_mean: Vec<f32> = corpus_sum.iter()
-            .map(|&s| (s / total_passages.max(1) as f64) as f32)
-            .collect();
-        self.core.set_corpus_mean(corpus_mean.clone());
+        // C. Corpus mean. Full build: compute from this batch's passage sums and set
+        //    it. Incremental: REUSE the persisted mean so the new docs quantize into
+        //    the SAME space as the existing corpus (comparable fingerprints). If a
+        //    preserve was requested but no mean exists yet (first ever doc), fall back
+        //    to computing it.
+        let corpus_mean: Vec<f32> = if preserve_mean && !self.core.get_corpus_mean().is_empty() {
+            self.core.get_corpus_mean().to_vec()
+        } else {
+            let m: Vec<f32> = corpus_sum.iter()
+                .map(|&s| (s / total_passages.max(1) as f64) as f32)
+                .collect();
+            self.core.set_corpus_mean(m.clone());
+            m
+        };
 
-        // D. Per-dimension std for whitening — read doc means back from mmap
-        //    (OS-paged, stays low in RAM).
-        let mut variance_sum = vec![0.0f64; embed_dim];
-        for doc_idx in 0..n_docs {
-            let offset = doc_idx * bytes_per_mean;
-            let slice: &[f32] = bytemuck::cast_slice(&scratch.as_slice()[offset..offset + bytes_per_mean]);
-            for (d, &v) in slice.iter().enumerate() {
-                let centered = v as f64 - corpus_mean[d] as f64;
-                variance_sum[d] += centered * centered;
+        // D. Per-dimension std for whitening. Incremental reuses the persisted std
+        //    (recomputed on the next full "growth" rebuild); full build computes it.
+        if !(preserve_mean && !self.core.get_corpus_std().is_empty()) {
+            let mut variance_sum = vec![0.0f64; embed_dim];
+            for doc_idx in 0..n_docs {
+                let offset = doc_idx * bytes_per_mean;
+                let slice: &[f32] = bytemuck::cast_slice(&scratch.as_slice()[offset..offset + bytes_per_mean]);
+                for (d, &v) in slice.iter().enumerate() {
+                    let centered = v as f64 - corpus_mean[d] as f64;
+                    variance_sum[d] += centered * centered;
+                }
             }
+            let n_f = n_docs as f64;
+            let corpus_std: Vec<f32> = variance_sum.iter()
+                .map(|&v| ((v / n_f.max(1.0)).sqrt() as f32).max(1e-6))
+                .collect();
+            self.core.set_corpus_std(corpus_std);
         }
-        let n_f = n_docs as f64;
-        let corpus_std: Vec<f32> = variance_sum.iter()
-            .map(|&v| ((v / n_f.max(1.0)).sqrt() as f32).max(1e-6))
-            .collect();
-        self.core.set_corpus_std(corpus_std);
 
         // E. Gammas
         let gammas: Vec<f32> = all_doc_words.iter().map(|words| {

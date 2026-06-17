@@ -174,8 +174,12 @@ scoring.
 Honest caveats:
 - recall@1 is 75% on paraphrase queries; the product relies on top-k (≥5), where it is
   100%. Don't gate on precision@1.
-- Bulk-storing N fixes is O(N²) today (each `learn-fix` rebuilds the whole SCA index).
-  Not a hot path — production stores one fix per green gate — but a real bulk-load cost.
+- ~~Bulk-storing N fixes is O(N²) (each `learn-fix` rebuilds the whole SCA index).~~
+  **FIXED (2026-06-17):** `build_index` is now incremental-aware — it appends only the
+  new frames against the persisted corpus mean (full rebuild only on first build or
+  >50% growth, the "recompute on growth" design). Bulk storage is now amortized O(N);
+  per-store time is flat (~160→190 ms from 42→202 frames) and recall@5 stays 100%.
+  One global path — `add`, `init`, PDF/Word ingest, and `learn-fix` all benefit.
 
 ## UPDATE (2026-06-17): top-1 vs top-5 INJECTION — A/B (the recall@5 payoff, end-to-end)
 

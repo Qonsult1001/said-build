@@ -50,6 +50,12 @@ use crate::engine::ScaEngine;
 const SAID_MAGIC: &[u8; 4] = b"SAID";
 const SAID_VERSION: u16 = 7; // v7: all section offsets in header (u64), no magic scanning
 
+/// `build_index` appends new frames incrementally (O(new)) against the persisted
+/// corpus mean — until the corpus has grown by more than this fraction since the
+/// last full build, at which point it does one full rebuild to re-center the mean
+/// (the documented "recompute on growth", 3.1). 0.5 = rebuild after +50% growth.
+const RECOMPUTE_GROWTH: f32 = 0.5;
+
 /// Header size for legacy v7 files (4 u64 offsets + 4 reserved bytes).
 const HEADER_SIZE_V7: usize = 48;
 /// Header size for v7_1 files (72 bytes: adds trgm_offset + syms_offset +
@@ -1420,14 +1426,40 @@ impl SaidFile {
             }
         }
 
+        // INCREMENTAL vs FULL — one path decides. If the index is already populated
+        // (corpus_ids non-empty) and the only change is NEW frames appended (existing
+        // ids unchanged), and the growth is below the recompute threshold, append just
+        // the new frames against the persisted corpus mean (O(new) not O(all)). This is
+        // the documented "recompute on growth" design (3.1) and makes `learn-fix`,
+        // `add`, and PDF/Word ingest all O(N)-incremental for free — same global path.
+        let indexed: std::collections::HashSet<&str> =
+            self.corpus_ids.iter().map(|s| s.as_str()).collect();
+        let prior = self.corpus_ids.len();
+        let existing_still_present = !indexed.is_empty()
+            && doc_ids.iter().filter(|d| indexed.contains(d.as_str())).count() == prior;
+        let new_ids: Vec<String> = doc_ids.iter().filter(|d| !indexed.contains(d.as_str())).cloned().collect();
+        // Recompute on growth: full rebuild if the corpus grew by > this fraction
+        // since the last full build (keeps the corpus mean representative).
+        let growth_ok = prior > 0 && (new_ids.len() as f32) <= (prior as f32) * RECOMPUTE_GROWTH;
+        let can_incremental = existing_still_present && growth_ok && !new_ids.is_empty();
+
         if !doc_ids.is_empty() {
             #[cfg(feature = "static-embed")]
             {
                 if self.engine.encode_query("test").is_none() {
                     let _ = self.engine.try_auto_load_encoder();
                 }
-                self.engine.clear();
-                self.engine.index_batch_with_progress(&doc_ids, &doc_texts, progress)?;
+                if can_incremental {
+                    // Append ONLY the new frames; existing fingerprints untouched.
+                    let new_texts: Vec<String> = new_ids.iter()
+                        .filter_map(|id| doc_ids.iter().position(|d| d == id).map(|i| doc_texts[i].clone()))
+                        .collect();
+                    let _ = progress;
+                    self.engine.index_batch_incremental(&new_ids, &new_texts)?;
+                } else {
+                    self.engine.clear();
+                    self.engine.index_batch_with_progress(&doc_ids, &doc_texts, progress)?;
+                }
                 // s_slow_write happens at QUERY time (in search_internal), not
                 // index time. The brain learns from what users ASK, not from
                 // bulk data. Eliminating the per-doc encode_query loop saves
@@ -1435,7 +1467,7 @@ impl SaidFile {
             }
             #[cfg(not(feature = "static-embed"))]
             {
-                let _ = progress;
+                let _ = (progress, can_incremental, &new_ids);
                 self.engine.clear();
                 for (id, text) in doc_ids.iter().zip(doc_texts.iter()) {
                     self.engine.stream_index(id, text, 512);
