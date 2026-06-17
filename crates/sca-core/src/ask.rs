@@ -292,107 +292,31 @@ pub fn ask(
 
 // ── Coding-fix recall: ONE scorer, shared by said-cli and said-orchestration ──
 // Previously the CLI (`best_fix_for`) and the orchestrator (`best_iteration`) used
-// DIFFERENT scorers — the CLI's intent fingerprint vs. raw `ask` fusion text — and
-// they disagreed (the same match scored 0.53 in one, 0.95 in the other). Fusion
-// text is bag-of-words and collides at scale. This is the single source of truth:
-// intent fingerprint (the gate, separates "add X" from "document X") + symmetric
-// (Jaccard) overlap of the DISTINCTIVE target tokens (picks the right X), weighted
-// so a strong conceptual match scores HIGH enough to clear a confidence floor.
+// DIFFERENT scorers that disagreed (the same match scored 0.53 in one, 0.95 in the
+// other). This is the single source of truth: the ask chain for the neighborhood +
+// `.said`'s 1-bit hierarchical SEMANTIC fingerprint of the problem to pick the right
+// one within it (separates near-twins by meaning, not shared words).
 
-/// Marker strings for the stored coding-fix body (must match what `learn-fix` writes
-/// and what said-orchestration::learn uses).
+/// Marker strings for the stored coding-fix frames (must match what `learn-fix`
+/// writes and what said-orchestration::learn uses).
 pub const FIX_KIND_TAG: &str = "coding-fix";
 pub const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
-const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
-const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
-
-/// Split a stored fix body into (problem/TASK line, edits JSON, action residue).
-fn split_fix_body(body: &str) -> (String, String, String) {
-    let (note_plus, action) = match body.split_once(FIX_ACTION_SEP) {
-        Some((a, b)) => (a, b.trim().to_string()),
-        None => (body, String::new()),
-    };
-    let (note, edits) = match note_plus.split_once(FIX_EDITS_SEP) {
-        Some((a, b)) => (a, b.trim().to_string()),
-        None => (note_plus, String::new()),
-    };
-    let problem = note.lines().next()
-        .and_then(|l| l.strip_prefix("TASK: "))
-        .unwrap_or("").trim().to_string();
-    (problem, edits, action)
-}
-
-/// Common English/boilerplate words that carry no discriminating signal for a
-/// coding problem ("implement an X cache" — the X is what matters, not the rest).
-/// Kept tiny and obvious; this is a stop-list, not NLP.
-const FIX_STOPWORDS: &[&str] = &[
-    "the", "and", "for", "with", "that", "this", "from", "into", "over", "per",
-    "implement", "add", "fix", "make", "build", "create", "use", "using", "when",
-    "where", "which", "must", "should", "its", "are", "not", "but", "all", "any",
-    "get", "put", "set", "has", "size", "count", "return", "returns", "value",
-    "key", "keys", "entry", "operation", "operations", "average",
-];
-
-/// Distinctive concept tokens of a problem string, lowercased: alphanumeric tokens
-/// of length >= 3 that are NOT stopwords. Does NOT strip CamelCase / all-caps tokens
-/// — so "LRU", "LFU", "TTL" SURVIVE as the most discriminating words (action_residue
-/// strips exactly those; that was the bug). ALSO splits CamelCase so "LRUCache"
-/// contributes both "lru" and "cache", matching a stored "LRU cache" written as two
-/// words (the tokenization gap that left `LRUCache get put` scoring low).
-fn concept_tokens(problem: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for raw in problem.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '/')) {
-        if raw.is_empty() { continue; }
-        for piece in split_camel(raw) {
-            let t = piece.to_lowercase();
-            if t.len() >= 3 && !FIX_STOPWORDS.contains(&t.as_str()) {
-                out.insert(t);
-            }
-        }
-    }
-    out
-}
-
-/// Split a token on CamelCase / acronym boundaries, keeping the whole token too.
-/// "LRUCache" -> ["LRUCache", "LRU", "Cache"]; "getOrCreate" -> [whole, get, Or,
-/// Create]. snake_case is already split by the caller's delimiter pass.
-fn split_camel(tok: &str) -> Vec<String> {
-    let mut parts = vec![tok.to_string()];
-    let chars: Vec<char> = tok.chars().collect();
-    let mut start = 0;
-    for i in 1..chars.len() {
-        let prev = chars[i - 1];
-        let cur = chars[i];
-        let next = chars.get(i + 1).copied();
-        // Boundary: lower->Upper (getOr|Create), or Upper-run -> Upper+lower
-        // (LRU|Cache: split before the C that starts a new word).
-        let boundary = (prev.is_lowercase() && cur.is_uppercase())
-            || (prev.is_uppercase() && cur.is_uppercase()
-                && next.map(|n| n.is_lowercase()).unwrap_or(false));
-        if boundary {
-            parts.push(chars[start..i].iter().collect());
-            start = i;
-        }
-    }
-    if start > 0 {
-        parts.push(chars[start..].iter().collect());
-    }
-    parts
-}
 
 /// The single coding-fix scorer. Returns the best-matching coding-fix `doc_id` and
 /// its score in [0,1], or None if there are no coding-fix candidates. Caller applies
 /// its own confidence floor. Used by BOTH the CLI `recall-fix` and the orchestrator.
 ///
 /// Design: RIDE the world-class `ask` chain (the documented retrieval pipeline —
-/// SCA + routed BM25/IDF + entity boost + graph fan-out, MTEB 0.9655). Its ranked
-/// `confidence` is the spine — we do NOT re-implement IDF/concept scoring here, that
-/// duplicates Layer 2. The ONE thing the chain lacks for procedural coding-fixes is
-/// INTENT isolation: two near-twins ("LRU cache" vs an "LFU cache" whose text says
-/// "tie-break by least-recently-used") have near-identical text, so the chain ties
-/// them. The action/intent fingerprint (the documented "intent breakthrough",
-/// action-isolated 1-bit matching) is the discriminator that separates them. So:
-/// score = ask_confidence (relative) × intent-agreement factor.
+/// SCA + routed BM25/IDF + entity boost + graph fan-out, MTEB 0.9655) to get the
+/// right NEIGHBORHOOD of coding-fix candidates. Then pick the right one WITHIN it by
+/// `.said`'s own SEMANTIC signal: the 1-bit hierarchical fingerprint of the full
+/// PROBLEM text, scored pure-semantic (`rank_by_fingerprint` forces the PureSemantic
+/// route — alpha 0.0, Hamming distance only, the paraphrase route from 3.1). This is
+/// what separates near-twins lexical overlap cannot: "LRU cache" vs an "LFU cache
+/// (tie-break by least-recently-used)" embed DIFFERENTLY (measured: 0.97 vs 0.70 for
+/// an LRU query), because the encoder captures meaning, not shared words. A small
+/// action-fingerprint bonus adds intent agreement.
+/// score = rel_ask_conf × (0.4 + 0.5·semantic + 0.1·intent).
 pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f32)> {
     let (fusion_cands, _kw) = ask(brain, problem, 25, false, None);
     // Keep ask's ranking + confidence for coding-fix frames only.
@@ -406,39 +330,20 @@ pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f
     }
     let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
 
-    // Intent fingerprint over the action residue — action-isolated, so it scores by
-    // WHAT IS BEING DONE (implement an eviction cache) not the shared surface words.
-    // This is the tie-breaker the ask chain doesn't carry for fixes.
+    // SEMANTIC discriminator: pure-semantic 1-bit fingerprint similarity of the FULL
+    // problem text against every frame. Keyed by fix:: doc_id (the problem-bearing
+    // frame). This is the signal that separates LRU from LFU where words tie.
+    let sem_fp: HashMap<String, f32> = brain.rank_by_fingerprint(problem, 200)
+        .into_iter().collect();
+    // INTENT bonus: action-isolated fingerprint (separates "add" from "document").
     let q_action = action_residue(problem);
     let action_fp: HashMap<String, f32> = if q_action.is_empty() {
         HashMap::new()
     } else {
-        brain.rank_by_fingerprint(&q_action, 100).into_iter()
+        brain.rank_by_fingerprint(&q_action, 200).into_iter()
             .filter_map(|(d, s)| d.strip_prefix(FIX_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
             .collect()
     };
-    // IDF-weighted concept overlap — the discriminator the ask chain lacks for
-    // near-twins. ask ranks "LRU cache" and an "LFU cache (tie-break by LRU)" equal
-    // (near-identical text); the intent fingerprint is brittle to paraphrase and
-    // often 0. What reliably separates them is which DISTINCTIVE concept tokens are
-    // shared, weighted by rarity across the candidate set (so "lru" >> "cache").
-    // Computed over the coding-fix candidates only — small, self-contained.
-    let q_concept = concept_tokens(problem);
-    let mut df: HashMap<String, usize> = HashMap::new();
-    let mut cand_concept: HashMap<String, HashSet<String>> = HashMap::new();
-    for (doc_id, _) in &ranked {
-        let body = brain.get(doc_id).unwrap_or_default();
-        let (c_problem, _e, _a) = split_fix_body(&body);
-        let c = concept_tokens(&c_problem);
-        for t in &c { *df.entry(t.clone()).or_insert(0) += 1; }
-        cand_concept.insert(doc_id.clone(), c);
-    }
-    let n_docs = ranked.len() as f32;
-    let idf = |tok: &str| -> f32 {
-        let d = df.get(tok).copied().unwrap_or(0) as f32;
-        (1.0 + n_docs / (1.0 + d)).ln()
-    };
-    let q_idf_total: f32 = q_concept.iter().map(|t| idf(t)).sum();
 
     let dbg = std::env::var("SAID_FIX_SCORE_DEBUG").is_ok();
     let mut best: Option<(String, f32)> = None;
@@ -446,21 +351,22 @@ pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
         let rel_conf = conf / top_conf;
-        let empty = HashSet::new();
-        let c_concept = cand_concept.get(doc_id).unwrap_or(&empty);
-        let concept = if q_idf_total <= 0.0 { 0.0 } else {
-            let covered: f32 = q_concept.iter()
-                .filter(|t| c_concept.contains(*t)).map(|t| idf(t)).sum();
-            covered / q_idf_total
-        };
-        // ask confidence is the recall spine (gets the right neighborhood); the
-        // IDF concept overlap picks the right one WITHIN that neighborhood (breaks
-        // near-twin ties via distinctive tokens); the intent fingerprint adds a
-        // small same-action bonus. Concept-weighted so a distinctive match wins.
-        let score = rel_conf * (0.35 + 0.5 * concept + 0.15 * intent);
+        // Semantic similarity of the problem to this fix frame (the fix:: frame, or
+        // its action companion as a fallback if the fix frame wasn't fingerprinted).
+        let semantic = sem_fp.get(doc_id).copied()
+            .or_else(|| sem_fp.get(&format!("{}{}", FIX_ACTION_ID_PREFIX, id16)).copied())
+            .unwrap_or(0.0);
+        // ask confidence = right neighborhood (spine); then TWO orthogonal `.said`
+        // discriminators pick the right one within it: the semantic fingerprint of
+        // the PROBLEM (meaning) and the action fingerprint (isolated INTENT). Both
+        // are 1-bit hierarchical signals and both matter — on an adversarial twin
+        // (an LFU fix whose text mentions "least-recently-used") the problem semantic
+        // can lean the wrong way while the action fingerprint correctly favors the
+        // true LRU intent, so they are weighted comparably.
+        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
         if dbg {
-            eprintln!("[fix-score] {} ask={:.3} rel={:.3} concept={:.3} intent={:.3} -> {:.3}",
-                doc_id, conf, rel_conf, concept, intent, score);
+            eprintln!("[fix-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
+                doc_id, conf, rel_conf, semantic, intent, score);
         }
         if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
             best = Some((doc_id.clone(), score));
@@ -469,38 +375,6 @@ pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f
     best
 }
 
-#[cfg(test)]
-mod fix_score_tests {
-    use super::*;
-
-    #[test]
-    fn split_camel_breaks_acronym_words() {
-        let p = split_camel("LRUCache");
-        assert!(p.iter().any(|s| s == "LRUCache"));
-        assert!(p.iter().any(|s| s == "LRU"), "acronym kept: {:?}", p);
-        assert!(p.iter().any(|s| s == "Cache"), "trailing word kept: {:?}", p);
-        let g = split_camel("getOrCreate");
-        assert!(g.iter().any(|s| s == "get"));
-        assert!(g.iter().any(|s| s == "Create"));
-    }
-
-    #[test]
-    fn concept_tokens_keep_acronyms_drop_stopwords() {
-        let c = concept_tokens("Implement an LRU cache with get and put");
-        assert!(c.contains("lru"), "distinctive acronym survives: {:?}", c);
-        assert!(c.contains("cache"));
-        assert!(!c.contains("get"), "stopword dropped");
-        assert!(!c.contains("the"));
-        // LRUCache split lets the one-word form match a two-word stored "lru cache".
-        let c2 = concept_tokens("LRUCache get put evict");
-        assert!(c2.contains("lru") && c2.contains("cache"), "camel split: {:?}", c2);
-    }
-
-    #[test]
-    fn lru_and_lfu_concepts_are_distinct() {
-        let lru = concept_tokens("Implement an LRU cache evict least recently used");
-        let lfu = concept_tokens("Implement an LFU cache evict least frequently used");
-        assert!(lru.contains("lru") && !lru.contains("lfu"));
-        assert!(lfu.contains("lfu") && !lfu.contains("lru"));
-    }
-}
+// best_coding_fix is validated end-to-end by the decoy harness
+// (hard-eval/recall-measure.sh) — it needs a brain with the static encoder loaded
+// (the semantic fingerprint signal), which a pure unit test cannot provide.

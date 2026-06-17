@@ -9,6 +9,13 @@ license = "MIT"
 name = "said-orchestrate"
 path = "src/bin/said-orchestrate.rs"
 
+[features]
+# Embed the static encoder by default — semantic recall (1-bit fingerprints) needs
+# it; without it build_index produces 0 SCA docs and best_iteration's semantic
+# discriminator returns nothing.
+default = ["embed-model"]
+embed-model = ["sca-core/embed-model"]
+
 [dependencies]
 # Memory: recall verified iterations, apply edits, record outcomes.
 sca-core = { path = "../sca-core", features = ["static-embed", "code"] }

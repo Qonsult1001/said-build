@@ -14,7 +14,9 @@ rm -f "$BRAIN"
 "$SAID" create "$BRAIN" >/dev/null 2>&1
 
 # Minimal valid edits payload for decoys (content irrelevant to recall scoring).
-ed() { printf '[{"file":"src/%s.js","mode":"write-file","content":"// %s\\n"}]' "$1" "$1"; }
+# NOTE: the \n must be an ESCAPED backslash-n inside the JSON string, not a real
+# newline — printf would otherwise emit a literal newline and break the JSON.
+ed() { printf '[{"file":"src/%s.js","mode":"write-file","content":"// %s\\\\n"}]' "$1" "$1"; }
 
 # --- THE REAL TARGET ---
 "$SAID" --path "$BRAIN" learn-fix \

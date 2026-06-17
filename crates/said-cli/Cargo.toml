@@ -23,7 +23,11 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optiona
 dirs-next = "2"
 
 [features]
-default = []
+# The static encoder is REQUIRED for semantic recall (1-bit fingerprints). Embed it
+# by default so every build of the CLI can index + fingerprint with zero external
+# files — without it build_index silently produces 0 SCA docs and semantic recall
+# returns nothing. (Was opt-in; that left default builds with no encoder.)
+default = ["embed-model"]
 whisper = ["sca-core/whisper"]
 embed-model = ["sca-core/embed-model"]
 code = ["sca-core/code"]
