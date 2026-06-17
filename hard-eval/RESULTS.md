@@ -157,15 +157,19 @@ top 5–10 candidates, so "the right learning in the top-5" is a good result.
 | Store size | recall@1 | recall@5 | recall@10 |
 |---|---|---|---|
 | N=300 (610 frames), 3 runs | 9/12 (75%) | **12/12 (100%)** | **12/12 (100%)** |
-| N=1000, 3 runs | 9/12 (75%) | **12/12 (100%)** | **12/12 (100%)** |
+| N=1000 (2008 frames), 3 runs | 9/12 (75%) | **12/12 (100%)** | **12/12 (100%)** |
+
+(2008 frames = 1004 fixes × 2: each fix + its action-residue companion — a genuine
+~1000-unique-learning store, each scored against the rest.)
 
 **The right learning is always in the top-5, even at 1000 records — and N=300 vs N=1000
 gave identical recall@5/@10.** The 1-bit semantic fingerprint discriminates fine in a
-crowded store; growing the store 3× did not degrade it. The one consistent rank-2 is
-the merge-intervals *bugfix* (phrased with no distinctive acronym) — it loses #1 to a
-near-twin but is reliably #2, caught by any top-k ≥ 2. The scorer now returns top-k
-(`best_coding_fixes`) and widens its candidate neighborhood with corpus size so the
-true match isn't truncated out of the pool before scoring.
+crowded store; growing the store 3× did not degrade it. The one near-miss is the
+merge-intervals *bugfix* (phrased with no distinctive acronym): it loses #1 to a
+near-twin and floats between rank 2–3 across runs — never out of the top-5, caught by
+any top-k ≥ 2. The scorer returns top-k (`best_coding_fixes`) and widens its candidate
+neighborhood with corpus size so the true match isn't truncated out of the pool before
+scoring.
 
 Honest caveats:
 - recall@1 is 75% on paraphrase queries; the product relies on top-k (≥5), where it is
