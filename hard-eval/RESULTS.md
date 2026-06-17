@@ -103,10 +103,55 @@ never-paste thesis. The pipeline is strictly: recall learning → inject → LLM
 → gate. The highest-leverage product work is now the LEARN step extracting the
 non-obvious invariant, not generic summaries. (See memory/learning-quality-is-the-moat.)
 
+## UPDATE (2026-06-17): Claude-faithful apply + SEMANTIC recall — re-verified
+
+Two follow-on workstreams landed and were re-run end-to-end on the current binaries.
+
+### 1. Claude-faithful apply (commit e9a40f0)
+The change-set apply now mirrors Claude Code's Edit tool exactly: an anchor must be
+an EXACT, UNIQUE substring or the edit FAILS cleanly into the repair loop (no fuzzy
+matching that silently corrupts). The line-number-prefix rule lives verbatim in the
+CODE/REPAIR prompts ("Never include any part of the line number prefix"). Verbatim
+diff-replay was prototyped and REMOVED — it only "passed" on an identical stub and
+violates the never-paste thesis.
+
+### 2. Semantic coding-fix recall (commits 1bc1cb3, 013e6ba)
+ONE shared scorer (`sca-core::ask::best_coding_fix`) for the CLI and the orchestrator
+(they previously used different, disagreeing scorers). It rides the documented `ask`
+chain for the candidate neighborhood, then discriminates with `.said`'s OWN 1-bit
+hierarchical signals: the SEMANTIC fingerprint of the problem + the action/intent
+fingerprint. Root-cause bug fixed: `embed-model` was opt-in, so builds shipped with
+NO static encoder → `build_index` indexed 0 fingerprints → semantic recall was dead.
+Made it `default`.
+
+Decoy harness (`recall-measure.sh`, 1 real LRU fix + 9 vocabulary-overlapping decoys
+incl. an adversarial LFU fix whose text says "tie-break by least-recently-used"):
+**7/7 LRU queries → the LRU fix, AND 5/5 decoy queries → their own decoy** (scores
+0.73–0.85). Lexical methods tied on the adversarial pair; the semantic fingerprint
+separates it.
+
+### Re-verification on current binaries (2026-06-17)
+| Check | Result |
+|---|---|
+| Cold sweep, gpt-oss-120b (h1–h4) | **3/4** — h2/h3/h4 GREEN 1-attempt; h1_lru RED cold (unchanged — no regression) |
+| Warm h1_lru, gpt-oss-120b, PERTURBED repo | ✅ **GREEN, 1 attempt, 13s** — semantic recall (score 0.70) → adapt → gate |
+| Recall precision (9 decoys) | **7/7 + 5/5** |
+
+The moat holds end-to-end on the Claude-faithful + semantic-recall pipeline: same
+weak model, memory still flips the hard task RED→GREEN by transferring LEARNING the
+model adapts (never a pasted diff). (See memory/learning-quality-is-the-moat,
+recall-bottleneck-measured.)
+
+Honest scope: warm proof + recall precision are on small brains (≤10 fixes). The
+mechanism is correct; scale to 1000s of records is the next validation.
+
 ## Engineering fixes made during this eval
 - max_output_tokens 8192 → 32768 (big change-sets were truncating mid-JSON;
   models support 65,536).
 - said-llm: reasoning_effort control + instant mode + provider pinning + temp
   override (k2.x thinking = 35-80s/call; instant ~1-2s; provider choice 25s→3s).
-- apply: multi-line replace-text fix (was corrupting multi-method class replaces).
+- apply: multi-line replace-text fix, then strict exact-unique anchoring
+  (Claude-faithful) — fuzzy matching removed.
 - memory: inject-and-adapt learning transfer (the moat), not raw replay.
+- recall: semantic 1-bit fingerprint discriminator + embed-model default (encoder
+  always present, else build_index indexes 0 fingerprints).
