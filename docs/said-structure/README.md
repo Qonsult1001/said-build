@@ -20,6 +20,7 @@ It's split into twelve sections so pages stay focused and cross-linkable.
 12. [Roadmap](12-roadmap.md) — planned work, gating metrics, deferred research
 13. [Integrations architecture](13-integrations.md) — the two rules (offline-first; LLM in a separate process), crate inventory, `said-think`, and the LEANN-inspired Q2/Q3/Q4 plan
 14. [Novel mechanisms](14-novel-mechanisms/) — 8 shipped + 5 horizon, with math, formulas, proof-sketches, and literature positioning
+15. [Coding orchestration](15-orchestration.md) — the model-agnostic Claude-Code loop (plan→design→code→test→repair→learn): Claude-faithful apply, semantic coding-fix recall, and the learning-transfer moat (weak model RED→GREEN), with measured results
 
 ## Maintenance rules
 
