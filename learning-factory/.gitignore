@@ -1,0 +1,5 @@
+# Transient / generated — not source.
+.work/
+brains/
+lake/
+*.said

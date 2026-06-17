@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "note": "Master task library for the learning factory. Each task: a stub (seed/) + a gate test (test/) whose assertions define the spec AND force out the non-obvious invariants. Grow this freely — one entry + two files per task.",
+  "tasks": [
+    {
+      "id": "lru_cache",
+      "lang": "javascript",
+      "type": "data-structure",
+      "files": "src/lru_cache.js",
+      "task": "Implement the LRUCache class in src/lru_cache.js per its spec: O(1) get/put via a doubly-linked list + Map, get and put-update count as a use, evict least-recently-used when over capacity, get returns -1 if absent. Make node test/lru_cache.test.js pass."
+    },
+    {
+      "id": "lfu_cache",
+      "lang": "javascript",
+      "type": "data-structure",
+      "files": "src/lfu_cache.js",
+      "task": "Implement the LFUCache class in src/lfu_cache.js: O(1) get/put, evict the least-frequently-used key over capacity, tie-break by least-recently-used among equal frequencies, get returns -1 if absent. Make node test/lfu_cache.test.js pass."
+    },
+    {
+      "id": "merge_intervals",
+      "lang": "javascript",
+      "type": "algorithm",
+      "files": "src/merge_intervals.js",
+      "task": "Implement mergeIntervals in src/merge_intervals.js: sort by start, merge overlapping AND touching intervals (<= boundary), do not mutate the input arrays. Make node test/merge_intervals.test.js pass."
+    },
+    {
+      "id": "debounce",
+      "lang": "javascript",
+      "type": "pattern",
+      "files": "src/debounce.js",
+      "task": "Implement debounce(fn, waitMs) in src/debounce.js: returns a function that delays calling fn until waitMs after the last call; only the LAST call's args are used; calling again before waitMs resets the timer. Make node test/debounce.test.js pass."
+    },
+    {
+      "id": "token_bucket",
+      "lang": "javascript",
+      "type": "algorithm",
+      "files": "src/token_bucket.js",
+      "task": "Implement the TokenBucket class in src/token_bucket.js: starts full at capacity, refills continuously at refillPerSec (fractional, capped at capacity), tryRemove(n, nowMs) deducts n only if enough tokens (else false, no deduction), available(nowMs) returns current tokens. Make node test/token_bucket.test.js pass."
+    }
+  ]
+}
