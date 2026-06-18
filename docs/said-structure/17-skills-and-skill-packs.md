@@ -51,6 +51,24 @@ curated context7 docs lift the weak model exactly at its knowledge edge, gate-ve
 no per-repo Claude solving. Reusable assets kept under `learning-factory/context7/entries/`
 (one dir per entry: src reference + test gate) — the template for scaling to 100.
 
+## Naming: PER-LANGUAGE packs; the folder is the global mount (decided 2026-06-18)
+
+context7 answers a concept across MANY languages (search "retry http request" → axios-retry/
+p-retry [JS], retry-go [Go], spring-retry [Java]…). A learning is only verifiable against a
+runnable toolchain and recall should stay in-language, so the **pack unit is the LANGUAGE**:
+- `node.said`, `python.said`, `rust.said`, `go.said` — one pack per language. Gate is
+  per-language; recall stays in-language; each is independently built/versioned/SOLD.
+- **"Global" = the `.said/skills/` FOLDER**, which the orchestrator federates across all
+  mounted packs. So you get both: drop `node.said` + `python.said` in the folder and recall
+  unions them, but each file is its own product.
+- **Source is a per-frame TAG, not a filename.** A frame carries `src:context7 lib:vercel/ms`
+  or `src:factory` — so context7-built and factory-built skills coexist in the same language
+  pack. (Do NOT name packs by source like `context7-curated.said` — that mixes languages.)
+
+Current canonical pack: **`.said/skills/node.said` — 7 verified skills** (4 from context7
+libs: ms/qs/currency/uuid + 3 classic: lru/lfu/token_bucket). The earlier `code-js.said` and
+`context7-curated.said` were merged into it and retired.
+
 ## The realization
 
 A verified `.said` **coding learning IS a skill.** A `code.said` brain (built by the
