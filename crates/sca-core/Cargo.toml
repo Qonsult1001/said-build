@@ -37,6 +37,10 @@ embed-model = ["static-embed"]
 gpu = ["dep:wgpu", "dep:pollster"]
 # Per-frame AES-256-GCM encryption
 encryption = ["dep:aes-gcm"]
+# Ed25519 detached signing/verification of skill packs (Gate 3 publisher trust).
+# DETACHED (.sig sidecar) for now; the in-file SIGN section is OUTSTANDING FOR LAUNCH
+# (see docs/said-structure/18 + 12-roadmap). Optional dep, off by default.
+pack-sign = ["dep:ed25519-dalek", "dep:rand_core"]
 # Tree-sitter AST parsing for code chunking (all languages). SQL chunking
 # stays on the custom GO-batch parser; said-forge has its own
 # tree-sitter-sequel dep for T-SQL wire-shape analysis (different concern).
@@ -125,6 +129,17 @@ version = "8"
 [dependencies.aes-gcm]
 version = "0.10"
 optional = true
+
+# Ed25519 detached pack signing (feature `pack-sign`). rand_core for keygen.
+[dependencies.ed25519-dalek]
+version = "2"
+optional = true
+features = ["rand_core"]
+
+[dependencies.rand_core]
+version = "0.6"
+optional = true
+features = ["getrandom"]
 
 # Audio transcription via sherpa-rs (prebuilt binaries, no LLVM needed)
 [dependencies.sherpa-rs]

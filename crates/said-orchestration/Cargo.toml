@@ -13,8 +13,11 @@ path = "src/bin/said-orchestrate.rs"
 # Embed the static encoder by default — semantic recall (1-bit fingerprints) needs
 # it; without it build_index produces 0 SCA docs and best_iteration's semantic
 # discriminator returns nothing.
-default = ["embed-model"]
+default = ["embed-model", "pack-sign"]
 embed-model = ["sca-core/embed-model"]
+# Ed25519 verify-at-mount of signed skill packs (Gate 3). On by default so the
+# orchestrator enforces publisher trust when a pack carries a signature sidecar.
+pack-sign = ["sca-core/pack-sign"]
 
 [dependencies]
 # Memory: recall verified iterations, apply edits, record outcomes.

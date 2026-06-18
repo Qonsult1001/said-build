@@ -6,6 +6,21 @@ Ordering within each section is priority — top entries ship first unless other
 
 ---
 
+## OUTSTANDING FOR LAUNCH — skill packs / shop (see [18-skill-pack-linking-and-trust.md](18-skill-pack-linking-and-trust.md))
+
+The skill-pack system ships in gates; these are the must-finish items before selling packs:
+
+- [x] **Multi-brain mount** (Gate 1+2) — auto-discover + federate read-only packs (commit 857c684).
+- [x] **Canonical dedup** — coding-fix doc_id keys on task identity; re-learn supersedes, no pollution (commit aca446e).
+- [x] **Ed25519 signing/verify (Gate 3), DETACHED** — `sca_core::pack_sign` + verify-at-mount against `~/.said/publishers` allowlist; refuse unknown/tampered. Sidecar `<pack>.said.sig`.
+- [ ] **⚠️ Merge the signature INTO the `.said` file (in-file `SIGN` section).** Signing is currently a DETACHED `.sig` sidecar (zero file-format risk). Before launch, fold it into row-52 §1.2's in-file `SIGN` section (magic+sig+pubkey+alg, header slot) so a pack is ONE self-describing file with no sidecar to lose/strip. Same crypto; only the signature's location changes. **Launch blocker for the shop.**
+- [ ] **`said pack` CLI** — `keygen` / `sign` / `verify` publisher + consumer commands (currently only the library API + verify-at-mount exist).
+- [ ] **Gate 4 — sell/encrypt/license.** Paid packs = `Locked` + signed + AES-256-GCM encrypted; shop issues a license wrapping the content key to the buyer (`~/.said/licenses/`); decrypt-on-mount. Required to sell `apply.said` without leaking the IP.
+- [ ] **`BrainMode::Locked`** at publish (row-52 §1.1) — engine-level read-only, immutable post-publish.
+- [ ] **Registry** (`hub.said.app`: `registry.json` + `publishers.json`) + `said skills add/list/remove` CLI.
+
+---
+
 ## Integrations — the Q2/Q3/Q4 plan (see [13-integrations.md](13-integrations.md))
 
 Governed by the two rules: **(1) offline-first; online-only when inherent. (2) LLM agents are a separate process.** LEANN-validated local-file pattern is the Q2 push; OAuth pilots start Q3.

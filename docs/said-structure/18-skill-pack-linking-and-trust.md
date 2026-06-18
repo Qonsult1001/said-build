@@ -129,10 +129,17 @@ PRIMARY wins ties. Gate verifies. learn-on-green writes to PRIMARY ONLY (packs s
    merges primary + packs (Gate 1 + 2). Writes go to primary only. Proven E2E: empty
    primary + auto-discovered `code-js.said` lifted gpt-oss-20b (recall from the pack,
    0.78–0.94). "Download → drop in folder → works" for local/trusted packs is live.
-2. **Gate 3 (signing/approval) = ship the Hub Tier-1 spec.** `BrainMode::Locked` + the
-   `SIGN` header block + the registry `publishers.json` allowlist are ALREADY specified in
-   [row-52-hub.md](05-features/row-52-hub.md) §1.1–1.3. Implement that; the mount path
-   calls its verify. No parallel scheme.
+2. **Gate 3 (signing/approval).** ✅ **BUILT, DETACHED (commits this session).**
+   `sca_core::pack_sign` (feature `pack-sign`): Ed25519 sign over `BLAKE3(pack bytes)`,
+   written as a `<pack>.said.sig` sidecar; verify-at-mount in `said-orchestrate` against
+   the `~/.said/publishers/*.pub` allowlist (`$SAID_PUBLISHERS_DIR` too). Policy: a pack
+   WITH a sidecar must verify + be allowlisted or it's REFUSED; a pack WITHOUT a sidecar
+   is allowed unless `SAID_SKILLS_STRICT=1`. Proven E2E (sign → verify → allowlist
+   accept/reject → tamper detected).
+   **⚠️ OUTSTANDING FOR LAUNCH:** fold the signature INTO the file as row-52 §1.2's in-file
+   `SIGN` section (no sidecar). Same crypto; the sidecar is the interim, lower-risk form.
+   See [12-roadmap.md](12-roadmap.md) "Outstanding for launch". Also pending: `said pack`
+   CLI (keygen/sign/verify) and `BrainMode::Locked` at publish.
 3. **Gate 4 (sell / encrypt / license) = the commercial layer.** Publish paid packs as
    `Locked + SIGNed + Aes256Gcm`; build the license issuance (shop wraps the content key to
    the buyer) + the client keystore (`~/.said/licenses/`) + decrypt-on-mount. This is the

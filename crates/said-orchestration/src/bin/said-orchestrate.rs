@@ -25,6 +25,35 @@ fn split_cmd(s: &str) -> Vec<String> {
     s.split_whitespace().map(|x| x.to_string()).collect()
 }
 
+/// Load the approved-publisher allowlist: each `*.pub` file under `~/.said/publishers/`
+/// (and `$SAID_PUBLISHERS_DIR` if set) holds one Ed25519 pubkey as 64-hex-char text. This
+/// is the trust root, cached from the registry's `publishers.json`. Empty = trust nobody
+/// (so signed-by-unknown packs are refused). See docs/said-structure/18 Gate 3.
+fn load_publisher_allowlist() -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(d) = std::env::var("SAID_PUBLISHERS_DIR") { dirs.push(std::path::PathBuf::from(d)); }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        dirs.push(std::path::Path::new(&home).join(".said").join("publishers"));
+    }
+    for dir in dirs {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("pub") {
+                    if let Ok(s) = std::fs::read_to_string(&p) {
+                        let hx = s.trim().to_lowercase();
+                        if hx.len() == 64 && hx.chars().all(|c| c.is_ascii_hexdigit()) {
+                            set.insert(hx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {}", e);
@@ -91,7 +120,34 @@ fn run() -> Result<(), String> {
                 pack_files.push(c);
             }
         }
+        // Gate 3 (publisher trust) policy. A pack with a `.sig` sidecar MUST verify and
+        // its pubkey MUST be in the approved-publisher allowlist (~/.said/publishers/*.pub,
+        // cached from the registry) or it is REFUSED. A pack WITHOUT a sidecar is allowed
+        // (local/self-built) unless SAID_SKILLS_STRICT=1, which requires every pack signed.
+        let strict = std::env::var("SAID_SKILLS_STRICT").is_ok();
+        let allowlist = load_publisher_allowlist();
         for f in pack_files {
+            // Verify signature first (if present / required).
+            #[cfg(feature = "pack-sign")]
+            {
+                let sc = sca_core::pack_sign::sidecar_path(&f);
+                if sc.exists() {
+                    match sca_core::pack_sign::verify_pack(&f) {
+                        Ok(v) => {
+                            if sca_core::pack_sign::is_approved(&v, &allowlist) {
+                                eprintln!("[skills] signature OK + approved publisher {} for {}", &v.pubkey_hex[..16], f.display());
+                            } else {
+                                eprintln!("[skills] REFUSED {} — signed by UNKNOWN publisher {} (not in allowlist)", f.display(), &v.pubkey_hex[..16]);
+                                continue;
+                            }
+                        }
+                        Err(e) => { eprintln!("[skills] REFUSED {} — signature invalid: {}", f.display(), e); continue; }
+                    }
+                } else if strict {
+                    eprintln!("[skills] REFUSED {} — unsigned (SAID_SKILLS_STRICT set)", f.display());
+                    continue;
+                }
+            }
             match SaidFile::open(&f) {
                 Ok(mut p) => {
                     p.auto_load_encoder();
@@ -101,6 +157,7 @@ fn run() -> Result<(), String> {
                 Err(e) => eprintln!("[skills] skipped {} — not a valid .said ({})", f.display(), e),
             }
         }
+        let _ = &allowlist; let _ = strict; // (used only under pack-sign feature)
         if !skills.is_empty() {
             eprintln!("[skills] {} skill pack(s) federated into recall", skills.len());
         }

@@ -27,6 +27,8 @@
 
 pub mod ask;
 pub mod audit;
+#[cfg(feature = "pack-sign")]
+pub mod pack_sign;
 pub mod coding_memory;
 pub mod tokenizer;
 pub mod brain;
