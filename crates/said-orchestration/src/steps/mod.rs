@@ -127,9 +127,30 @@ where
         Some(m)
     };
 
-    // First attempt is COLD: real source only (Claude's "Read before Edit"), no memory.
+    // WARM-FIRST on a HIGH-CONFIDENCE match. The cold-first design (try cold, inject
+    // memory only on repair) was the cause of the flaky warm result: on a task the model
+    // can't do cold (h1_lru), the COLD first attempt writes the TEXTBOOK version, then the
+    // model has to PATCH wrong code during repair — which often fails. When memory holds a
+    // strong match for THIS shape, inject the learning into the FIRST code attempt so the
+    // model writes the known-good version up front (this is what the original green run
+    // did). Below the bar we stay cold-first (so easy tasks aren't distracted). Threshold
+    // SAID_WARM_FIRST_MIN (default 0.60); set >1 to force always-cold.
+    let warm_first_min = std::env::var("SAID_WARM_FIRST_MIN").ok()
+        .and_then(|s| s.parse::<f32>().ok()).unwrap_or(0.60);
+    let warm_first = recalled.first().map(|h| h.score >= warm_first_min).unwrap_or(false);
+
     let src = crate::source::source_context(&cfg.repo_root, &cfg.files);
-    let src_opt = if src.is_empty() { None } else { Some(src.as_str()) };
+    let code_ctx = if warm_first {
+        if let Some(mem) = &memory_block {
+            log.push(StepLog { step: "memory", detail: format!(
+                "WARM-FIRST: strong match ({:.2} >= {:.2}) — injecting learning into the FIRST code attempt",
+                recalled[0].score, warm_first_min) });
+            let mut c = mem.clone();
+            if !src.is_empty() { c.push_str("\n\n"); c.push_str(&src); }
+            c
+        } else { src.clone() }
+    } else { src.clone() };
+    let code_ctx_opt = if code_ctx.is_empty() { None } else { Some(code_ctx.as_str()) };
 
     // 1. PLAN — read-only.
     let plan = plan::run(brain, provider, &cfg.task).await?;
@@ -139,8 +160,8 @@ where
     let design = design::run(brain, provider, &cfg.task).await?;
     log.push(StepLog { step: "design", detail: design.output.clone() });
 
-    // 3. CODE — produce + apply the change-set (with real source in context).
-    let coded = code::run(brain, provider, &cfg.task, src_opt).await?;
+    // 3. CODE — produce + apply the change-set (warm context when a strong match exists).
+    let coded = code::run(brain, provider, &cfg.task, code_ctx_opt).await?;
     log.push(StepLog { step: "code", detail: coded.output.clone() });
     // An apply failure (bad/unsafe anchor) is REPAIRABLE, not fatal — treat it
     // like a gate failure so the repair loop fixes the anchor. `pending_failure`
