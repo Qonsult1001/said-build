@@ -29,6 +29,28 @@ Two kinds of skill are now both demonstrated on gpt-oss-20b, gate-verified:
   + a canonical snippet) → one curated frame via the same `learn-fix` path, NO Claude in
   the loop. The doc IS the transferable knowledge.
 
+## context7 → curated pack PILOT (2026-06-18) — real docs, gate-verified, measured
+
+Built `learning-factory/context7/`: a pipeline that pulls REAL docs from context7 (HTTP
+API, key in Advisory/.env) and turns each into a gate-verified curated frame.
+
+Pipeline per entry: context7 fetch → keep docs with concrete input→output pairs → Claude
+distills (problem + non-obvious rule + the trap + reference) → build the GATE FROM THE
+DOC'S OWN I/O VALUES (no npm install, no Claude solving a repo) → run reference against
+gate = GREEN ("true curated answer") → store (dedup-keyed) into `context7-curated.said`.
+
+4 verified entries from real libs: **vercel/ms** (mo=2629800000, y=31557600000 — averaged
+constants the model can't guess), **ljharb/qs** (indexed arrays sorted-by-index + compacted),
+**scurker/currency.js** (`distribute` remainder-to-front), **uuidjs/uuid** (version/variant
+nibble validation).
+
+**A/B on gpt-oss-20b (4 entries):** COLD (no curation) **6/8** → WARM (curated, `--skills`
+mount) **8/8**. The lift concentrates on the entry with knowledge the model lacks (ms alone:
+cold 0/3 → warm 3/3); entries the 20b partly knew were already passing cold. Confirms:
+curated context7 docs lift the weak model exactly at its knowledge edge, gate-verified, with
+no per-repo Claude solving. Reusable assets kept under `learning-factory/context7/entries/`
+(one dir per entry: src reference + test gate) — the template for scaling to 100.
+
 ## The realization
 
 A verified `.said` **coding learning IS a skill.** A `code.said` brain (built by the
