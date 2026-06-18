@@ -57,7 +57,7 @@ pub async fn run(
             "additionalProperties": false
         }),
         schema_name: "iteration_note".to_string(),
-        max_output_tokens: 32768,
+        max_output_tokens: crate::steps::max_output_tokens(),
         temperature: 0.2,
         json_object: true,
     };

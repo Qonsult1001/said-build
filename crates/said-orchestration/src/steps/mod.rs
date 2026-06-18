@@ -24,6 +24,14 @@ use crate::PhaseResult;
 use said_llm::{CompletionRequest, LlmProvider};
 use said_prompts::coding::{phase_prompt, CodingContext, Phase};
 
+/// Max output tokens per LLM call. Default 32768 (big change-sets don't truncate), but
+/// some provider tiers cap output-tokens-per-minute LOWER than this and 400 on the very
+/// first call (e.g. Groq gpt-oss-20b on-demand = 25000 OTPM → a 32768 request is rejected
+/// before any work happens). Override with SAID_MAX_OUTPUT_TOKENS to fit the tier.
+pub(crate) fn max_output_tokens() -> u32 {
+    std::env::var("SAID_MAX_OUTPUT_TOKENS").ok().and_then(|s| s.parse().ok()).unwrap_or(32768)
+}
+
 /// Configuration for one orchestration run.
 pub struct RunConfig {
     /// Path to the `.said` brain (project memory).
@@ -294,7 +302,7 @@ pub(crate) async fn run_phase(
             "additionalProperties": false
         }),
         schema_name: "phase_output".to_string(),
-        max_output_tokens: 32768,
+        max_output_tokens: max_output_tokens(),
         temperature: 0.2,
         // Permissive JSON (json_object), not strict schema (strict mode fails on
         // Groq for arbitrary code content). Proven in Advisory's GroqCycle.
