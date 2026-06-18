@@ -3,6 +3,32 @@
 **Status:** design agreed (2026-06-18). Implements the "primary brain + external
 `code.said`" model the user asked for, grounded in how Claude Code does Skills.
 
+## PROVEN (2026-06-18): curated documentation closes a real knowledge gap
+
+Two kinds of skill are now both demonstrated on gpt-oss-20b, gate-verified:
+
+1. **Verified-fix learnings** (non-obvious invariant): LRU-quirk, cold RED → warm GREEN.
+2. **Curated documentation** (an API/spec the model doesn't know): a NON-STANDARD
+   "AcmeVersion" comparator (suffixed > plain; fixed channel order lts<stable<beta<edge —
+   the opposite of SemVer, so the model's *trained* answer is wrong). **20b cold = 0/3.**
+   Stored a context7-style DOC (the house rules + a reference snippet) as ONE pseudo-
+   learning frame — **NOT a Claude-authored fix for the repo** — mounted via `--skills`.
+   **20b warm = 3/3** (recall 0.69 → adapts the rules → gate GREEN).
+
+**Conclusions that shape mass-generation:**
+- **Storage shape: a pseudo-learning frame is enough.** A curated doc stored as a
+  coding-fix-shaped frame (problem + rules-as-learnings/errors + reference) rides the
+  EXISTING recall + `--skills` mount + warm-first with zero new code. No separate
+  reference pillar needed.
+- **Curated value is concentrated at the model's KNOWLEDGE EDGE.** Things the model
+  already knows (CRC32, grapheme counting, natural sort — all cold-GREEN on the 20b) gain
+  nothing from curation. The payoff is (a) non-obvious invariants and (b) genuinely-unknown
+  or NON-STANDARD APIs/specs (niche/3rd-party libs, version-specific, post-training-cutoff
+  behavior) — exactly context7's domain. The factory should target gaps, not famous algos.
+- **context7 → `.said` ingestion is direct:** each doc entry (API + its non-obvious rules
+  + a canonical snippet) → one curated frame via the same `learn-fix` path, NO Claude in
+  the loop. The doc IS the transferable knowledge.
+
 ## The realization
 
 A verified `.said` **coding learning IS a skill.** A `code.said` brain (built by the
