@@ -326,6 +326,33 @@ fn fix_hash(s: &str) -> String {
     blake3::hash(s.as_bytes()).to_hex().as_str()[..16].to_string()
 }
 
+/// Stable identity for a coding task — the canonical dedup key. Two learnings for the
+/// SAME task resolve to the SAME identity (so the new one supersedes the old), while a
+/// genuinely different task resolves to a different one.
+///
+/// - If `label` is a clean stable task-id (no spaces, e.g. "lru_cache", "javascript/lru"),
+///   it IS the identity — the factory/CLI can pin one frame per task explicitly.
+/// - Otherwise, derive from the problem: lowercase, collapse whitespace, strip trailing
+///   punctuation. This is intentionally NOT the full body (note/edits vary per solve) and
+///   NOT the loose action-residue (too coarse — would merge distinct tasks). It's the
+///   normalized problem statement, which is stable across re-solves of the same task.
+pub fn task_identity(problem: &str, label: Option<&str>) -> String {
+    if let Some(l) = label {
+        let l = l.trim();
+        if !l.is_empty() && !l.contains(char::is_whitespace) {
+            return format!("task-id:{}", l.to_lowercase());
+        }
+    }
+    let norm: String = problem
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string();
+    format!("problem:{}", norm)
+}
+
 /// Assemble the coding-fix frame body: a TASK line (recall key) + the human note
 /// (verbatim) + the machine payload (edits + intent residue), joined by the markers.
 /// `note` is the full human-readable story (may already start with sections); we
@@ -370,7 +397,18 @@ pub fn learn_coding_fix(
 ) -> String {
     let action = action_residue(problem);
     let body = fix_body(problem, note, edits_json, &action);
-    let id16 = fix_hash(&body);
+    // STABLE TASK IDENTITY for canonical dedup. The doc_id keys on the TASK identity, not
+    // the (LLM-authored, varying) note/edits — so re-learning the same task SUPERSEDES the
+    // existing frame (put() with the same doc_id tombstones the old one) instead of piling
+    // up near-duplicate frames that pollute recall and can outrank the original. Identity =
+    // an explicit `label` when it's a stable task-id (e.g. "lru_cache"), else the
+    // normalized problem text. A genuinely different problem → different id → distinct
+    // frame. Override OFF (legacy body-hash, allows duplicates) via SAID_LEARN_BODY_ID=1.
+    let id16 = if std::env::var("SAID_LEARN_BODY_ID").is_ok() {
+        fix_hash(&body)
+    } else {
+        fix_hash(&task_identity(problem, label))
+    };
     let doc_id = format!("fix::{}", id16);
     // Native PROCEDURAL pillar (not just the tag): a coding-fix is an action
     // sequence with an outcome, so it must live in the Procedural pillar so
