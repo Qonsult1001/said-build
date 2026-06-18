@@ -122,10 +122,13 @@ PRIMARY wins ties. Gate verifies. learn-on-green writes to PRIMARY ONLY (packs s
 
 ## What to build (sequence)
 
-1. **Discovery + multi-brain recall (read-only mount).** Orchestrator gains `--skills` +
-   the `~/.said/skills` / `./.said/skills` convention; recall federates primary + packs
-   (Gate 1 + Gate 2 only). Delivers "download → drop in folder → works" for local/trusted
-   packs immediately. *(The build gap from doc 17 — smallest first step.)*
+1. **Discovery + multi-brain recall (read-only mount).** ✅ **BUILT (commit 857c684).**
+   `said-orchestrate` auto-discovers packs from `--skills` / `$SAID_SKILLS_DIR` /
+   `<repo>/.said/skills` / `~/.said/skills`, opens each via `SaidFile::open` (Gate 1
+   format check skips junk), mounts read-only, and `recall::best_iterations_federated`
+   merges primary + packs (Gate 1 + 2). Writes go to primary only. Proven E2E: empty
+   primary + auto-discovered `code-js.said` lifted gpt-oss-20b (recall from the pack,
+   0.78–0.94). "Download → drop in folder → works" for local/trusted packs is live.
 2. **Gate 3 (signing/approval) = ship the Hub Tier-1 spec.** `BrainMode::Locked` + the
    `SIGN` header block + the registry `publishers.json` allowlist are ALREADY specified in
    [row-52-hub.md](05-features/row-52-hub.md) §1.1–1.3. Implement that; the mount path
