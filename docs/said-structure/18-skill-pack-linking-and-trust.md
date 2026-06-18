@@ -91,11 +91,16 @@ root; multiple roots union):
 ```
 1. --skills <file|dir> ...          explicit (highest precedence; always allowed)
 2. $SAID_SKILLS_DIR                  env override
-3. ./.said/skills/*.said            project-local packs (like .claude/skills)
-4. ~/.said/skills/*.said            user-global packs — where shop downloads land
+3. <repo-root>/.said/skills/*.said  PROJECT-LOCAL packs — the default for now (in SAID-BUILD)
+4. ~/.said/skills/*.said            user-global packs — future production default (shop downloads)
 ```
+For now the canonical location is the **project-root `.said/skills/`** (e.g.
+`g:/development/said-build/.said/skills/`), so packs live with the repo while we build.
+`~/.said/skills` stays the documented production default (where the shop installer drops
+purchased packs) and is wired but secondary until then.
+
 For every `*.said` found: run Gate 1 → 2 → 3. Mount the survivors read-only. Report a
-one-line inventory (`mounted: javascript-algorithms (Portable, 142 coding-fixes, signed:acme) ✓`).
+one-line inventory (`mounted: code-js (Portable, 1 coding-fix) ✓`).
 
 **The download flow becomes:**
 1. Download `javascript-algorithms.said` from the shop (signed by the shop's publisher key).
