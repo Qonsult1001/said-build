@@ -86,6 +86,24 @@ pub async fn run<A>(
 where
     A: FnMut(&str) -> Result<(), String>,
 {
+    // Single-brain entry point: no mounted skill packs.
+    run_with_skills(brain, &mut [], provider, cfg, apply).await
+}
+
+/// Like [`run`] but with read-only SKILL PACKS mounted alongside the primary `brain`.
+/// Recall federates primary + packs (see [`crate::recall::best_iterations_federated`]);
+/// learnings on green are written to the PRIMARY ONLY (packs stay read-only). The single-
+/// brain [`run`] delegates here with an empty pack slice.
+pub async fn run_with_skills<A>(
+    brain: &mut sca_core::said_file::SaidFile,
+    skills: &mut [sca_core::said_file::SaidFile],
+    provider: &dyn LlmProvider,
+    cfg: &RunConfig,
+    mut apply: A,
+) -> Result<RunOutcome, String>
+where
+    A: FnMut(&str) -> Result<(), String>,
+{
     let mut log: Vec<StepLog> = Vec::new();
 
     // ── 0. MEMORY: transfer the LEARNING (not the literal diff) ──────────────
@@ -103,7 +121,8 @@ where
     // learning into the repair phase and loop. This mirrors "try, fail, then look it
     // up", and spends recall only where it's needed.
     let topk = crate::recall::inject_topk();
-    let recalled = crate::recall::best_iterations(brain, &cfg.task, topk);
+    // Federated recall: primary brain + any mounted read-only skill packs, merged+ranked.
+    let recalled = crate::recall::best_iterations_federated(brain, skills, &cfg.task, topk);
     if !recalled.is_empty() {
         log.push(StepLog {
             step: "memory",

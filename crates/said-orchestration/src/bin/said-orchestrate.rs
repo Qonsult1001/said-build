@@ -48,6 +48,64 @@ fn run() -> Result<(), String> {
     let mut brain = SaidFile::open(&brain_path).map_err(|e| format!("open brain: {}", e))?;
     brain.auto_load_encoder();
 
+    // ── SKILL PACKS (multi-brain mount) ──────────────────────────────────────
+    // Read-only `.said` skill packs federated into recall alongside the primary brain.
+    // Discovery (union; --skills wins): explicit --skills <file|dir,...>, then
+    // $SAID_SKILLS_DIR, then <repo>/.said/skills, then ~/.said/skills. Each candidate is
+    // opened via SaidFile::open — the header/format gate (magic/version/CRC) REJECTS
+    // anything that isn't a real .said, so a junk file in the folder is skipped, logged.
+    // Writes never touch packs (learn-on-green writes the primary only). See
+    // docs/said-structure/18-skill-pack-linking-and-trust.md.
+    let mut skills: Vec<SaidFile> = Vec::new();
+    {
+        let primary_canon = std::fs::canonicalize(&brain_path).ok();
+        let mut roots: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(s) = arg("--skills") {
+            for p in s.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                roots.push(std::path::PathBuf::from(p));
+            }
+        }
+        if let Ok(d) = std::env::var("SAID_SKILLS_DIR") { roots.push(std::path::PathBuf::from(d)); }
+        roots.push(std::path::Path::new(&repo).join(".said").join("skills"));
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            roots.push(std::path::Path::new(&home).join(".said").join("skills"));
+        }
+        // Expand each root: a file → that file; a dir → its *.said. Dedup by canonical path,
+        // and never mount the primary brain as its own skill pack.
+        let mut seen = std::collections::HashSet::new();
+        let mut pack_files: Vec<std::path::PathBuf> = Vec::new();
+        for root in roots {
+            let candidates: Vec<std::path::PathBuf> = if root.is_dir() {
+                std::fs::read_dir(&root).into_iter().flatten().flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("said"))
+                    .collect()
+            } else if root.is_file() {
+                vec![root]
+            } else { Vec::new() };
+            for c in candidates {
+                let canon = std::fs::canonicalize(&c).ok();
+                if canon.is_some() && canon == primary_canon { continue; } // not the primary
+                let key = canon.clone().unwrap_or_else(|| c.clone());
+                if !seen.insert(key) { continue; }
+                pack_files.push(c);
+            }
+        }
+        for f in pack_files {
+            match SaidFile::open(&f) {
+                Ok(mut p) => {
+                    p.auto_load_encoder();
+                    eprintln!("[skills] mounted {} (read-only)", f.display());
+                    skills.push(p);
+                }
+                Err(e) => eprintln!("[skills] skipped {} — not a valid .said ({})", f.display(), e),
+            }
+        }
+        if !skills.is_empty() {
+            eprintln!("[skills] {} skill pack(s) federated into recall", skills.len());
+        }
+    }
+
     // Files to surface into the code/repair context (Claude's "Read before
     // Edit"): comma-separated, repo-relative. Optional — without it the model
     // relies on recall only and may hallucinate anchors.
@@ -76,7 +134,7 @@ fn run() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| format!("tokio: {}", e))?;
-    let outcome = rt.block_on(steps::run(&mut brain, provider.as_ref(), &run_cfg, apply))?;
+    let outcome = rt.block_on(steps::run_with_skills(&mut brain, &mut skills, provider.as_ref(), &run_cfg, apply))?;
 
     println!("\n=== run complete: green={} attempts={} ===", outcome.green, outcome.attempts);
     for step in &outcome.log {

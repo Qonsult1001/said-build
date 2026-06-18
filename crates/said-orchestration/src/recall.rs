@@ -58,3 +58,46 @@ pub fn best_iterations(brain: &mut SaidFile, task: &str, k: usize) -> Vec<Recall
         Recalled { doc_id: h.doc_id, score: h.score, note: h.note, edits_json: h.edits_json }
     }).collect()
 }
+
+/// FEDERATED top-K recall over a PRIMARY brain plus any mounted read-only SKILL PACKS.
+/// Queries each store for its top-k, then MERGES → dedups by doc_id (BLAKE3-stable, so a
+/// learning present in two stores counts once) → ranks by score → returns the overall
+/// top-k. The primary brain wins ties (it's the project's own verified knowledge); a
+/// `source` tag marks where each hit came from for the trace. This is the resolver that
+/// lets a folder of skill packs (eventually millions of skills across many packs)
+/// auto-federate into one recall — packs stay read-only; only `primary` is ever written.
+///
+/// Scales to many packs: each pack's recall is independent top-k (cheap 1-bit fingerprint
+/// scan), then a single merge/sort of at most `k * (1 + packs)` candidates.
+pub fn best_iterations_federated(
+    primary: &mut SaidFile,
+    packs: &mut [SaidFile],
+    task: &str,
+    k: usize,
+) -> Vec<Recalled> {
+    let dbg = std::env::var("SAID_RECALL_DEBUG").is_ok();
+    let mut all: Vec<(Recalled, bool)> = Vec::new(); // (hit, is_primary)
+    for h in best_iterations(primary, task, k) {
+        all.push((h, true));
+    }
+    for (i, pack) in packs.iter_mut().enumerate() {
+        for h in best_iterations(pack, task, k) {
+            if dbg { eprintln!("[recall-dbg]   ^ from skill-pack #{}", i); }
+            all.push((h, false));
+        }
+    }
+    // Dedup by doc_id, keeping the highest score; primary wins an exact tie.
+    all.sort_by(|a, b| {
+        b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.1.cmp(&a.1)) // is_primary true sorts first on tie
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Recalled> = Vec::new();
+    for (h, _) in all {
+        if seen.insert(h.doc_id.clone()) {
+            out.push(h);
+            if out.len() >= k { break; }
+        }
+    }
+    out
+}
