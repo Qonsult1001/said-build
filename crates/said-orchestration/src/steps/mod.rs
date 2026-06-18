@@ -159,15 +159,22 @@ where
         };
         log.push(StepLog { step: "test", detail: format!("green={} ({})", outcome.green, outcome.failed_step) });
         if outcome.green {
-            // 6. LEARN — LLM authors the structured iteration note, .said
-            //    compresses + stores it (Claude's session-memory move). The
-            //    transcript is the whole verified story for the extraction.
-            let transcript = format!(
-                "TASK: {}\n\n## Plan\n{}\n\n## Design\n{}\n\n## Code (verified change-set)\n{}\n\n## Gate\n{}",
-                cfg.task, plan.output, design.output, coded.output, outcome.output
-            );
-            learn::run(brain, provider, &cfg.task, &transcript, &coded.output).await?;
-            log.push(StepLog { step: "learn", detail: "authored + compressed + stored iteration".into() });
+            // 6. LEARN — on green, the LLM authors the structured iteration note and
+            //    .said stores it. SKIPPABLE via SAID_NO_LEARN: auto-storing a fresh
+            //    (often weaker, LLM-authored) note on every green run POLLUTES the
+            //    brain — duplicate near-identical frames accumulate and can OUTRANK the
+            //    original hand-verified learning, degrading later recall. For A/B moat
+            //    tests (and any run against a curated brain) we want the brain FROZEN.
+            if std::env::var("SAID_NO_LEARN").is_ok() {
+                log.push(StepLog { step: "learn", detail: "skipped (SAID_NO_LEARN) — brain left frozen".into() });
+            } else {
+                let transcript = format!(
+                    "TASK: {}\n\n## Plan\n{}\n\n## Design\n{}\n\n## Code (verified change-set)\n{}\n\n## Gate\n{}",
+                    cfg.task, plan.output, design.output, coded.output, outcome.output
+                );
+                learn::run(brain, provider, &cfg.task, &transcript, &coded.output).await?;
+                log.push(StepLog { step: "learn", detail: "authored + compressed + stored iteration".into() });
+            }
             return Ok(RunOutcome { green: true, attempts, log });
         }
         if attempts >= cfg.max_attempts {
@@ -211,13 +218,12 @@ pub(crate) async fn run_phase(
     task: &str,
     extra: Option<&str>,
 ) -> Result<PhaseResult, String> {
+    // NOTE: memory injection is the ORCHESTRATOR's job (run()), which injects the
+    // TOP-K (default 5) verified learnings via `extra` — the documented top-5 contract.
+    // run_phase must NOT do its own separate top-1 recall here: that injected only the
+    // single best match (inconsistent with top-5) AND duplicated/competed with the
+    // memory_block run() already passes. So `context` is built purely from `extra`.
     let mut context = String::new();
-    if let Some(hit) = crate::recall::best_iteration(brain, task) {
-        context.push_str(&format!(
-            "# Recalled verified iteration (match {:.2})\n{}\n",
-            hit.score, hit.note
-        ));
-    }
     if let Some(e) = extra {
         if !e.trim().is_empty() {
             context.push_str(&format!("\n# Current attempt context\n{}\n", e.trim()));

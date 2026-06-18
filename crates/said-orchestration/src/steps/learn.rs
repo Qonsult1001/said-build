@@ -25,6 +25,23 @@ pub async fn run(
     transcript: &str,
     change_set: &str,
 ) -> Result<(), String> {
+    // 0. DEDUP GUARD (anti-pollution): if the brain ALREADY holds a strongly-matching
+    //    verified learning for this task shape, do NOT append another. Auto-storing a
+    //    fresh (often weaker, LLM-authored) note on every green run made near-duplicate
+    //    frames accumulate and OUTRANK the original hand-verified learning, degrading
+    //    later recall (measured: a curated 1-fix brain self-polluted to 5 frames and the
+    //    weaker rank-1 then failed the task). We keep the FIRST verified learning for a
+    //    shape and skip subsequent duplicates. Threshold overridable via
+    //    SAID_LEARN_DEDUP_MIN (default 0.80); set to >1 to force-store (never dedup).
+    let dedup_min: f32 = std::env::var("SAID_LEARN_DEDUP_MIN").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(0.80);
+    if let Some(existing) = crate::recall::best_iteration(brain, task) {
+        if existing.score >= dedup_min {
+            // A near-identical verified learning is already stored — keep it, don't dilute.
+            return Ok(());
+        }
+    }
+
     // 1. LLM authors the structured 10-section note (Claude's extraction move).
     let user = LEARN
         .replace("{{transcript}}", transcript.trim())
