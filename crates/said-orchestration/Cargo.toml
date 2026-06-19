@@ -1,6 +1,6 @@
 [package]
 name = "said-orchestration"
-version = "0.1.0"
+version = "0.11.0"
 edition = "2021"
 description = "Closed-loop coding orchestrator for .said — drives ANY external LLM through the Claude-Code lifecycle (plan/design/code/test/repair) using said-prompts (the playbook) + .said memory (the story) + said-llm (the model). A SEPARATE process per the BYO-LLM rule; the core .said binary never calls an LLM."
 license = "MIT"
