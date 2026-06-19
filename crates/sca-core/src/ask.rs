@@ -453,13 +453,43 @@ pub fn recall_coding_fix(brain: &mut SaidFile, problem: &str, min_score: f32) ->
 /// inject several candidates and let the model pick/adapt, rescuing cases where the
 /// right learning isn't rank-1. `recall_coding_fix` is the k=1 wrapper.
 pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_score: f32) -> Vec<RecalledFix> {
-    best_coding_fixes(brain, problem, k).into_iter()
+    // LANGUAGE GUARANTEE for per-language packs. Recall scores on the PROBLEM TEXT only,
+    // so a near-identically worded task in another language ("Email value object with
+    // value equality") can pull a C# frame for a Python task (measured: 0.77). For a
+    // per-language product that bleed is unacceptable, so when SAID_RECALL_LANG is set we
+    // HARD-FILTER to frames whose stored `lang:<x>` token matches — a C# fix becomes
+    // literally unreachable for a Python task, by construction, not by wording luck.
+    // Frames with NO `lang:` token (legacy/general) are kept (they're language-agnostic).
+    // Unset => no constraint (back-compat). Over-fetch k*4 so the post-filter still fills k.
+    let lang_want = std::env::var("SAID_RECALL_LANG").ok()
+        .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+    best_coding_fixes(brain, problem, fetch_k).into_iter()
         .filter(|(_, score)| *score >= min_score)
         .map(|(doc_id, score)| {
             let body = brain.get(&doc_id).unwrap_or_default();
             RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score }
         })
+        .filter(|fix| match &lang_want {
+            None => true,
+            Some(want) => match frame_lang(&fix.note) {
+                Some(have) => &have == want, // tagged frame: must match the active language
+                None => true,               // untagged/general frame: language-agnostic, keep
+            },
+        })
+        .take(k.max(1))
         .collect()
+}
+
+/// Parse the stored `lang:<x>` token from a coding-fix frame body (it lives in the FILES
+/// line, e.g. `src:context7 lang:csharp area:architecture arch:ddd`). Lower-cased; None
+/// when the frame carries no language token (a general/legacy frame). This is the recall-
+/// time language signal until the factory promotes `lang:` to a first-class meta tag.
+fn frame_lang(body: &str) -> Option<String> {
+    body.split_whitespace()
+        .find_map(|tok| tok.strip_prefix("lang:"))
+        .map(|l| l.trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty())
 }
 
 /// The single coding-fix scorer. Returns the best-matching coding-fix `doc_id` and
