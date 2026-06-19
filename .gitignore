@@ -24,8 +24,8 @@ __pycache__/
 *.pyc
 *.pyd
 *.so
-learning-factory/csharp/harness/src/*.cs
-learning-factory/csharp/harness/test/*.cs
-learning-factory/csharp/harness/**/bin/
-learning-factory/csharp/harness/**/obj/
-learning-factory/csharp/entries/**/.edits.json
+# Learning factory — SPLIT OUT into its own repo:
+#   https://github.com/Qonsult1001/said-learning-factory
+# said-build has no build dependency on it (skill packs are discovered at runtime from
+# a folder). A local working copy may remain on disk but is no longer tracked here.
+learning-factory/
