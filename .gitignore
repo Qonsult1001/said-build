@@ -24,3 +24,8 @@ __pycache__/
 *.pyc
 *.pyd
 *.so
+learning-factory/csharp/harness/src/*.cs
+learning-factory/csharp/harness/test/*.cs
+learning-factory/csharp/harness/**/bin/
+learning-factory/csharp/harness/**/obj/
+learning-factory/csharp/entries/**/.edits.json
