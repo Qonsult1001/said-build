@@ -317,6 +317,8 @@ pub struct RecalledFix {
     pub note: String,
     /// The stored verified change-set JSON (the edits that built+passed).
     pub edits_json: String,
+    /// The fix's language from its `lang:` meta tag, if any (None = untagged/agnostic).
+    pub lang: Option<String>,
 }
 
 /// 16-hex-char BLAKE3 of the body for the frame doc_id — the canonical `.said`
@@ -424,6 +426,15 @@ pub fn learn_coding_fix(
             tags.push(format!("pr:{}", l.trim()));
         }
     }
+    // LANGUAGE TAG (per-language guarantee): derive the fix's language from the file
+    // extensions in its change-set and store it as a first-class meta tag, so recall can
+    // HARD-FILTER by language (a Python task never receives a C#/JS fix). Stored at learn
+    // time so every future fix is tagged regardless of caller (CLI/MCP/orchestrator).
+    // No detectable extension => no tag => the fix stays language-agnostic (recalls for any
+    // language), which is correct for genuinely language-neutral fixes.
+    if let Some(lang) = lang_from_edits(edits_json) {
+        tags.push(format!("lang:{}", lang));
+    }
     brain.remember_with_pillar(
         Some(&doc_id), &body, Some(FIX_KIND_TAG),
         crate::frames::Pillar::Procedural, tags,
@@ -468,28 +479,102 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
         .filter(|(_, score)| *score >= min_score)
         .map(|(doc_id, score)| {
             let body = brain.get(&doc_id).unwrap_or_default();
-            RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score }
+            // Language signal, in priority order: first-class `lang:` META TAG (written at
+            // learn time on every new fix), else a `lang:` token in the body (hand-built
+            // packs), else infer from the change-set's file extensions (covers the 794
+            // legacy frames stored before learn-time tagging existed — no backfill needed).
+            let meta_lang = brain.frames.get_meta(&doc_id).and_then(|m| {
+                m.tags.iter().find_map(|t| t.strip_prefix("lang:"))
+                    .map(|l| l.to_ascii_lowercase())
+            });
+            RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang }
         })
         .filter(|fix| match &lang_want {
             None => true,
-            Some(want) => match frame_lang(&fix.note) {
-                Some(have) => &have == want, // tagged frame: must match the active language
-                None => true,               // untagged/general frame: language-agnostic, keep
-            },
+            Some(want) => {
+                let have = fix.lang.clone()
+                    .or_else(|| frame_lang(&fix.note))
+                    .or_else(|| lang_from_edits(&fix.edits_json));
+                match have {
+                    Some(have) => &have == want, // known language: must match the active one
+                    None => true,                // truly language-agnostic: keep
+                }
+            }
         })
         .take(k.max(1))
         .collect()
 }
 
-/// Parse the stored `lang:<x>` token from a coding-fix frame body (it lives in the FILES
-/// line, e.g. `src:context7 lang:csharp area:architecture arch:ddd`). Lower-cased; None
-/// when the frame carries no language token (a general/legacy frame). This is the recall-
-/// time language signal until the factory promotes `lang:` to a first-class meta tag.
+/// Parse the stored `lang:<x>` token from a coding-fix frame body (e.g. a curated FILES
+/// line `src:context7 lang:csharp area:architecture arch:ddd`). Lower-cased; None when the
+/// frame body carries no language token. This is the body-text language signal; recall ALSO
+/// checks the first-class `lang:` meta tag (see recall_coding_fixes) so both old hand-tagged
+/// packs and new learn-time-tagged fixes are covered.
 fn frame_lang(body: &str) -> Option<String> {
     body.split_whitespace()
         .find_map(|tok| tok.strip_prefix("lang:"))
         .map(|l| l.trim().to_ascii_lowercase())
         .filter(|l| !l.is_empty())
+}
+
+/// Map a source-file extension to the canonical `lang:` token. ONE source of truth shared
+/// by learn (tagging) and any caller; keep in lock-step with the orchestrator's detector.
+pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "cs" | "csx" | "csproj" => "csharp",
+        "py" | "pyi" => "python",
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "go" => "go",
+        "java" => "java",
+        "rb" => "ruby",
+        "php" => "php",
+        "swift" => "swift",
+        "kt" | "kts" => "kotlin",
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
+        "c" | "h" => "c",
+        _ => return None,
+    })
+}
+
+/// Derive the language of a coding-fix from the file paths in its change-set JSON. Returns
+/// the first recognized language across the edits' `"file":"..."` fields (fixes are
+/// single-language in practice). None when no edit has a known extension.
+fn lang_from_edits(edits_json: &str) -> Option<String> {
+    // Try structured parse first (array of edits, or a single edit object). If that fails
+    // (older/looser stored forms), fall back to scanning the raw text for any "file":"..."
+    // (and "path") values — robust to schema drift across the frames written over time.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(edits_json) {
+        let edits: Vec<&serde_json::Value> = match &v {
+            serde_json::Value::Array(a) => a.iter().collect(),
+            serde_json::Value::Object(_) => vec![&v],
+            _ => vec![],
+        };
+        for e in edits {
+            for key in ["file", "path", "filename", "target"] {
+                if let Some(p) = e.get(key).and_then(|f| f.as_str()) {
+                    if let Some(lang) = ext_to_lang(p.rsplit('.').next().unwrap_or("")) {
+                        return Some(lang.to_string());
+                    }
+                }
+            }
+        }
+    }
+    // Raw-text fallback: pull every `"file":"...ext"` / `"path":"...ext"` token.
+    for marker in ["\"file\":\"", "\"path\":\""] {
+        let mut rest = edits_json;
+        while let Some(i) = rest.find(marker) {
+            let after = &rest[i + marker.len()..];
+            let end = after.find('"').unwrap_or(after.len());
+            let path = &after[..end];
+            if let Some(lang) = ext_to_lang(path.rsplit('.').next().unwrap_or("")) {
+                return Some(lang.to_string());
+            }
+            rest = &after[end.min(after.len())..];
+        }
+    }
+    None
 }
 
 /// The single coding-fix scorer. Returns the best-matching coding-fix `doc_id` and

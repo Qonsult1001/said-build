@@ -32,6 +32,45 @@ pub(crate) fn max_output_tokens() -> u32 {
     std::env::var("SAID_MAX_OUTPUT_TOKENS").ok().and_then(|s| s.parse().ok()).unwrap_or(32768)
 }
 
+/// Infer the task's programming language from the files it will touch, mapping file
+/// extensions to the `lang:<x>` token recall filters on. Returns the FIRST recognized
+/// language (tasks are single-language in practice); None when no file has a known
+/// extension (e.g. a docs-only or language-agnostic task) — then recall stays unconstrained.
+/// Keep this list in lock-step with the `lang:` tokens the factories store.
+fn detect_task_lang(files: &[String]) -> Option<String> {
+    for f in files {
+        let ext = f.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let lang = match ext.as_str() {
+            "cs" | "csx" | "csproj" => "csharp",
+            "py" | "pyi" => "python",
+            "rs" => "rust",
+            "ts" | "tsx" => "typescript",
+            "js" | "jsx" | "mjs" | "cjs" => "javascript",
+            "go" => "go",
+            "java" => "java",
+            "rb" => "ruby",
+            "php" => "php",
+            "swift" => "swift",
+            "kt" | "kts" => "kotlin",
+            "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
+            "c" | "h" => "c",
+            _ => continue,
+        };
+        return Some(lang.to_string());
+    }
+    None
+}
+
+/// RAII guard: removes the auto-applied SAID_RECALL_LANG when dropped, so the orchestrator
+/// never LEAKS an inferred constraint past the recall it was set for (a later in-process
+/// call, a test, etc.). A user-set var is never wrapped in this guard, so it's never cleared.
+struct LangGuard;
+impl Drop for LangGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("SAID_RECALL_LANG");
+    }
+}
+
 /// Configuration for one orchestration run.
 pub struct RunConfig {
     /// Path to the `.said` brain (project memory).
@@ -129,8 +168,24 @@ where
     // learning into the repair phase and loop. This mirrors "try, fail, then look it
     // up", and spends recall only where it's needed.
     let topk = crate::recall::inject_topk();
+    // PER-LANGUAGE GUARANTEE (auto): recall scores on problem text only, so a Python task
+    // worded like a C# one can pull a C# frame (measured 0.77). Detect the task language
+    // from the files' extensions and constrain recall to that language, so a Python repo
+    // can never receive a C# fix. An explicit SAID_RECALL_LANG always wins (manual
+    // override / non-file tasks); if we can't infer a language we leave it unset (no
+    // constraint — exactly today's behavior). See sca_core::ask::recall_coding_fixes.
+    let _lang_guard = if std::env::var("SAID_RECALL_LANG").is_ok() {
+        None // caller set it explicitly; don't touch it
+    } else if let Some(lang) = detect_task_lang(&cfg.files) {
+        std::env::set_var("SAID_RECALL_LANG", &lang);
+        log.push(StepLog { step: "memory", detail: format!("language detected: {} (recall constrained to this language)", lang) });
+        Some(LangGuard) // RAII: clear the var when this run's recall is done
+    } else {
+        None
+    };
     // Federated recall: primary brain + any mounted read-only skill packs, merged+ranked.
     let recalled = crate::recall::best_iterations_federated(brain, skills, &cfg.task, topk);
+    drop(_lang_guard); // recall done — unset the auto-applied constraint so we don't leak it
     if !recalled.is_empty() {
         log.push(StepLog {
             step: "memory",
