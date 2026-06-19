@@ -202,6 +202,43 @@ impl LlmProvider for OpenAICompatibleProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> LlmResult<CompletionResponse> {
+        // RATE-LIMIT BACKOFF: rate-limited tiers (Groq gpt-oss-20b: 150K TPM / 500 RPM)
+        // 429 mid-run when orchestrator phases (plan/design/code/repair) fire in quick
+        // succession. A 429 is TRANSIENT — the budget refills on a sliding window — so
+        // sleep the server-advised `retry-after` (or exponential fallback) and retry
+        // instead of failing the whole run. Tunable: SAID_LLM_RATE_RETRIES (default 5),
+        // SAID_LLM_RATE_MAX_WAIT seconds cap per sleep (default 65, just over a minute
+        // so a full TPM window can refill).
+        let max_retries: u32 = std::env::var("SAID_LLM_RATE_RETRIES")
+            .ok().and_then(|s| s.parse().ok()).unwrap_or(5);
+        let max_wait: f64 = std::env::var("SAID_LLM_RATE_MAX_WAIT")
+            .ok().and_then(|s| s.parse().ok()).unwrap_or(65.0);
+        let mut attempt: u32 = 0;
+        loop {
+            match self.complete_once(req).await {
+                Err(LlmError::Llm(msg)) if is_rate_limit(&msg) && attempt < max_retries => {
+                    // Honor server `retry_after=<secs>` if present; else exponential
+                    // (2s, 4s, 8s, 16s, 32s) — all clamped to max_wait.
+                    let advised = parse_retry_after(&msg);
+                    let backoff = advised.unwrap_or((2u64.pow(attempt + 1)) as f64).min(max_wait);
+                    if std::env::var("SAID_LLM_DEBUG").is_ok() {
+                        eprintln!("[llm] rate limit (attempt {}/{}) -> sleeping {:.1}s",
+                            attempt + 1, max_retries, backoff);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(backoff)).await;
+                    attempt += 1;
+                    continue;
+                }
+                other => return other,
+            }
+        }
+    }
+}
+
+impl OpenAICompatibleProvider {
+    /// One full completion attempt (build body + post + format-rejection fallback).
+    /// `complete()` wraps this in a rate-limit backoff loop.
+    async fn complete_once(&self, req: &CompletionRequest) -> LlmResult<CompletionResponse> {
         let body = self.build_body(req);
         match self.post_once(req, body.clone()).await {
             Ok(r) => Ok(r),
@@ -260,6 +297,20 @@ fn extract_embedded_json(s: &str) -> Option<serde_json::Value> {
 
 /// True if a Groq/OpenAI 400 is about JSON-mode / tool-call formatting (recoverable
 /// by retrying as plain text), not a genuine bad request.
+/// A 429 surfaced by post_once carries the literal "rate limit" marker.
+fn is_rate_limit(msg: &str) -> bool {
+    msg.contains("rate limit")
+}
+
+/// Extract the server-advised retry window (seconds) we tagged onto the 429 message
+/// as `retry_after=<secs>`. Returns None if absent (caller falls back to exponential).
+fn parse_retry_after(msg: &str) -> Option<f64> {
+    let i = msg.find("retry_after=")? + "retry_after=".len();
+    let tail = &msg[i..];
+    let end = tail.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(tail.len());
+    tail[..end].parse::<f64>().ok()
+}
+
 fn is_format_rejection(msg: &str) -> bool {
     msg.contains("json_validate_failed")
         || msg.contains("json_generate")
@@ -293,6 +344,13 @@ impl OpenAICompatibleProvider {
             .await
             .map_err(|e| LlmError::Http { url: url.clone(), message: e.to_string() })?;
         let status = resp.status();
+        // Groq/OpenRouter return `retry-after` (seconds) on 429. Capture BEFORE the
+        // body consumes the response so complete()'s backoff loop can honor it.
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<f64>().ok());
         let raw = resp.text().await.map_err(|e| LlmError::Http { url: url.clone(), message: e.to_string() })?;
         if dbg {
             eprintln!("[llm] <- {} in {:.1}s ({} bytes)", status, start.elapsed().as_secs_f32(), raw.len());
@@ -302,7 +360,11 @@ impl OpenAICompatibleProvider {
                 return Err(LlmError::Llm(format!("openai-compat auth failure: {}", raw)));
             }
             if status.as_u16() == 429 {
-                return Err(LlmError::Llm(format!("openai-compat rate limit: {}", raw)));
+                // Tag with the parseable retry-after (seconds) so complete()'s backoff
+                // loop can sleep the exact server-advised window. Format: the message
+                // still contains "rate limit" + the raw body for diagnostics.
+                let hint = retry_after.map(|s| format!(" retry_after={:.3}", s)).unwrap_or_default();
+                return Err(LlmError::Llm(format!("openai-compat rate limit{}: {}", hint, raw)));
             }
             return Err(LlmError::Llm(format!("openai-compat HTTP {}: {}", status, raw)));
         }
