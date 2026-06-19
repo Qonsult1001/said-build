@@ -1,14 +1,19 @@
 name: build-binaries
 
-# Builds `said` (CLI) + `said-mcp` for Linux / Windows / macOS in four
-# feature bundles. The encoder model is committed in this repo
-# (SAID-LAM-private/said-lam-static) AND baked into every binary via the
+# Builds `said` (CLI) + `said-mcp` + the `said-orchestrate` coding orchestrator for
+# Linux / Windows / macOS in four feature bundles. The encoder model is committed in
+# this repo (SAID-LAM-private/said-lam-static) AND baked into every binary via the
 # `embed-model` feature, so each artifact is a self-contained portable brain.
 #
-#   brain        portable brain only (embed-model)
-#   coding       brain + code intelligence            (embed-model, code)
-#   coding-plus  coding + LSP                          (embed-model, code, lsp)
-#   full         code + docs + OCR + LSP               (embed-model, code, docs, ocr, lsp)
+#   brain        portable brain only (embed-model)                — said + said-mcp
+#   coding       brain + code intelligence            (embed-model, code)        + said-orchestrate
+#   coding-plus  coding + LSP                          (embed-model, code, lsp)   + said-orchestrate
+#   full         code + docs + OCR + LSP               (embed-model, code, docs, ocr, lsp) + said-orchestrate
+#
+# said-orchestrate ships in every CODING bundle (not bare `brain`): it's the closed-loop
+# coding driver (plan/design/code/test/repair) and uses its own default features
+# (embed-model + pack-sign), so it's self-contained with semantic recall + signed-pack
+# verification. The bare `brain` bundle stays minimal (CLI + MCP only).
 #
 # Built with --no-default-features so each bundle is exactly its feature set.
 # Runs on tag push (v*) or manual dispatch. No secrets/tokens needed.
@@ -28,9 +33,9 @@ jobs:
         # Two real axes → full cross-product = 4 bundles × 3 OSes = 12 jobs.
         bundle: [brain, coding, coding-plus, full]
         target:
-          - { name: linux-x64,   os: ubuntu-22.04,   cli: said,     mcp: said-mcp }
-          - { name: windows-x64, os: windows-latest, cli: said.exe, mcp: said-mcp.exe }
-          - { name: macos-arm64, os: macos-14,       cli: said,     mcp: said-mcp }
+          - { name: linux-x64,   os: ubuntu-22.04,   cli: said,     mcp: said-mcp,     orch: said-orchestrate }
+          - { name: windows-x64, os: windows-latest, cli: said.exe, mcp: said-mcp.exe, orch: said-orchestrate.exe }
+          - { name: macos-arm64, os: macos-14,       cli: said,     mcp: said-mcp,     orch: said-orchestrate }
     steps:
       - uses: actions/checkout@v5
       - name: Verify encoder present (real bytes)
@@ -55,12 +60,24 @@ jobs:
         run: cargo build --release -p said-cli --no-default-features --features "${{ matrix.bundle }}"
       - name: Build said-mcp (${{ matrix.bundle }})
         run: cargo build --release -p said-mcp --no-default-features --features "${{ matrix.bundle }}"
+      # The coding orchestrator ships in every CODING bundle (not bare `brain`). It uses
+      # its OWN default features (embed-model + pack-sign), independent of the bundle
+      # feature axis, so it's a self-contained coding driver wherever it ships.
+      - name: Build said-orchestrate (coding bundles)
+        if: matrix.bundle != 'brain'
+        run: cargo build --release -p said-orchestration --bin said-orchestrate
       - name: Smoke test (CLI runs)
         shell: bash
         run: ./target/release/${{ matrix.target.cli }} --version
       - name: Stage
         shell: bash
-        run: mkdir -p dist && cp "target/release/${{ matrix.target.cli }}" "target/release/${{ matrix.target.mcp }}" dist/ && ls -la dist
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.target.cli }}" "target/release/${{ matrix.target.mcp }}" dist/
+          if [ "${{ matrix.bundle }}" != "brain" ]; then
+            cp "target/release/${{ matrix.target.orch }}" dist/
+          fi
+          ls -la dist
       - uses: actions/upload-artifact@v5
         with:
           name: said-${{ matrix.bundle }}-${{ matrix.target.name }}
