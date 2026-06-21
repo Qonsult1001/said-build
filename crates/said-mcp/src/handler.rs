@@ -431,8 +431,15 @@ impl SaidServerHandler {
     }
 
     fn open_brain(path: &str) -> SaidFile {
-        // Helper â€” load the SCA encoder from any known install path.
+        // Helper â€” load the SCA encoder: embedded model (baked in via the
+        // `embed-model` feature) first, then known install paths. Without the
+        // embedded fallback, the read path opened a brain with no encoder, so
+        // search/ask could not encode the query and SCA semantic ranking was
+        // dead (all results scored 0.000). Mirrors the CLI's try_load_encoder.
         fn attach_encoder(brain: &mut SaidFile) {
+            if brain.auto_load_encoder() {
+                return;
+            }
             for p in &[
                 "said-lam-static",
                 "../said-lam-static",
@@ -2556,15 +2563,17 @@ field above shows 0, that is the truth â€” say 0, not a past value.
         // Open the (possibly freshly-created) file and swap it in.
         let fresh = match sca_core::said_file::SaidFile::open(&new_path) {
             Ok(mut b) => {
-                // Attach the encoder if available â€” same paths open_brain uses.
-                for p in &[
-                    "said-lam-static",
-                    "../said-lam-static",
-                    "SAID-LAM-private/said-lam-static",
-                ] {
-                    if std::path::Path::new(p).exists() {
-                        let _ = b.load_encoder(p);
-                        break;
+                // Embedded encoder first, then known install paths â€” same as open_brain.
+                if !b.auto_load_encoder() {
+                    for p in &[
+                        "said-lam-static",
+                        "../said-lam-static",
+                        "SAID-LAM-private/said-lam-static",
+                    ] {
+                        if std::path::Path::new(p).exists() {
+                            let _ = b.load_encoder(p);
+                            break;
+                        }
                     }
                 }
                 b
@@ -3067,11 +3076,13 @@ Common fixes:
         let said_path_owned = self.current_path();
         if let Ok(fresh) = sca_core::said_file::SaidFile::open(&said_path_owned) {
             *brain = fresh;
-            // Try loading encoder
-            for p in &["said-lam-static", "../said-lam-static", "SAID-LAM-private/said-lam-static"] {
-                if Path::new(p).exists() {
-                    let _ = brain.load_encoder(p);
-                    break;
+            // Embedded encoder first, then known install paths.
+            if !brain.auto_load_encoder() {
+                for p in &["said-lam-static", "../said-lam-static", "SAID-LAM-private/said-lam-static"] {
+                    if Path::new(p).exists() {
+                        let _ = brain.load_encoder(p);
+                        break;
+                    }
                 }
             }
         }
