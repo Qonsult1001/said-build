@@ -1194,6 +1194,14 @@ const ENCODER_PATHS: &[&str] = &[
 
 /// Try to load the static encoder from known paths.
 fn try_load_encoder(brain: &mut SaidFile) {
+    // Embedded encoder first (baked in via the `embed-model` feature) — the same
+    // loader `add` uses. Without this, read commands (query/ask/recall) opened a
+    // brain with no encoder, so encode_query returned None and SCA semantic search
+    // silently died even though the model was compiled into the binary.
+    // auto_load_encoder is embedded-first, then falls back to well-known file paths.
+    if brain.auto_load_encoder() {
+        return;
+    }
     for p in ENCODER_PATHS {
         if Path::new(p).exists() {
             if brain.load_encoder(p).is_ok() {

@@ -6,13 +6,31 @@ Source of truth: [`crates/sca-core/Cargo.toml`](../../crates/sca-core/Cargo.toml
 
 ## Recommended build recipes
 
+> **`static-embed` is a `sca-core` feature, not a `said-cli`/`said-mcp` feature.** Passing it to the
+> CLI/MCP fails with `error: the package 'said-cli' does not contain this feature: static-embed`.
+> The CLI/MCP feature is **`embed-model`**, which pulls in `sca-core/static-embed` transitively — so
+> `--features "embed-model"` already bakes the encoder in. Build the CLI via the **shipping bundle
+> aliases** below; they are exactly what the release pipeline ships (`.github/workflows/build-binaries.yml`).
+
+The release pipeline always builds with `--no-default-features` so each binary is exactly its bundle.
+The bundle aliases (`brain`, `coding`, `coding-plus`, `full`) each imply `embed-model`, so the encoder
+is always compiled in.
+
 | Goal | Command |
 |------|---------|
 | Minimal library (no ingest, no embedder) | `cargo build -p sca-core` |
-| CLI with static encoder baked in | `cargo build --release -p said-cli --features "static-embed embed-model"` |
-| Full shipping CLI | `cargo build --release -p said-cli --features "static-embed embed-model docs ocr whisper code"` |
-| MCP server for IDEs | `cargo build --release -p said-mcp --features "static-embed embed-model docs ocr whisper code"` |
+| CLI — portable brain (text memory, encoder baked in) | `cargo build --release -p said-cli --no-default-features --features "brain"` |
+| CLI — + code intelligence (AST indexing) | `cargo build --release -p said-cli --no-default-features --features "coding"` |
+| CLI — + LSP cross-file intelligence | `cargo build --release -p said-cli --no-default-features --features "coding-plus"` |
+| CLI — full shipping bundle (code + docs + OCR + LSP) | `cargo build --release -p said-cli --no-default-features --features "full"` |
+| MCP server for IDEs (full bundle) | `cargo build --release -p said-mcp --no-default-features --features "full"` |
 | Benchmarks only | `cargo build -p sca-core --features "static-embed" --examples` |
+
+The encoder bytes live at [`SAID-LAM-private/said-lam-static`](../../SAID-LAM-private/said-lam-static)
+and are embedded via `include_bytes!` when `embed-model` is on — verify they're real (not an LFS
+pointer) before building: `model.safetensors` must be ~3.9 MB. Every bundle alias loads this embedded
+encoder at runtime with zero external files, on both the write (`add`/`init`) and read
+(`query`/`ask`/`recall`) paths.
 
 ## Full feature list
 
