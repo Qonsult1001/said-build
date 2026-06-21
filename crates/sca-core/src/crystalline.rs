@@ -4385,10 +4385,19 @@ impl CrystallineCore {
         let is_short_discourse = q_words.len() <= 8 && !has_any_code &&
                                  !has_code_intent && idf_avg <= 1.2 &&
                                  high_idf_count == 0 && oov_ratio < 0.1;
-        
+
+        // Mostly-out-of-vocabulary, no code intent: the query words don't appear
+        // in the corpus, so lexical (BM25) matching is hopeless and the FullHybrid
+        // scorer would zero these docs out. The 1-bit fingerprint is the only
+        // usable signal here, so route to PureSemantic. Without this, a purely
+        // semantic query (e.g. "a doctor treating a sick person" against a doc
+        // about "physician/patient") scored 0.0 once the corpus word index was
+        // populated — only working by accident when the index was absent.
+        let is_pure_semantic_oov = !has_any_code && !has_code_intent && oov_ratio >= 0.8;
+
         let route = if has_any_code || has_code_intent {
             QueryRoute::PureLexical
-        } else if is_short_discourse {
+        } else if is_short_discourse || is_pure_semantic_oov {
             QueryRoute::PureSemantic
         } else {
             QueryRoute::FullHybrid
