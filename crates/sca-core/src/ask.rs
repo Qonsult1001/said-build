@@ -378,23 +378,99 @@ pub fn ask(
     // needle/lexical case has multi-keyword `text` hits; the same-entity paraphrase case
     // has only `semantic` hits sharing one generic entity token.
     let lexically_discriminated = kept.iter().any(|c| c.kind == "text" && c.confidence > 0.55);
-    if kept.len() > 1 && !lexically_discriminated {
+    let has_semantic = kept.iter().any(|c| c.kind == "semantic");
+    if kept.len() > 1 && has_semantic {
         if let Some(q_emb) = brain.engine.encode_query(query) {
             let cos = |a: &[f32], b: &[f32]| -> f32 {
                 let (mut d, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
                 for i in 0..a.len().min(b.len()) { d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
                 d / (na.sqrt().max(1e-12) * nb.sqrt().max(1e-12))
             };
+            // Anisotropy correction ("all-but-the-top", Mu & Viswanath 2018). Static
+            // mean-pooled embeddings live in a narrow cone: every pair already has cosine
+            // ~0.45, so a real match barely out-scores noise NUMERICALLY even when it
+            // ranks first. Subtracting the corpus mean removes that shared common
+            // component and spreads the band — a true match stays high while off-topic
+            // docs drop toward/below zero. It's a fixed global shift, so it preserves
+            // within-query ranking (recall@k unchanged) while making the score itself
+            // meaningful/thresholdable. Measured: relevant top ~0.55 vs irrelevant top
+            // ~0.10 (test_score_separation). Falls back to raw cosine if no corpus mean.
+            let mu = brain.engine.core.get_corpus_mean();
+            let center = |v: &[f32]| -> Vec<f32> {
+                if mu.len() == v.len() {
+                    v.iter().zip(mu).map(|(x, m)| x - m).collect()
+                } else { v.to_vec() }
+            };
+            let q_c = center(&q_emb);
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
                 let is_sym = c.kind == "symbol";
-                let s = brain.engine.encode_query(&c.content).map(|e| cos(&q_emb, &e)).unwrap_or(0.0);
+                let s = brain.engine.encode_query(&c.content)
+                    .map(|e| cos(&q_c, &center(&e))).unwrap_or(0.0);
                 (s, is_sym, c)
             }).collect();
-            // Sym first (precise lookups), then by float cosine.
-            scored.sort_by(|a, b| {
-                b.1.cmp(&a.1).then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
-            });
+            // Reorder by centered cosine ONLY when there is no authoritative lexical
+            // discriminator. When a unique multi-keyword `text` hit leads (needle case),
+            // that order is authoritative and we must not reshuffle it — we still rescore
+            // the semantic tail's confidence + gate it below, just without reordering.
+            if !lexically_discriminated {
+                // Sym first (precise lookups), then by centered float cosine.
+                scored.sort_by(|a, b| {
+                    b.1.cmp(&a.1).then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
+                });
+            }
+
+            // Promote the centered cosine to the candidate's confidence for the SEMANTIC
+            // hits we just rescored. Raw 1-bit confidence sits in the anisotropy-collapsed
+            // ~0.45 band; the centered cosine is well-separated (relevant ~0.55, off-topic
+            // ~0.10 or negative) and is the honest "how good is this match" signal. Sym
+            // and `text` (keyword) hits keep their own confidence — they were never in the
+            // collapsed band. Negative cosines clamp to 0.0 (no anti-match display).
+            for (s, is_sym, c) in scored.iter_mut() {
+                if !*is_sym && c.kind == "semantic" {
+                    c.confidence = s.max(0.0);
+                }
+            }
             kept = scored.into_iter().map(|(_, _, c)| c).collect();
+
+            // Abstention floor on the now-separated semantic score. An off-topic query in
+            // any size brain produces only weak centered cosines (~0.10); a real match
+            // clears ~0.25 comfortably. Drop semantic hits below the floor so `ask`
+            // returns the confident answer(s) — or nothing — instead of the whole brain.
+            // Ranking-preserving and N-independent (centering is global), so it does NOT
+            // recreate the recall@10 regression a raw-confidence floor caused. Sym/text
+            // hits are never floored. Tunable via SAID_ASK_FLOOR.
+            if !deep {
+                let floor: f32 = std::env::var("SAID_ASK_FLOOR").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(0.05);
+                let any_strong = kept.iter().any(|c| c.kind != "semantic" || c.confidence >= floor);
+                if any_strong {
+                    // Confident answer(s) exist — keep those, drop the weak semantic tail.
+                    kept.retain(|c| c.kind != "semantic" || c.confidence >= floor);
+                } else {
+                    // Nothing clears the floor: the brain has no confident match. Return
+                    // only the single best guess rather than the whole brain, so an
+                    // off-topic question yields one closest memory (or, with the relative
+                    // cutoff upstream, possibly none) instead of every memory as noise.
+                    kept.truncate(1);
+                }
+
+                // Relative gap on the now-separated centered scores. With anisotropy
+                // removed, a confident query has a clear leader and the rest fall away;
+                // an off-topic small-brain query is a flat low cluster. Drop semantic
+                // hits that trail the leader by more than `gap` — this trims the "returns
+                // the whole brain" tail that the floor alone can't (legit at-scale hard
+                // matches score as low as ~0.05, overlapping small-brain noise, so the
+                // floor stays low; the GAP catches the flat cluster instead). Only fires
+                // when the leader is itself reasonably strong, so it never thins a genuine
+                // multi-answer result set where everything is high. Tunable via SAID_ASK_GAP.
+                let gap: f32 = std::env::var("SAID_ASK_GAP").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(0.20);
+                if let Some(top) = kept.first().map(|c| c.confidence) {
+                    if top >= floor {
+                        kept.retain(|c| c.kind != "semantic" || (top - c.confidence) <= gap);
+                    }
+                }
+            }
         }
     }
 
