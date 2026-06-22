@@ -5,8 +5,10 @@ getting them back out by asking questions.
 
 ## Start here
 
+- **[Install `said`](how-to-install-said.md)** — download and set it up on Windows, macOS, or Linux.
+  Do this first.
 - **[Tutorial: Your first portable brain](tutorial-your-first-brain.md)** — zero to first success.
-  Create a brain, store notes, ask it a question. Start here if you've never used `said`.
+  Create a brain, store notes, ask it a question. Start here once `said` is installed.
 
 ## How-to guides (one task each)
 
