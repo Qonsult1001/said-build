@@ -16,8 +16,8 @@ use std::time::Instant;
 #[command(name = "said", version, about = "said - a portable memory you can ask in plain English",
     after_help = "GETTING STARTED (your first memory in 4 commands):\n\
     \x20 said create my-brain.said                         # make an empty memory file\n\
-    \x20 said --path my-brain.said add \"Wifi is sunflower-42\" --id wifi   # store a memory\n\
-    \x20 said --path my-brain.said ask \"what is the wifi password\"        # ask in plain English\n\
+    \x20 said --path my-brain.said add \"The wifi password is sunflower-42\" --id wifi   # store a memory\n\
+    \x20 said --path my-brain.said ask \"what is the wifi password\"            # ask in plain English\n\
     \x20 said --path my-brain.said get wifi                # read one memory by its id\n\
     \n\
     Tip: run `said use my-brain.said` once, then drop --path on every command.\n\
