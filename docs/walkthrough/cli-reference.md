@@ -12,7 +12,11 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 | `add "<note>" --id <name>` | Store a memory. `--id` is a short name you can use to fetch it later (optional — auto-named if omitted). | `said add "Wifi is sunflower-42" --id wifi` |
 | `ask "<question>"` | Find memories by meaning, in plain English. **The main command** — use it for almost everything. | `said ask "what's the wifi password"` |
 | `get <id>` | Show one memory's exact text by its `--id`. | `said get wifi` |
-| `delete <id>` | Remove a memory by its `--id`. | `said delete wifi` |
+| `delete <id>` | Remove a memory (recoverable from the recycle bin). | `said delete wifi` |
+| `admin recycle-bin` | List deleted memories you can still recover. | `said admin recycle-bin` |
+| `admin recover <id>` | Bring a deleted memory back. | `said admin recover wifi` |
+| `history <id>` | Show a memory's past versions. | `said history bday` |
+| `checkout <id> --version N` | Roll a memory back to an earlier version. | `said checkout bday --version 0` |
 | `stats` | Show how many memories the brain holds. | `said stats` |
 | `use <file>.said` | Set the default brain so you can skip `--path`. | `said use my-brain.said` |
 
