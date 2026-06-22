@@ -65,7 +65,7 @@ for i in $(seq 0 $(( N - 1 ))); do
   "$BIN" --path "$BRAIN" add "$fact" --id "note$i" >/dev/null 2>&1
 done
 t1=$(date +%s); secs=$(( t1 - t0 )); [ "$secs" -eq 0 ] && secs=1
-active="$("$BIN" --path "$BRAIN" stats 2>/dev/null | grep -oE 'Active frames:[[:space:]]+[0-9]+' | grep -oE '[0-9]+')"
+active="$("$BIN" --path "$BRAIN" stats 2>/dev/null | grep -oE 'Memories:[[:space:]]+[0-9]+' | grep -oE '[0-9]+')"
 echo "ingested $N in ${secs}s (~$(( N / secs ))/s); active frames = $active; file = $(wc -c < "$BRAIN") bytes"
 
 echo "=== DEDUP: re-add 5 identical notes (same id+content) — active must NOT grow ==="
@@ -73,7 +73,7 @@ for i in 0 1 2 3 4; do
   pi=$(( i % NP )); fi=$(( (i / NP) % NF )); raw="${facts[$fi]}"
   "$BIN" --path "$BRAIN" add "${people[$pi]} ${raw%%|||*}" --id "note$i" >/dev/null 2>&1
 done
-active2="$("$BIN" --path "$BRAIN" stats 2>/dev/null | grep -oE 'Active frames:[[:space:]]+[0-9]+' | grep -oE '[0-9]+')"
+active2="$("$BIN" --path "$BRAIN" stats 2>/dev/null | grep -oE 'Memories:[[:space:]]+[0-9]+' | grep -oE '[0-9]+')"
 [ "$active2" = "$active" ] && echo "DEDUP OK: active stayed at $active2" || echo "DEDUP FAIL: $active -> $active2"
 
 echo "=== RECALL via 'ask' (primary verb), score @1/@5/@10/@50 ==="

@@ -1005,13 +1005,13 @@ impl SaidServerHandler {
             let prior = written_tags.iter()
                 .find_map(|t| t.strip_prefix("updates:"))
                 .unwrap_or("unknown");
-            notes.push(format!("â†» updates prior frame `{}`", prior));
+            notes.push(format!("â†» updates a prior memory `{}`", prior));
         }
         let notes_line = notes.join(" Â· ");
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "âœ“ Saved to brain (frame #{}, pillar={}). {}\n\nBrain now has {} total frames. \
+                "âœ“ Saved to brain (memory #{}, pillar={}). {}\n\nBrain now has {} memories. \
                  This memory is searchable â€” future `search` calls can find it.",
                 frame_id, pillar_label, notes_line, frame_count
             ),
@@ -1066,7 +1066,7 @@ impl SaidServerHandler {
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "âœ“ session_end logged (frame #{}). Brain has {} frames. \
+                "âœ“ session_end logged (memory #{}). Brain has {} memories. \
                  Dream consolidation will pick this up at next cycle.",
                 frame_id, frame_count
             ),
@@ -1125,7 +1125,7 @@ impl SaidServerHandler {
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "âœ“ tool_completion logged (frame #{}). Brain has {} frames. \
+                "âœ“ tool_completion logged (memory #{}). Brain has {} memories. \
                  Recurring tool+args+result patterns will distil to Procedural \
                  pillar at next dream cycle.",
                 frame_id, frame_count
@@ -1812,7 +1812,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
         let s = brain.stats();
 
         let lens_info = if let Some(ref lens) = self.lens {
-            format!("\nModule: {} (lens â†’ {})\nModule frames: {}\n",
+            format!("\nModule: {} (lens â†’ {})\nModule memories: {}\n",
                 lens.module_name, lens.parent_path, lens.frame_ids.len())
         } else {
             String::new()
@@ -1880,7 +1880,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
              â”€â”€â”€ Brain details â”€â”€â”€\n\
              File:          {}\n\
              {}\n\
-             {}Active frames: {}  (ingested pieces of code/docs/memory)\n\
+             {}Memories:      {}  (everything stored in this brain)\n\
              Size on disk:  {} bytes ({:.1} MB)\n\
              Search index:  {}\n\
              Symbols:       {} named functions/classes/tables\n\

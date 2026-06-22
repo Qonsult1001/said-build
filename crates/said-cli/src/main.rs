@@ -2214,7 +2214,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     } else {
         println!("Indexed directory: {}", dir);
         println!("  Files found:  {}", files.len());
-        println!("  Frames added: {}", added);
+        println!("  Memories added: {}", added);
         println!("  Skipped:      {}", skipped);
     }
     Ok(())
@@ -2584,7 +2584,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         println!("Initialized: {}", said_filename);
         println!("  Project:      {}", project_name);
         println!("  Files found:  {}", files.len());
-        println!("  Frames added: {}", added);
+        println!("  Memories added: {}", added);
         println!("  Skipped:      {}", skipped);
         println!("  .said size:   {} bytes ({:.1}KB)", file_size, file_size as f64 / 1024.0);
     }
@@ -3038,13 +3038,13 @@ fn cmd_stats(path: Option<&str>, json: bool) -> Result<(), String> {
         };
         println!("  Brain mode:        {}  {}", brain.mode().as_str(), mode_note);
         println!("  File size:         {} bytes ({:.1} MB)", s.file_size, s.file_size as f64 / 1_048_576.0);
-        println!("  Active frames:     {}", s.active_frames);
-        println!("  Deleted frames:    {}", s.deleted_frames);
+        println!("  Memories:          {}", s.active_frames);
+        println!("  Deleted:           {}", s.deleted_frames);
         if tombstones > 0 {
             let pct = if s.file_size > 0 {
                 (tomb_bytes as f64 / s.file_size as f64) * 100.0
             } else { 0.0 };
-            println!("  Tombstones:        {} frames, {} bytes ({:.1}% of file) [said compact --drop-history to purge]",
+            println!("  Recoverable:       {} deleted memories, {} bytes ({:.1}% of file) [said compact --drop-history to purge]",
                 tombstones, tomb_bytes, pct);
         }
         println!("  Compressed:        {} bytes", s.compressed_bytes);
@@ -3052,7 +3052,7 @@ fn cmd_stats(path: Option<&str>, json: bool) -> Result<(), String> {
         println!("  Compression ratio: {:.2}x", s.compression_ratio);
         println!();
         println!("=== Search Indexes ===");
-        println!("  SCA docs indexed:  {}", s.index_docs);
+        println!("  Memories indexed:  {}", s.index_docs);
         println!("  Symbol table:      {} unique names", s.symbol_count);
         println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
         println!();

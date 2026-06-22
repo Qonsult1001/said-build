@@ -1,8 +1,7 @@
 # `said` walkthroughs — brain (memory) basics
 
-Hand-held, task-first docs for using the `said` **brain bundle** as a portable personal memory. Scoped
-to memory basics: storing and retrieving notes. For the exhaustive command/flag catalogue, see the
-[CLI reference](../said-structure/07-cli-reference/).
+Hand-held, step-by-step docs for using `said` as a portable personal memory — storing notes and
+getting them back out by asking questions.
 
 ## Start here
 
@@ -17,5 +16,5 @@ to memory basics: storing and retrieving notes. For the exhaustive command/flag 
 - **[Find a memory](how-to-find-a-specific-memory.md)** — `ask` (find by meaning) and `get`
   (fetch by id). The two commands you actually need.
 
-> Scope: these cover the **brain** build variant and the **memory** capability only. Code indexing,
-> document/PDF ingest, LSP, and the orchestrator are out of scope here.
+> These cover everyday personal-memory use — storing notes and getting them back. For the full
+> command list, see the [CLI reference](../said-structure/07-cli-reference/).

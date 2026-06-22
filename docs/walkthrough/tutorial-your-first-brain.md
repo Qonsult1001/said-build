@@ -4,12 +4,11 @@
 > question in plain English — and watch it find the right note by *meaning*, not just keywords. By the
 > end you'll have a working personal memory file you built yourself. No prior experience needed.
 
-This tutorial uses the **`said` brain bundle** — the portable text-memory build. Every command below is
-real; type them exactly and check the "You should see:" block after each one.
+Every command below is real; type them exactly and check the "You should see:" block after each one.
 
 ## Before you start
 
-- [ ] The `said` binary (the `brain` bundle), version 0.11.1 or newer. Check it:
+- [ ] The `said` app, version 0.11.1 or newer. Check it:
 
       said --version
 
@@ -90,10 +89,10 @@ Check the brain's contents:
 
 You should see (among other lines):
 
-      Active frames:     2
-      SCA docs indexed:  2
+      Memories:          2
+      Memories indexed:  2
 
-Two memories stored, two indexed for semantic search. That matches what you added.
+Two memories stored, both searchable. That matches what you added.
 
 ## You did it
 
@@ -101,9 +100,9 @@ You created a portable brain, stored two memories, and asked it a question in yo
 found the right answer by meaning. That `my-brain.said` file is self-contained: copy it to a USB stick or
 another machine and it still answers the same questions, with no internet and no setup.
 
-What just happened: when you added each note, `said` turned it into a compact semantic "fingerprint" and
-stored it in the file. When you asked a question, it fingerprinted your question the same way and found
-the closest memory — that's the `[semantic]` match you saw.
+What just happened: when you saved each note, `said` stored it as a searchable memory. When you asked a
+question, it matched your question against those memories by **meaning** — not just keywords — which is
+why it found the answer even though you asked in different words.
 
 ## Next steps
 
