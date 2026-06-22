@@ -16,5 +16,8 @@ getting them back out by asking questions.
 - **[Find a memory](how-to-find-a-specific-memory.md)** — `ask` (find by meaning) and `get`
   (fetch by id). The two commands you actually need.
 
-> These cover everyday personal-memory use — storing notes and getting them back. For the full
-> command list, see the [CLI reference](../said-structure/07-cli-reference/).
+## Reference
+
+- **[Command reference](cli-reference.md)** — every command, in one table, in plain language.
+
+> These cover everyday personal-memory use — storing notes and getting them back.

@@ -49,4 +49,4 @@ You can always get a memory back: **`ask`** when you remember roughly what it's 
 - Adding and removing notes → [How to store and recall personal notes](how-to-store-and-recall-notes.md)
 - Power users: `said` also has lower-level `query` (raw semantic) and `grep` (exact text)
   commands — you don't need them for normal use; see the
-  [CLI reference](../said-structure/07-cli-reference/) if you're curious.
+  [Command reference](cli-reference.md) if you're curious.

@@ -45,4 +45,4 @@ automatically. The default is remembered across terminal sessions (stored in you
 ## See also
 
 - Day-to-day storing and recalling → [How to store and recall personal notes](how-to-store-and-recall-notes.md)
-- Full options for `use` → the [CLI reference](../said-structure/07-cli-reference/).
+- Full options for `use` → the [Command reference](cli-reference.md).
