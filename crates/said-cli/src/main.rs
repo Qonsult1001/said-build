@@ -361,6 +361,7 @@ enum Commands {
     ///
     /// Streams progress live for every format â€” one line per page /
     /// paragraph / chunk / segment, same UX as `said init .`.
+    #[cfg(feature = "docs")]
     Ingest {
         /// File or directory to ingest (positional)
         target: String,
@@ -1293,6 +1294,7 @@ fn main() {
         Commands::Import { ref from, ref source, list } =>
             cmd_import(cli.path.as_deref(), from.as_deref(), source.as_deref(), list, cli.json),
         Commands::Use { ref file } => cmd_use(file, cli.json),
+        #[cfg(feature = "docs")]
         Commands::Ingest { ref target, pointer, ref summary } =>
             cmd_ingest(cli.path.as_deref(), target, pointer, summary.as_deref(), cli.json),
         #[cfg(feature = "code")]
@@ -2616,6 +2618,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
 }
 
 /// Load .gitignore patterns from a directory.
+#[cfg(any(feature = "code", feature = "docs"))]
 fn load_gitignore(dir: &Path) -> Vec<String> {
     let gitignore_path = dir.join(".gitignore");
     if !gitignore_path.exists() { return Vec::new(); }
@@ -2629,6 +2632,7 @@ fn load_gitignore(dir: &Path) -> Vec<String> {
 }
 
 /// Check if a path matches any gitignore pattern (simple glob matching).
+#[cfg(any(feature = "code", feature = "docs"))]
 fn is_gitignored(rel_path: &str, patterns: &[String]) -> bool {
     let rel_lower = rel_path.to_lowercase();
     for pattern in patterns {
@@ -2659,6 +2663,7 @@ fn is_gitignored(rel_path: &str, patterns: &[String]) -> bool {
 }
 
 /// Simple glob matching (handles * wildcard).
+#[cfg(any(feature = "code", feature = "docs"))]
 fn glob_match(text: &str, pattern: &str) -> bool {
     if pattern == "*" { return true; }
     if !pattern.contains('*') { return text == pattern; }
@@ -2671,6 +2676,7 @@ fn glob_match(text: &str, pattern: &str) -> bool {
 }
 
 /// Walk directory respecting .gitignore patterns.
+#[cfg(any(feature = "code", feature = "docs"))]
 fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -3116,11 +3122,13 @@ fn cmd_use(file: &str, json: bool) -> Result<(), String> {
 
 /// What kind of source this extension maps to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg(feature = "docs")]
 enum IngestKind {
     Document,
     Media,
 }
 
+#[cfg(feature = "docs")]
 fn ingest_kind(ext: &str) -> Option<IngestKind> {
     match ext.to_lowercase().as_str() {
         "pdf" | "docx" | "txt" | "md" | "markdown" => Some(IngestKind::Document),
@@ -5521,6 +5529,7 @@ fn extract_short_name(doc_id: &str) -> String {
         .to_string()
 }
 
+#[cfg(feature = "docs")]
 fn cmd_ingest(
     path: Option<&str>,
     target: &str,
