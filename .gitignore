@@ -29,3 +29,9 @@ __pycache__/
 # said-build has no build dependency on it (skill packs are discovered at runtime from
 # a folder). A local working copy may remain on disk but is no longer tracked here.
 learning-factory/
+
+# Local test binaries copied to repo root for manual walkthrough testing
+/said.exe
+/said
+/said-mcp.exe
+/said-mcp
