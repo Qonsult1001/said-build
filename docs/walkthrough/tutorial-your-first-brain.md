@@ -65,20 +65,20 @@ Your brain now holds two memories.
 Now the interesting part. Ask a plain-English question — note you do **not** use any of the words from
 the stored note:
 
-    said --path my-brain.said ask "who is my dentist"
+    said --path my-brain.said ask "who looks after my teeth"
 
 You should see (your scores may differ by a little):
 
-    Ask: "who is my dentist"  (2 results in 7.41ms)
+    Ask: "who looks after my teeth"  (2 results in 5.49ms)
 
-      1. [0.48][semantic] dentist
+      1. [0.50][semantic] dentist
           My dentist is Dr. Sarah Chen, appointment every March.
-      2. [0.43][semantic] garage
+      2. [0.41][semantic] garage
           The garage door code is 4827.
 
-The dentist note came first. The `[semantic]` tag means the brain matched on **meaning** — it connected
-"who is my dentist" to "My dentist is Dr. Sarah Chen" even though you asked it differently. That is the
-whole point of `said`: it remembers *what things mean*, not just the exact words.
+The dentist note came first — even though your question shares **no words** with "My dentist is Dr.
+Sarah Chen". The `[semantic]` tag means `said` matched on **meaning**: it connected "looks after my
+teeth" to "dentist". That's the whole point — it remembers *what things mean*, not just the exact words.
 
 ## Step 5 — Confirm what's in your brain
 
