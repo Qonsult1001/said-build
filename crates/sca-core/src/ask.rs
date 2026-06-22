@@ -306,6 +306,23 @@ pub fn ask(
         let base = 0.30 + (h.score * 0.30).clamp(0.0, 0.30);
         let kw_bonus = 0.05 * (terms_present as f32 - 1.0).max(0.0);
         let confidence = (base + kw_bonus).min(0.80);
+        // Semantic tie-break (CONDITIONAL): when Engine B (grep) already inserted this
+        // doc but its keyword match is NON-DISCRIMINATING — matched on at most one
+        // keyword, typically a shared entity like "Mara" that every sibling note also
+        // has — add a fraction of the SCA semantic score so the asymmetric ranking
+        // (which separates one entity's many memories 5/5) orders the otherwise-tied
+        // results. Skipped when terms_present >= 2: a doc with a unique discriminator
+        // (e.g. "office" AND "7") has a real lexical lead that must win — this keeps the
+        // lexical needle case at 30/30.
+        if terms_present <= 1 {
+            if let Some(existing) = candidates.get_mut(&h.doc_id) {
+                // Non-discriminating keyword match (entity-only): let the asymmetric
+                // semantic score be the primary ranking signal among the tied siblings.
+                // Blend toward s_sem rather than a tiny nudge — these docs have no
+                // lexical signal to lose, so semantic should dominate.
+                existing.confidence = existing.confidence.max(confidence) + h.score * 0.40;
+            }
+        }
         upsert(&mut candidates, AskCandidate {
             doc_id: h.doc_id.clone(),
             confidence,
@@ -339,12 +356,47 @@ pub fn ask(
     let cutoff = top_score * ASK_RELATIVE_CUTOFF;
 
     let max_results = if deep { usize::MAX } else { top };
-    let kept: Vec<AskCandidate> = results.into_iter()
+    let mut kept: Vec<AskCandidate> = results.into_iter()
         .enumerate()
         .filter(|(i, r)| *i < ASK_SCA_GUARANTEED || r.confidence >= cutoff)
         .map(|(_, r)| r)
         .take(max_results)
         .collect();
+
+    // Full-float rerank of the returned set (QJL near-collision recovery, 14.1/14.8).
+    // The 1-bit doc fingerprint loses per-dim magnitude, so among near-collision
+    // candidates (e.g. one entity's many memories) the coarse score ties or mis-orders
+    // — yet full 64-dim float cosine on the SAME embedding separates them cleanly
+    // (proven 5/5, test_float_rerank_value). We re-encode the query + each kept
+    // candidate's stored text (~80µs each, only the handful we return — no storage
+    // change) and reorder by cosine. Sym hits (exact symbol, confidence 1.0) are pinned
+    // above the semantic rerank so code/entity lookups keep their precedence.
+    // Gate: only rerank when the result set is SEMANTIC-led — i.e. no candidate earned
+    // its place via a discriminating multi-keyword lexical match. When a unique lexical
+    // discriminator exists (e.g. "office" AND "7" → the exact note), that lexical order
+    // is authoritative and float cosine would wrongly tie near-identical texts. The
+    // needle/lexical case has multi-keyword `text` hits; the same-entity paraphrase case
+    // has only `semantic` hits sharing one generic entity token.
+    let lexically_discriminated = kept.iter().any(|c| c.kind == "text" && c.confidence > 0.55);
+    if kept.len() > 1 && !lexically_discriminated {
+        if let Some(q_emb) = brain.engine.encode_query(query) {
+            let cos = |a: &[f32], b: &[f32]| -> f32 {
+                let (mut d, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+                for i in 0..a.len().min(b.len()) { d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+                d / (na.sqrt().max(1e-12) * nb.sqrt().max(1e-12))
+            };
+            let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
+                let is_sym = c.kind == "symbol";
+                let s = brain.engine.encode_query(&c.content).map(|e| cos(&q_emb, &e)).unwrap_or(0.0);
+                (s, is_sym, c)
+            }).collect();
+            // Sym first (precise lookups), then by float cosine.
+            scored.sort_by(|a, b| {
+                b.1.cmp(&a.1).then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            kept = scored.into_iter().map(|(_, _, c)| c).collect();
+        }
+    }
 
     // Auto-dream — intrinsic to recall, fired HERE in core so EVERY caller (CLI, MCP,
     // Rust API, orchestrator) gets identical brain-state evolution. Previously each

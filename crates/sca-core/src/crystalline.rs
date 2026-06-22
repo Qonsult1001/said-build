@@ -716,7 +716,14 @@ impl CrystallineCore {
             rerank_depth: 100,
             quantized_mode: false,
             force_route: None,
-            asymmetric_search: false,
+            // Asymmetric (QJL) search ON by default: rank with the FULL-PRECISION float
+            // query against 1-bit doc fingerprints (14.1). Symmetric Hamming quantizes
+            // the query too, flattening one entity's many memories to score ties — yet
+            // float cosine on the SAME 64-dim embedding separates them 5/5
+            // (test_signal_diagnostic). Asymmetric recovers that signal from the
+            // existing fingerprints; it's an unbiased estimator, strictly finer than
+            // symmetric. Was opt-in via a PyO3 binding only, so CLI/MCP never used it.
+            asymmetric_search: true,
             stemmer: Stemmer::create(Algorithm::English),
             bm25_k1: 1.2,
         }
@@ -3547,7 +3554,7 @@ impl CrystallineCore {
                 Some(id) => id.clone(),
                 None => continue,
             };
-            
+
             // 1. SEMANTIC SCORE (from Hamming distance)
             let s_sem = (1.0 - (semantic_dist / max_hamming)).max(0.0) as f32;
             
