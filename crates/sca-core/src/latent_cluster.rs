@@ -877,22 +877,31 @@ impl StaticEncoder {
     /// Embedded model files — baked into the binary at compile time.
     /// said-lam-static: 64-dim, 4.8MB total (model + tokenizer + config).
     /// This means zero external files needed at runtime.
+    // Embedded model dir: said-lam-static (64-dim, original) or said-lam-static-4M
+    // (potion-base-8M, 256-dim — far stronger conceptual recall, CPU-only lookup table).
+    // The original 64-dim model is kept on disk untouched; switch by changing this path.
     #[cfg(feature = "embed-model")]
-    const MODEL_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static/model.safetensors");
+    const MODEL_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static-4M/model.safetensors");
     #[cfg(feature = "embed-model")]
-    const TOKENIZER_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static/tokenizer.json");
+    const TOKENIZER_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static-4M/tokenizer.json");
     #[cfg(feature = "embed-model")]
-    const CONFIG_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static/config.json");
+    const CONFIG_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static-4M/config.json");
 
     /// Load from embedded model (zero external files).
     /// Writes to temp dir on first call, loads from there.
     #[cfg(feature = "embed-model")]
     pub fn from_embedded() -> Result<Self, String> {
-        let dir = std::env::temp_dir().join("said-lam-static-embedded");
-        if !dir.exists() {
+        // Content-addressed temp dir: keyed by the model bytes' length so swapping the
+        // embedded model (e.g. 64-dim → 256-dim) writes to a NEW dir and never loads a
+        // stale cached model from a prior binary. (len is a cheap, sufficient cache key
+        // here — different models differ in size.)
+        let key = Self::MODEL_BYTES.len();
+        let dir = std::env::temp_dir().join(format!("said-lam-static-embedded-{key}"));
+        let model_f = dir.join("model.safetensors");
+        if !model_f.exists() {
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            std::fs::write(dir.join("model.safetensors"), Self::MODEL_BYTES)
+            std::fs::write(&model_f, Self::MODEL_BYTES)
                 .map_err(|e| format!("Write model: {}", e))?;
             std::fs::write(dir.join("tokenizer.json"), Self::TOKENIZER_BYTES)
                 .map_err(|e| format!("Write tokenizer: {}", e))?;

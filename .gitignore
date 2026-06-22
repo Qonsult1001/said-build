@@ -38,3 +38,4 @@ learning-factory/
 
 # Local Claude settings (contains secrets — never commit)
 .claude/settings.local.json
+/model-eval/

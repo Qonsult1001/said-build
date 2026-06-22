@@ -457,8 +457,13 @@ pub fn ask(
             let q_c = whiten(&q_emb);
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
                 let is_sym = c.kind == "symbol";
-                let s = brain.engine.encode_query(&c.content)
-                    .map(|e| cos(&q_c, &whiten(&e))).unwrap_or(0.0);
+                // Prefer the STORED doc embedding (the exact indexed 64-dim vector) over
+                // re-encoding the displayed content — re-encoding can drift from what was
+                // indexed (truncated/modified content) and loses fidelity. Fall back to
+                // re-encode only if the doc has no cached embedding.
+                let doc_emb = brain.engine.core.get_embedding(&c.doc_id).cloned()
+                    .or_else(|| brain.engine.encode_query(&c.content));
+                let s = doc_emb.map(|e| cos(&q_c, &whiten(&e))).unwrap_or(0.0);
                 (s, is_sym, c)
             }).collect();
             // Reorder by centered cosine ONLY when there is no authoritative lexical
