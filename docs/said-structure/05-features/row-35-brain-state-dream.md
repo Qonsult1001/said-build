@@ -16,8 +16,13 @@ Three automatic brain-state operations run on every `ask` / `search` call:
 
 - [`crates/sca-core/src/brain.rs`](../../../crates/sca-core/src/brain.rs) — `s_slow_write`, `s_slow_read`, `consolidate`, `dream`
 - [`crates/sca-core/src/ask.rs`](../../../crates/sca-core/src/ask.rs) — `dynamic_dream_threshold(active_frames)`
-- [`crates/said-cli/src/main.rs`](../../../crates/said-cli/src/main.rs) — `cmd_ask` auto-fires
-- [`crates/said-mcp/src/handler.rs`](../../../crates/said-mcp/src/handler.rs) — `handle_ask` + `handle_search` auto-fire
+- [`crates/sca-core/src/said_file.rs`](../../../crates/sca-core/src/said_file.rs) — **`maybe_dream()`: the single auto-fire trigger**, called at the end of `ask()` and `recall_by_pillar()`
+
+**Auto-fire is in core (2026-06-22).** Dreaming is intrinsic to recall — `maybe_dream()`
+fires inside `sca_core::ask::ask` and `SaidFile::recall_by_pillar`, so **every** caller
+gets it: `said ask` (CLI), MCP `ask` + `search`, the Rust API, and the orchestrator.
+The CLI/MCP handlers no longer trigger dream themselves (the old per-caller triggers in
+`cmd_ask` / `handle_ask` / `handle_search` are removed — one source of truth, no drift).
 
 ## Inputs
 
@@ -51,14 +56,20 @@ Brain State:
 
 ```rust
 let threshold = sca_core::ask::dynamic_dream_threshold(active_frames);
-for _ in 0..threshold+1 {
-    let _ = sf.recall("some query", 10);
+for n in 0..threshold+1 {
+    // ask() auto-dreams in core — no manual trigger needed
+    let _ = sca_core::ask::ask(&mut sf, "some query", 10, false, None);
 }
 // brain.consolidation_cycles should have incremented
 assert!(sf.engine.brain.consolidation_cycles > 0);
 ```
 
-End-to-end verified by repeated `said ask` calls on `willie.said` (19,149 frames → threshold 500).
+> Note: the bare `SaidFile::recall()` Rust API does **not** auto-dream — only the
+> recall-path entry points `ask()` and `recall_by_pillar()` call `maybe_dream()`. Drive
+> those (as CLI/MCP do) to exercise dreaming.
+
+Regression test: [`crates/sca-core/tests/test_dream_brain_state.rs`](../../../crates/sca-core/tests/test_dream_brain_state.rs).
+End-to-end verified by 55 `said ask` calls → 1 dream cycle, s_slow 104.2.
 
 ## How to extend
 

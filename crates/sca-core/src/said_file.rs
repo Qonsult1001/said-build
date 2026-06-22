@@ -875,13 +875,17 @@ impl SaidFile {
         pillars: Option<&std::collections::HashSet<crate::frames::Pillar>>,
     ) -> Vec<RecallResult> {
         let hits = self.search_by_pillar(query, top_k, pillars);
-        hits.into_iter()
+        let out: Vec<RecallResult> = hits.into_iter()
             .map(|(doc_id, score)| RecallResult {
                 doc_id: doc_id.clone(),
                 content: self.get(&doc_id).unwrap_or_default(),
                 score,
             })
-            .collect()
+            .collect();
+        // Auto-dream in core — so MCP `search` (which calls this, not ask()) evolves
+        // brain state without a manual trigger in the handler.
+        self.maybe_dream();
+        out
     }
 
     /// Delete a specific frame (by `frame_id`, not `doc_id`). Used by
@@ -1852,6 +1856,20 @@ impl SaidFile {
         // set_force_route, which is the auto router.
         self.engine.core.set_force_route("");
         results
+    }
+
+    /// Auto-dream: fire a consolidation cycle if accumulated query count has crossed
+    /// the corpus-scaled threshold. The SINGLE trigger for dreaming on the recall path
+    /// — callers (CLI/MCP) no longer trigger dream manually; recall does it in core so
+    /// every surface evolves brain state identically. Returns whether a cycle ran.
+    pub fn maybe_dream(&mut self) -> bool {
+        let active = self.stats().active_frames;
+        let threshold = crate::ask::dynamic_dream_threshold(active);
+        if self.stats().brain_pending_dream_queries >= threshold {
+            self.dream(threshold)
+        } else {
+            false
+        }
     }
 
     /// Run brain dream cycle (cross-timescale learning).

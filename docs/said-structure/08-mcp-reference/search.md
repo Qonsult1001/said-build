@@ -40,7 +40,9 @@ Each line: `[score=<float>] <doc_id>` followed by a 500-char content preview.
 
 ## Auto-dream side effects
 
-Same as `ask` — brain state auto-saves; dream cycle fires if threshold crossed.
+Same as `ask` — brain state auto-saves; the dream cycle fires in **core**
+(`recall_by_pillar` → `maybe_dream()`), not in the handler, so `search` evolves brain
+state identically to `ask` with no manual trigger.
 
 ## When to use search vs ask
 

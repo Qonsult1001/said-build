@@ -16,13 +16,13 @@ said [--path FILE] [--json] ask <QUERY> [--top N] [--deep]
 
 ## Behavior
 
-1. Keyword extraction (stopword-filtered, stem-aware)
+1. Keyword extraction (stopword-filtered, stem-aware). Short tokens are dropped **unless** they carry a digit — `7`, `v2`, `B3` are kept as discriminators.
 2. Engine A — Sym exact match across symbol-candidate spellings (snake_case, camelCase, PascalCase) — confidence 1.00
-3. Engine B — Grep per keyword with term-overlap scoring — confidence 0.40 – 0.95
-4. Engine C — SCA semantic via [recall_fused](../03-core-subsystems/3.5-retrieval-pipeline.md) — confidence 0.30 – 0.80
-5. Merge by doc_id, keep highest confidence per doc
+3. Engine B — Grep per keyword with whole-token term-overlap scoring (so `7` matches `office 7`, not `office 27`) — confidence 0.40 – 0.95
+4. Engine C — SCA semantic via [recall_fused](../03-core-subsystems/3.5-retrieval-pipeline.md) — confidence 0.30 – 0.80. SCA hits are trusted to the documented recall depth (`ASK_SCA_TRUST_DEPTH = 10`) even with no keyword overlap (pure paraphrase).
+5. Merge by doc_id, keep highest confidence per doc; **collapse identical-content results** to one (so duplicate facts don't fill the top-K / an LLM's context).
 6. Apply **relative cutoff** — drop results below `top_confidence × 0.30`. Guarantee top-3 SCA hits always survive.
-7. Auto-trigger brain-state dream if `pending_dream_queries ≥ dynamic_threshold`
+7. Auto-trigger brain-state dream if `pending_dream_queries ≥ dynamic_threshold` — fired in **core** (`maybe_dream()`), not by the CLI, so CLI/MCP/Rust API all behave identically.
 
 ## Output (default)
 

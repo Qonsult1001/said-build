@@ -348,15 +348,9 @@ pub fn ask(
 
     // Auto-dream — intrinsic to recall, fired HERE in core so EVERY caller (CLI, MCP,
     // Rust API, orchestrator) gets identical brain-state evolution. Previously each
-    // caller duplicated this trigger; the core is the single source of truth now.
-    // s_slow / recall-weight already accumulated inside brain.query() above; this fires
-    // the periodic consolidation cycle when the query count crosses the corpus-scaled
-    // threshold. Pure math, no LLM, no caller action.
-    let s = brain.stats();
-    let threshold = dynamic_dream_threshold(s.active_frames);
-    if s.brain_pending_dream_queries >= threshold {
-        brain.dream(threshold);
-    }
+    // caller duplicated this trigger; SaidFile::maybe_dream is the single source of
+    // truth now. Pure math, no LLM, no caller action.
+    brain.maybe_dream();
 
     (kept, keywords)
 }

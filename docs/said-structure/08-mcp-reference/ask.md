@@ -26,7 +26,7 @@
 3. Merge by doc_id, keep highest confidence per doc
 4. Apply relative cutoff (drop below `top × 0.30`, guarantee SCA top-3)
 5. Build text output
-6. Auto-dream check — if `pending_dream >= dynamic_threshold`, fire `brain.dream()` + `save_brain_only()`
+6. Auto-dream check — fired in core (`maybe_dream()` inside `ask()`); handler then calls `save_brain_only()`
 7. Return result
 
 ## Example call
@@ -56,8 +56,11 @@ The MCP tool returns text content; the CLI prints it. Agents consuming MCP shoul
 
 ## Auto-fire side effects
 
-- `brain.save_brain_only()` after every call (persists brain state — recall weights + S_slow + query log)
-- If pending-query count crossed threshold: `brain.dream()` fires, then partial save
+- Auto-dream fires in **core** (`sca_core::ask::ask` → `maybe_dream()`) when the
+  pending-query count crosses the threshold — the handler no longer triggers it, so
+  CLI/MCP/Rust API dream identically.
+- `brain.save_brain_only()` after every call (persists the brain state core evolved —
+  recall weights + S_slow + query log)
 
 Both are silent to the caller. State updates on the `.said` file via `save_brain_only` are safe — BRAN-only, no frame corruption risk.
 
