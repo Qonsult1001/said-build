@@ -3,6 +3,7 @@
 //! Drop-in replacement for ChromaDB/Pinecone: `said add`, `said query`, `said get`.
 
 mod resolve;
+#[cfg(feature = "code")]
 mod edit;
 
 use clap::{Parser, Subcommand};
@@ -12,7 +13,20 @@ use std::time::Instant;
 
 /// said â€” portable brain files. Vector DB in a single file.
 #[derive(Parser)]
-#[command(name = "said", version, about = "Portable brain files â€” remember, ask, get in one binary")]
+#[command(name = "said", version, about = "said - a portable memory you can ask in plain English",
+    after_help = "GETTING STARTED (your first memory in 4 commands):\n\
+    \x20 said create my-brain.said                         # make an empty memory file\n\
+    \x20 said --path my-brain.said add \"Wifi is sunflower-42\" --id wifi   # store a memory\n\
+    \x20 said --path my-brain.said ask \"what is the wifi password\"        # ask in plain English\n\
+    \x20 said --path my-brain.said get wifi                # read one memory by its id\n\
+    \n\
+    Tip: run `said use my-brain.said` once, then drop --path on every command.\n\
+    \n\
+    EVERYDAY COMMANDS: create | add | ask | get | delete | stats | use\n\
+    `ask` is the one you'll use most - it finds memories by meaning, in your own words.\n\
+    \n\
+    Full step-by-step guide: docs/walkthrough/  (start with tutorial-your-first-brain.md)\n\
+    Run `said <command> --help` for the options on any command.")]
 struct Cli {
     /// Path to .said file (auto-detects if omitted)
     #[arg(long, global = true)]
@@ -28,7 +42,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new .said file
+    /// Create a new, empty memory file
     Create {
         /// File path for the new .said file
         file: String,
@@ -39,8 +53,7 @@ enum Commands {
         #[arg(long, default_value = "portable")]
         mode: String,
     },
-    /// Add a document (text or file or directory).
-    /// Aliased as `remember` to match the MCP tool name.
+    /// Store a memory (also available as `remember`)
     #[command(alias = "remember")]
     Add {
         /// Text content to add (omit if using --file or --dir)
@@ -58,12 +71,12 @@ enum Commands {
         #[arg(long)]
         title: Option<String>,
     },
-    /// Get a document by ID
+    /// Read one memory by its id
     Get {
         /// Document ID
         doc_id: String,
     },
-    /// Delete a document by ID
+    /// Remove a memory by its id
     Delete {
         /// Document ID
         doc_id: String,
@@ -71,6 +84,7 @@ enum Commands {
     /// Symbol lookup: find a function/struct/class/trait by name.
     /// Tries exact match first, then prefix, then case-insensitive contains.
     /// Use --list to browse symbols by prefix without fuzzy fallback.
+    #[cfg(feature = "code")]
     Sym {
         /// Symbol name (or prefix with --list)
         name: String,
@@ -81,7 +95,7 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Ask the brain a question â€” the smart router.
+    /// Find memories by meaning (ask in plain English) -- the main command
     ///
     /// Tries symbol lookup, trigram grep, and SCA semantic search in parallel,
     /// merges results by confidence, and returns only matches above a threshold.
@@ -114,11 +128,12 @@ enum Commands {
         #[arg(long, default_value = "current")]
         engine: String,
     },
-    /// Show file statistics
+    /// Show how many memories you have
     Stats,
-    /// Force compression (compact frames). Pass --drop-history with either
-    /// --all or --keep N to purge cognitive lineage tombstones and reclaim
-    /// the bytes they hold.
+    /// Shrink the memory file (reclaim space)
+    ///
+    /// Pass --drop-history with either --all or --keep N to permanently purge old
+    /// versions of deleted/edited memories and reclaim the space they held.
     Compact {
         /// Enable tombstone purge. Requires --all or --keep N to specify
         /// the scope (refuses to run otherwise â€” protects against accidental
@@ -144,6 +159,7 @@ enum Commands {
     /// Initialize .said brain from current directory
     /// Reads .gitignore, indexes all source files, skips build artifacts
     /// One command to create a searchable brain of your entire project
+    #[cfg(feature = "code")]
     Init {
         /// Directory to initialize from (default: current directory)
         #[arg(default_value = ".")]
@@ -154,6 +170,7 @@ enum Commands {
     },
     /// Reindex a single file: tombstones the old frame(s) and inserts the new content,
     /// recording cognitive lineage (semantic delta via 1-bit fingerprint XOR).
+    #[cfg(feature = "code")]
     Reindex {
         /// File to reindex
         file: String,
@@ -168,6 +185,7 @@ enum Commands {
     /// REQUIRED surface stays dead-simple: --problem + --edits[-file]. The other
     /// fields are OPTIONAL — pass them when the client has them (richer context),
     /// omit them otherwise.
+    #[cfg(feature = "code")]
     LearnFix {
         /// The problem this iteration solved, in plain words (the recall key).
         #[arg(long)]
@@ -206,6 +224,7 @@ enum Commands {
     /// seen the same SHAPE before (built+passed). Uses action/intent-isolated
     /// 1-bit matching so "add an endpoint" never matches "document an endpoint".
     /// Returns no match below the threshold → caller falls through to the LLM.
+    #[cfg(feature = "code")]
     RecallFix {
         /// The problem to find a known-good fix for, in plain words.
         #[arg(long)]
@@ -233,6 +252,7 @@ enum Commands {
     ///     --anchor 'app.MapGet("/api/pid"' --content '<new line>' --dry-run
     ///   said edit --file tests/HealthTests.cs append-into-symbol \
     ///     --symbol HealthTests --line 10 --content-file new_test.txt --json
+    #[cfg(feature = "code")]
     Edit {
         /// Repo-relative path of the source file to change (e.g. src/Program.cs)
         #[arg(long)]
@@ -272,17 +292,18 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
-    /// Show cognitive lineage for a symbol or doc_id â€” a "semantic git log".
-    /// Walks the tombstone chain and shows each version with its delta.
+    /// Show past versions of a memory
+    ///
+    /// Lists each saved version of a memory, oldest to newest.
     History {
-        /// Symbol name or doc_id (e.g., "compact_block_dict" or "src/frames.rs::compact_block_dict")
+        /// The memory's id (or symbol name in coding brains)
         name: String,
     },
-    /// Restore a past version as the new HEAD (git-style time travel).
-    /// Use `said history <name>` first to see the version list â€” the v0/v1/...
-    /// index maps to `--version`. Checkout creates a NEW frame carrying the
-    /// past content; the current HEAD becomes a tombstone. History grows by
-    /// one entry on every checkout â€” it's a real event, not a rewind.
+    /// Restore a memory to an earlier version
+    ///
+    /// Run `said history <id>` first to see the version list (v0, v1, ...), then
+    /// pass that number to --version. Restoring is a real, logged event: the current
+    /// content becomes a past version and the restored content becomes current.
     Checkout {
         /// Symbol name or doc_id
         name: String,
@@ -315,7 +336,7 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Admin operations â€” the enterprise Recycle Bin + compliance surface.
+    /// Recover deleted memories and manage retention
     ///
     /// Subcommands expose the tombstone lineage for audit, byte-exact
     /// restore (GDPR / SOX / HIPAA friendly), and legal-hold tagging that
@@ -374,6 +395,7 @@ enum Commands {
     ///
     /// Outputs discovered modules with object counts, anchor tables,
     /// and shared boundaries between modules.
+    #[cfg(feature = "code")]
     Discover {},
 
     /// Monolith product catalogue â€” lists all detected business modules
@@ -384,6 +406,7 @@ enum Commands {
     ///   said overview                     â€” list all detected products
     ///   said overview --check visa        â€” does Visa/ISO exist? show evidence
     ///   said overview --check EFT         â€” probe for a specific domain term
+    #[cfg(feature = "code")]
     Overview {
         /// Probe the brain for a specific product/domain term. Prints whether
         /// it exists, evidence (matching tables/procs), and suggests the
@@ -403,6 +426,7 @@ enum Commands {
     ///
     /// Example: said snapshot card
     ///   â†’ creates card.vivere/ with all card-related SQL + brain
+    #[cfg(feature = "code")]
     Snapshot {
         /// Module name (e.g., "card", "billing", "onboarding")
         /// The engine searches for all objects related to this term.
@@ -427,6 +451,7 @@ enum Commands {
     /// Separate containers are only used when you explicitly pass `--compare`
     /// (to A/B-test two versions) or a different `--port` (to keep two
     /// sandboxes alive at once).
+    #[cfg(feature = "code")]
     Sandbox {
         /// Primary module, and any "+module" additions.
         /// Example: said sandbox card +billing +fee
@@ -462,6 +487,7 @@ enum Commands {
     ///   said clean card+billing+fee # tear down the combined sandbox + folder
     ///   said clean --all            # stop all containers AND remove .said-code/ entirely
     ///   said clean --dry-run        # show what would be deleted, don't do it
+    #[cfg(feature = "code")]
     Clean {
         /// Specific sandbox folder(s) to delete (e.g. "card", "card+billing+fee",
         /// or "card-before"). Matches folders under .said-code/ by prefix.
@@ -479,6 +505,7 @@ enum Commands {
     },
 
     /// Document vault â€” ingest, dedupe, rebuild, restore (Track B).
+    #[cfg(feature = "code")]
     Vault {
         #[command(subcommand)]
         action: VaultAction,
@@ -1231,15 +1258,21 @@ fn main() {
         }
         Commands::Get { ref doc_id } => cmd_get(cli.path.as_deref(), doc_id, cli.json),
         Commands::Delete { ref doc_id } => cmd_delete(cli.path.as_deref(), doc_id, cli.json),
+        #[cfg(feature = "code")]
         Commands::Sym { ref name, max, list } => cmd_sym(cli.path.as_deref(), name, max, list, cli.json),
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
+        #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
+        #[cfg(feature = "code")]
         Commands::Reindex { ref file } => cmd_reindex(cli.path.as_deref(), file, cli.json),
+        #[cfg(feature = "code")]
         Commands::LearnFix { ref problem, ref edits, ref edits_file, ref note_file, ref files, ref errors, ref learnings, ref label } =>
             cmd_learn_fix(cli.path.as_deref(), problem, edits.as_deref(), edits_file.as_deref(),
                 note_file.as_deref(), files.as_deref(), errors.as_deref(), learnings.as_deref(), label.as_deref(), cli.json),
+        #[cfg(feature = "code")]
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
+        #[cfg(feature = "code")]
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -1255,16 +1288,22 @@ fn main() {
             cmd_config(key.as_deref(), value.as_deref(), cli.json)
         }
         Commands::Admin { ref action } => cmd_admin(cli.path.as_deref(), action, cli.json),
+        #[cfg(feature = "code")]
         Commands::Vault { ref action } => cmd_vault(action, cli.json),
         Commands::Import { ref from, ref source, list } =>
             cmd_import(cli.path.as_deref(), from.as_deref(), source.as_deref(), list, cli.json),
         Commands::Use { ref file } => cmd_use(file, cli.json),
         Commands::Ingest { ref target, pointer, ref summary } =>
             cmd_ingest(cli.path.as_deref(), target, pointer, summary.as_deref(), cli.json),
+        #[cfg(feature = "code")]
         Commands::Discover {} => cmd_discover(cli.path.as_deref(), cli.json),
+        #[cfg(feature = "code")]
         Commands::Overview { ref check } => cmd_overview(cli.path.as_deref(), check.as_deref(), cli.json),
+        #[cfg(feature = "code")]
         Commands::Snapshot { ref module, ref output } => cmd_snapshot(cli.path.as_deref(), module, output.as_deref(), cli.json),
+        #[cfg(feature = "code")]
         Commands::Sandbox { ref modules, port, ref compare, up } => cmd_sandbox(cli.path.as_deref(), modules, port, compare.as_deref(), up, cli.json),
+        #[cfg(feature = "code")]
         Commands::Clean { ref targets, all, containers_only, dry_run } => cmd_clean(cli.path.as_deref(), targets, all, containers_only, dry_run, cli.json),
         #[cfg(feature = "lsp")]
         Commands::LspDef { ref location } => cmd_lsp_def(cli.path.as_deref(), location, cli.json),
@@ -1577,6 +1616,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
 // said vault <action> â€” enterprise document vault (Track B)
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+#[cfg(feature = "code")]
 fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
     match action {
         VaultAction::Init { path, admin } => {
@@ -1745,6 +1785,7 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
 /// Resolve vault identity from --as <user> or $SAID_VAULT_USER. Errors
 /// clearly if neither is set; identity is mandatory for ingest so the
 /// manifest's ingested_by is always populated.
+#[cfg(feature = "code")]
 fn resolve_vault_user(as_flag: Option<&str>) -> Result<String, String> {
     if let Some(u) = as_flag {
         return Ok(u.to_string());
@@ -2204,6 +2245,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
 
 /// `said init` â€” initialize .said brain from the current project.
 /// Reads .gitignore, indexes all source files, creates project.said.
+#[cfg(feature = "code")]
 fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Result<(), String> {
     
 
@@ -2702,6 +2744,7 @@ fn cmd_delete(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String
     Ok(())
 }
 
+#[cfg(feature = "code")]
 fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -> Result<(), String> {
     let brain = open_brain(path)?;
     let t0 = Instant::now();
@@ -3090,6 +3133,7 @@ fn ingest_kind(ext: &str) -> Option<IngestKind> {
 // said discover â€” auto-detect module boundaries in a monolithic codebase
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "code")]
 fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
 
@@ -3783,6 +3827,7 @@ fn cmd_discover(path: Option<&str>, json: bool) -> Result<(), String> {
 // Also supports `--check <term>` to probe for a specific product.
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "code")]
 fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(), String> {
     use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -4297,6 +4342,7 @@ fn cmd_overview(path: Option<&str>, check: Option<&str>, json: bool) -> Result<(
 //   said sandbox card --compare v1,v2      â†’ two parallel sandboxes (A/B compare)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "code")]
 fn cmd_sandbox(
     path: Option<&str>,
     args: &[String],
@@ -4448,6 +4494,7 @@ fn cmd_sandbox(
 // said clean â€” tear down sandboxes and delete generated artifacts
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "code")]
 fn cmd_clean(
     path: Option<&str>,
     targets: &[String],
@@ -4728,6 +4775,7 @@ fn cmd_clean(
 // said snapshot â€” extract a module into its own folder + lens .said
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "code")]
 fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bool) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
 
@@ -5438,6 +5486,7 @@ fn cmd_snapshot(path: Option<&str>, module: &str, output: Option<&str>, json: bo
     Ok(())
 }
 
+#[cfg(feature = "code")]
 fn chrono_date() -> String {
     // Simple date without chrono dependency
     let secs = std::time::SystemTime::now()
@@ -5450,6 +5499,7 @@ fn chrono_date() -> String {
 }
 
 /// Extract short object name from a doc_id
+#[cfg(feature = "code")]
 fn extract_short_name(doc_id: &str) -> String {
     // Doc_id layout is either:
     //   path::NAME::kind:line   (new â€” from code-AST chunks)
@@ -5889,6 +5939,7 @@ fn cmd_lsp_symbols(path: Option<&str>, query: &str, json: bool) -> Result<(), St
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "code")]
 fn cmd_edit(
     path: Option<&str>,
     file: &str,
@@ -6237,6 +6288,7 @@ fn cmd_edit(
 
 /// Write `content` to `file` atomically: write a sibling temp file, then rename
 /// over the target so a crash can never leave a half-written source file.
+#[cfg(feature = "code")]
 fn atomic_write(file: &str, content: &str) -> Result<(), String> {
     let target = Path::new(file);
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
@@ -6261,6 +6313,7 @@ fn atomic_write(file: &str, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "code")]
 fn file_stem_or(p: &Path) -> String {
     p.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string()
 }
@@ -6289,6 +6342,7 @@ fn file_stem_or(p: &Path) -> String {
 /// mirror Claude Code's SessionMemory sections so recall reloads FULL context.
 /// (The frame format, tags, blake3 id, and Procedural pillar live in the ONE shared
 /// writer `sca_core::ask::learn_coding_fix`; this struct is just CLI input.)
+#[cfg(feature = "code")]
 struct FixIteration<'a> {
     edits_json: &'a str,
     files: Option<&'a str>,      // Claude: "Files and Functions"
@@ -6300,6 +6354,7 @@ struct FixIteration<'a> {
 /// fields (the story for an LLM to reload). The TASK line + machine payload (edits +
 /// intent residue) are added by the shared writer `sca_core::ask::learn_coding_fix`,
 /// so this is note-only — no payload, no hashing, no tags here.
+#[cfg(feature = "code")]
 fn make_fix_note(it: &FixIteration) -> String {
     let steps = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
         Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
@@ -6327,6 +6382,7 @@ fn make_fix_note(it: &FixIteration) -> String {
 // MCP, and orchestration never drift. Nothing to define here.
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "code")]
 fn cmd_learn_fix(
     path: Option<&str>, problem: &str, edits: Option<&str>, edits_file: Option<&str>,
     note_file: Option<&str>, files: Option<&str>, errors: Option<&str>, learnings: Option<&str>,
@@ -6376,6 +6432,7 @@ fn cmd_learn_fix(
     Ok(())
 }
 
+#[cfg(feature = "code")]
 fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
     // The ONE shared reader (sca_core::ask::recall_coding_fix): semantic scorer +
@@ -6405,6 +6462,7 @@ fn cmd_recall_fix(path: Option<&str>, problem: &str, min_similarity: f32, json: 
     Ok(())
 }
 
+#[cfg(feature = "code")]
 fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
     if json {
         println!("{}", serde_json::json!({ "ok": true, "fix": serde_json::Value::Null }));
@@ -6415,6 +6473,7 @@ fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
 }
 
 
+#[cfg(feature = "code")]
 fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String> {
     let file_path = Path::new(file).canonicalize()
         .map_err(|e| format!("Cannot resolve '{}': {}", file, e))?;
@@ -6494,6 +6553,7 @@ fn cmd_reindex(path: Option<&str>, file: &str, json: bool) -> Result<(), String>
     report_reindex(updates, json)
 }
 
+#[cfg(feature = "code")]
 fn report_reindex(updates: Vec<(String, f32)>, json: bool) -> Result<(), String> {
     if json {
         let items: Vec<_> = updates.iter().map(|(d, delta)| {
