@@ -262,11 +262,24 @@ pub fn ask(
     }
 
     // ── Engine B — Grep (literal keyword match, confidence 0.40 – 0.95) ──
+    // Corpus size for IDF: use the indexed doc count (what's actually searchable), which
+    // is the right denominator and is reliable regardless of frame-stat bookkeeping.
+    let corpus_docs = (brain.engine.core.get_doc_ids().len() as f32).max(1.0);
     for kw in &keywords {
         // Same rule as extraction: search short tokens too if they carry a digit
         // (the discriminator), else skip short alpha noise.
         if kw.len() < 3 && !kw.chars().any(|c| c.is_ascii_digit()) { continue; }
         let hits = brain.grep(kw, 30);
+        // Rarity (IDF-ish) of THIS keyword: a token that appears in very few docs is a
+        // strong discriminator (a unique id like "vorlex97", a code, a proper noun); one
+        // in many docs is common structure. Count WORD-BOUNDARY occurrences, not raw grep
+        // hits — grep is substring ("vorlex7" matches "vorlex70"), which would inflate df
+        // and wrongly demote a genuinely unique token. df is from the capped hit list,
+        // good enough to tell "rare" from "everywhere".
+        let df = hits.iter()
+            .filter(|h| contains_token(&h.content.to_lowercase(), kw.as_str()))
+            .count().max(1) as f32;
+        let rarity = (corpus_docs / df).ln().max(0.0) / (corpus_docs.ln().max(1.0)); // 0..~1
         for h in hits {
             if let Some(scope) = scope_doc_ids {
                 if !scope.contains(&h.doc_id) { continue; }
@@ -275,9 +288,37 @@ pub fn ask(
             let terms_present = keywords.iter()
                 .filter(|k| contains_token(&content_lower, k.as_str()))
                 .count();
+            // Normally require ≥2 matched terms (multi-word queries) to suppress
+            // single-common-word noise. EXCEPTION: a sufficiently RARE token (high IDF —
+            // a unique id, code, or proper noun) is a strong discriminator on its own, so
+            // a doc that contains it qualifies even if the query's other (common) words
+            // are absent. Without this, "what does Vorlex97 do for fun" rejected the one
+            // note containing "vorlex97" because it lacked "fun" — the exact recall@10
+            // shortfall on near-template-identical memories.
             let min_terms = if keywords.len() >= 2 { 2 } else { 1 };
-            if terms_present < min_terms { continue; }
-            let confidence = (0.40 + 0.15 * (terms_present as f32 - 1.0))
+            // A discriminator is an IDENTIFIER-like rare token — it carries a digit (a
+            // number, code, or alnum id like "7", "office7", "vorlex97"). We deliberately
+            // do NOT treat rare *common-English* words as discriminators: in a paraphrase
+            // query ("who found the first antibiotic") a rare word can coincidentally land
+            // in the WRONG doc and the boost would out-rank the correct semantic match
+            // (measured: that regressed recall@10 0.95→0.80). Identifier tokens don't have
+            // that failure mode — they only match the doc that literally shares the id.
+            let is_identifier = kw.chars().any(|c| c.is_ascii_digit());
+            let rare_discriminator = is_identifier && rarity >= 0.85
+                && contains_token(&content_lower, kw.as_str());
+            if terms_present < min_terms && !rare_discriminator { continue; }
+            // Base on how many query terms matched, PLUS a rare-token boost: matching a
+            // high-IDF discriminator (rarity→1) is far more informative than matching a
+            // common word, so it should out-score a structurally-similar semantic match
+            // (~0.6) that lacks the discriminator. Without this, a unique identifier
+            // present only via grep (terms_present=1 → 0.40) loses to wrong-but-similar
+            // notes (recall@10 shortfall on near-template-identical memories).
+            // Only boost when THIS doc actually contains the rare token at a word
+            // boundary. grep is substring, so a rare token like "7" also returns
+            // "office17"/"office27"; those must NOT get the discriminator boost (it would
+            // tie them with the true "office 7" at the 0.95 cap and scramble the order).
+            let rare_boost = if rare_discriminator { 0.45 * rarity } else { 0.0 };
+            let confidence = (0.40 + 0.15 * (terms_present as f32 - 1.0) + rare_boost)
                 .min(0.95).max(0.40);
             upsert(&mut candidates, AskCandidate {
                 doc_id: h.doc_id.clone(),
