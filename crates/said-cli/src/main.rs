@@ -12,7 +12,7 @@ use std::time::Instant;
 
 /// said â€” portable brain files. Vector DB in a single file.
 #[derive(Parser)]
-#[command(name = "said", version, about = "Portable brain files â€” add, query, get in one binary")]
+#[command(name = "said", version, about = "Portable brain files â€” remember, ask, get in one binary")]
 struct Cli {
     /// Path to .said file (auto-detects if omitted)
     #[arg(long, global = true)]
@@ -58,14 +58,6 @@ enum Commands {
         #[arg(long)]
         title: Option<String>,
     },
-    /// Semantic search â€” find similar documents
-    Query {
-        /// Search query
-        query: String,
-        /// Number of results
-        #[arg(long, default_value_t = 5)]
-        top: usize,
-    },
     /// Get a document by ID
     Get {
         /// Document ID
@@ -75,14 +67,6 @@ enum Commands {
     Delete {
         /// Document ID
         doc_id: String,
-    },
-    /// Exact text search across all stored frames
-    Grep {
-        /// Search pattern
-        pattern: String,
-        /// Maximum results
-        #[arg(long, default_value_t = 10)]
-        max: usize,
     },
     /// Symbol lookup: find a function/struct/class/trait by name.
     /// Tries exact match first, then prefix, then case-insensitive contains.
@@ -1245,10 +1229,8 @@ fn main() {
                 cmd_add(cli.path.as_deref(), None, file.as_deref(), id.as_deref(), title.as_deref(), cli.json)
             }
         }
-        Commands::Query { ref query, top } => cmd_query(cli.path.as_deref(), query, top, cli.json),
         Commands::Get { ref doc_id } => cmd_get(cli.path.as_deref(), doc_id, cli.json),
         Commands::Delete { ref doc_id } => cmd_delete(cli.path.as_deref(), doc_id, cli.json),
-        Commands::Grep { ref pattern, max } => cmd_grep(cli.path.as_deref(), pattern, max, cli.json),
         Commands::Sym { ref name, max, list } => cmd_sym(cli.path.as_deref(), name, max, list, cli.json),
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
@@ -2688,54 +2670,6 @@ fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Ve
     }
 }
 
-fn cmd_query(path: Option<&str>, query: &str, top: usize, json: bool) -> Result<(), String> {
-    let mut brain = open_brain(path)?;
-    let t0 = Instant::now();
-    let results = brain.query(query, top);
-    let elapsed = t0.elapsed();
-    // Don't save after query â€” ensure_corpus_cached modifies engine state
-    // which would corrupt the block-compressed file on rewrite.
-    // Brain state (query log) saved on next add/init/compact.
-
-    if json {
-        let items: Vec<serde_json::Value> = results
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "doc_id": r.doc_id,
-                    "score": r.score,
-                    "content": r.content,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::json!({
-            "query": query,
-            "results": items,
-            "elapsed_ms": elapsed.as_millis()
-        }));
-    } else {
-        println!(
-            "Query: \"{}\"  ({} results in {:.1}ms)\n",
-            query,
-            results.len(),
-            elapsed.as_secs_f64() * 1000.0
-        );
-        for (i, r) in results.iter().enumerate() {
-            let preview: String = r.content.chars().take(100).collect();
-            let preview = preview.replace('\n', " ");
-            println!(
-                "  {}. [{}] score={:.4}  {}{}",
-                i + 1,
-                r.doc_id,
-                r.score,
-                preview,
-                if r.content.len() > 100 { "..." } else { "" }
-            );
-        }
-    }
-    Ok(())
-}
-
 fn cmd_get(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
     match brain.get(doc_id) {
@@ -2764,41 +2698,6 @@ fn cmd_delete(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String
         println!("Deleted: {}", doc_id);
     } else {
         println!("Not found: {}", doc_id);
-    }
-    Ok(())
-}
-
-fn cmd_grep(path: Option<&str>, pattern: &str, max: usize, json: bool) -> Result<(), String> {
-    let mut brain = open_brain(path)?;
-    let t0 = Instant::now();
-    let results = brain.grep(pattern, max);
-    let grep_elapsed = t0.elapsed();
-    if json {
-        let items: Vec<serde_json::Value> = results
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "doc_id": r.doc_id,
-                    "score": r.score,
-                    "content": r.content,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::json!({"pattern": pattern, "results": items}));
-    } else {
-        println!("Grep: \"{}\"  ({} matches in {:.2}ms)\n", pattern, results.len(), grep_elapsed.as_secs_f64() * 1000.0);
-        for (i, r) in results.iter().enumerate() {
-            let preview: String = r.content.chars().take(100).collect();
-            let preview = preview.replace('\n', " ");
-            println!(
-                "  {}. [{}] hits={}  {}{}",
-                i + 1,
-                r.doc_id,
-                r.score as u32,
-                preview,
-                if r.content.len() > 100 { "..." } else { "" }
-            );
-        }
     }
     Ok(())
 }

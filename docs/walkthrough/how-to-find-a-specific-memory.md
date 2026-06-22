@@ -14,7 +14,7 @@ search that figures out what you mean.
 
        said --path my-brain.said ask "how do I get into the garage"
 
-   The best match comes first:
+   The best memory comes first:
 
        Ask: "how do I get into the garage"  (3 results in 3.6ms)
 
