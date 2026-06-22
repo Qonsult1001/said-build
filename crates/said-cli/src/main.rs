@@ -2902,7 +2902,10 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         };
 
     // Delegate to the shared 3-engine fusion. MCP's ask tool calls the same
-    // function so CLI and MCP return identical result sets.
+    // function so CLI and MCP return identical result sets. Auto-dream now fires
+    // INSIDE ask() (core), so every surface evolves the brain identically — we just
+    // observe whether a cycle ran by watching the consolidation counter.
+    let cycles_before = brain.engine.brain.consolidation_cycles;
     let (kept, keywords) = sca_core::ask::ask(
         &mut brain, query, top, deep, scope_doc_ids.as_ref(),
     );
@@ -2913,18 +2916,8 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
 
     let elapsed = t0.elapsed();
 
-    // 6. Auto-dream: if the brain has accumulated enough query embeddings
-    //    since the last dream cycle, run one silently. Brain evolves passively.
-    //    Threshold is corpus-size-aware: small brains adapt fast (50 queries),
-    //    enterprise brains stay stable (500 queries). See
-    //    sca_core::ask::dynamic_dream_threshold for the scaling curve.
-    let s = brain.stats();
-    let threshold = sca_core::ask::dynamic_dream_threshold(s.active_frames);
-    let dreamed = if s.brain_pending_dream_queries >= threshold {
-        brain.dream(threshold)
-    } else {
-        false
-    };
+    // 6. Auto-dream now happens inside ask() (core). Did a cycle fire this call?
+    let dreamed = brain.engine.brain.consolidation_cycles > cycles_before;
 
     // 7. Persist brain state â€” partial save that only rewrites the BRAN
     //    section, leaving frames/blocks/dict/SCRM/TRGM/SYMS untouched.

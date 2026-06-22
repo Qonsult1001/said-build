@@ -36,6 +36,13 @@ pub struct AskCandidate {
 /// identically when callers don't override anything.
 pub const ASK_RELATIVE_CUTOFF: f32 = 0.30;
 pub const ASK_SCA_GUARANTEED: usize = 3;
+/// How many top SCA semantic hits are kept REGARDLESS of literal keyword overlap.
+/// Pure-paraphrase queries (the case SCA exists for) share no keywords with the
+/// stored fact, so the old `rank >= 3 && terms_present == 0` drop discarded correct
+/// semantic hits past rank 3 — collapsing recall@10. SCA's own ranking is trusted
+/// to the documented recall depth (10); only the deeper tail needs a keyword gate to
+/// keep noise out. See docs/said-structure/10-benchmarks (MTEB MEAN NDCG@10 0.9655).
+pub const ASK_SCA_TRUST_DEPTH: usize = 10;
 
 /// Pending-queries threshold before dream fires, scaled to the active frame
 /// count. Small brains adapt fast; large brains stay stable.
@@ -68,6 +75,34 @@ const ASK_STOPWORDS: &[&str] = &[
     "dont","does","doesnt","didnt","isnt",
 ];
 
+/// True if `w` (lowercased) is an ask stopword. The single source of truth for
+/// "this token is not an entity/keyword" — reused by the recall pipeline's
+/// single-word entity extractor so the question-word filter lives in ONE place.
+pub fn is_ask_stopword(w: &str) -> bool {
+    ASK_STOPWORDS.contains(&w)
+}
+
+/// Whole-token containment: true if `needle` appears in `haystack` bounded by
+/// non-alphanumeric edges. Substring `.contains()` makes the discriminator "7" match
+/// "office 27"/"office 17" too, so a numeric needle can't beat its near-duplicates.
+/// Word-boundary matching makes "7" match only "office 7". Both args lowercased.
+fn contains_token(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() { return false; }
+    let nb = needle.as_bytes();
+    let hb = haystack.as_bytes();
+    let mut i = 0;
+    while let Some(off) = haystack[i..].find(needle) {
+        let s = i + off;
+        let e = s + nb.len();
+        let left_ok = s == 0 || !(hb[s - 1] as char).is_ascii_alphanumeric();
+        let right_ok = e == hb.len() || !(hb[e] as char).is_ascii_alphanumeric();
+        if left_ok && right_ok { return true; }
+        i = s + 1;
+        if i >= haystack.len() { break; }
+    }
+    false
+}
+
 /// Extract searchable keywords from a natural-language query.
 /// Returns `(lowercased_keywords, original_case_keywords)`.
 ///
@@ -80,7 +115,13 @@ pub fn ask_extract_keywords(query: &str) -> (Vec<String>, Vec<String>) {
     let mut lower: Vec<String> = Vec::new();
     let mut original: Vec<String> = Vec::new();
     for word in query.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-        if word.len() < 3 { continue; }
+        // Drop short words EXCEPT digit-bearing tokens. A short token with a digit
+        // ("7", "v2", "B3") is a high-IDF discriminator — the needle/lexical case the
+        // docs guarantee retrieval for. Dropping it made `ask` unable to tell "office 7"
+        // from "office 9" (all scored on the shared template only). Pure short alpha
+        // tokens are still skipped — stopwords cover "is"/"at"/"of".
+        let has_digit = word.chars().any(|c| c.is_ascii_digit());
+        if word.len() < 3 && !has_digit { continue; }
         let w_lower = word.to_lowercase();
         if stop.contains(w_lower.as_str()) { continue; }
         if seen_lower.insert(w_lower.clone()) {
@@ -222,7 +263,9 @@ pub fn ask(
 
     // ── Engine B — Grep (literal keyword match, confidence 0.40 – 0.95) ──
     for kw in &keywords {
-        if kw.len() < 3 { continue; }
+        // Same rule as extraction: search short tokens too if they carry a digit
+        // (the discriminator), else skip short alpha noise.
+        if kw.len() < 3 && !kw.chars().any(|c| c.is_ascii_digit()) { continue; }
         let hits = brain.grep(kw, 30);
         for h in hits {
             if let Some(scope) = scope_doc_ids {
@@ -230,7 +273,7 @@ pub fn ask(
             }
             let content_lower = h.content.to_lowercase();
             let terms_present = keywords.iter()
-                .filter(|k| content_lower.contains(k.as_str()))
+                .filter(|k| contains_token(&content_lower, k.as_str()))
                 .count();
             let min_terms = if keywords.len() >= 2 { 2 } else { 1 };
             if terms_present < min_terms { continue; }
@@ -255,9 +298,11 @@ pub fn ask(
         }
         let content_lower = h.content.to_lowercase();
         let terms_present = keywords.iter()
-            .filter(|k| content_lower.contains(k.as_str()))
+            .filter(|k| contains_token(&content_lower, k.as_str()))
             .count();
-        if rank >= ASK_SCA_GUARANTEED && terms_present == 0 { continue; }
+        // Trust SCA's ranking to the documented recall depth even with no literal
+        // keyword overlap (pure paraphrase). Only gate the deeper tail on keywords.
+        if rank >= ASK_SCA_TRUST_DEPTH && terms_present == 0 { continue; }
         let base = 0.30 + (h.score * 0.30).clamp(0.0, 0.30);
         let kw_bonus = 0.05 * (terms_present as f32 - 1.0).max(0.0);
         let confidence = (base + kw_bonus).min(0.80);
@@ -276,6 +321,20 @@ pub fn ask(
         b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Content-dedup: the same fact stored under several ids would otherwise fill
+    // several top-K slots with identical text — wasting the result budget and (when
+    // fed to an LLM) the context window. Results are sorted by confidence, so keeping
+    // the FIRST occurrence of each content signature keeps the highest-confidence copy.
+    // Signature = trimmed, whitespace-collapsed, lowercased content (so trivial
+    // formatting differences still collapse). Distinct memories are untouched.
+    {
+        let mut seen: HashSet<String> = HashSet::new();
+        results.retain(|r| {
+            let sig: String = r.content.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+            seen.insert(sig)
+        });
+    }
+
     let top_score = results.first().map(|r| r.confidence).unwrap_or(0.0);
     let cutoff = top_score * ASK_RELATIVE_CUTOFF;
 
@@ -286,6 +345,18 @@ pub fn ask(
         .map(|(_, r)| r)
         .take(max_results)
         .collect();
+
+    // Auto-dream — intrinsic to recall, fired HERE in core so EVERY caller (CLI, MCP,
+    // Rust API, orchestrator) gets identical brain-state evolution. Previously each
+    // caller duplicated this trigger; the core is the single source of truth now.
+    // s_slow / recall-weight already accumulated inside brain.query() above; this fires
+    // the periodic consolidation cycle when the query count crosses the corpus-scaled
+    // threshold. Pure math, no LLM, no caller action.
+    let s = brain.stats();
+    let threshold = dynamic_dream_threshold(s.active_frames);
+    if s.brain_pending_dream_queries >= threshold {
+        brain.dream(threshold);
+    }
 
     (kept, keywords)
 }
