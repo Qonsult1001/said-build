@@ -4,7 +4,7 @@
 > questions. This assumes you've already created a brain file; if not, do the
 > [tutorial](tutorial-your-first-brain.md) first.
 
-These steps use the `said` **brain bundle** and assume a brain file exists (e.g. `my-brain.said`).
+These steps assume you already have a brain file (e.g. `my-brain.said`).
 
 ## Steps
 
@@ -53,8 +53,7 @@ These steps use the `said` **brain bundle** and assume a brain file exists (e.g.
 
        Deleted: wifi
 
-   The note stops appearing in answers. (It's tombstoned, not shredded — retained in history for audit
-   unless you compact it away.)
+   The note stops showing up in answers.
 
 ## Result
 
