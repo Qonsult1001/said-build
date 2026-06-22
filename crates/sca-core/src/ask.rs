@@ -436,17 +436,29 @@ pub fn ask(
             // within-query ranking (recall@k unchanged) while making the score itself
             // meaningful/thresholdable. Measured: relevant top ~0.55 vs irrelevant top
             // ~0.10 (test_score_separation). Falls back to raw cosine if no corpus mean.
+            // Diagonal whitening: (v-μ)/σ. Centering removes the shared common component
+            // (the cone); dividing by the per-dimension std additionally down-weights the
+            // few high-variance directions that dominate raw dot products and carry generic
+            // structure/co-occurrence rather than topical meaning. Measured to widen the
+            // relevant-vs-offtopic gap over plain centering (test_whitening_probe: a
+            // lexical-coincidence off-topic top drops 0.39→0.29 while genuine matches hold
+            // ~0.46-0.59). Full ZCA was measured WORSE here (it inflates low-variance noise
+            // dims of the 64-dim Matryoshka), so diagonal is the right level. σ already
+            // computed at index time (corpus_std); falls back to centering if absent.
             let mu = brain.engine.core.get_corpus_mean();
-            let center = |v: &[f32]| -> Vec<f32> {
+            let sd = brain.engine.core.get_corpus_std();
+            let whiten = |v: &[f32]| -> Vec<f32> {
                 if mu.len() == v.len() {
-                    v.iter().zip(mu).map(|(x, m)| x - m).collect()
+                    v.iter().enumerate()
+                        .map(|(d, x)| (x - mu[d]) / sd.get(d).copied().unwrap_or(1.0).max(1e-6))
+                        .collect()
                 } else { v.to_vec() }
             };
-            let q_c = center(&q_emb);
+            let q_c = whiten(&q_emb);
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
                 let is_sym = c.kind == "symbol";
                 let s = brain.engine.encode_query(&c.content)
-                    .map(|e| cos(&q_c, &center(&e))).unwrap_or(0.0);
+                    .map(|e| cos(&q_c, &whiten(&e))).unwrap_or(0.0);
                 (s, is_sym, c)
             }).collect();
             // Reorder by centered cosine ONLY when there is no authoritative lexical
@@ -471,6 +483,23 @@ pub fn ask(
                     c.confidence = s.max(0.0);
                 }
             }
+
+            // Background distribution for z-score abstention (below). The centered cosines
+            // of ALL reranked semantic candidates are this query's similarity distribution;
+            // a genuine answer sits several σ above it, an off-topic query is a flat cluster
+            // near its own mean. Captured here BEFORE floor/gap filtering so the stats
+            // reflect the full background, not the survivors. N-independent: it's relative
+            // to this query's own spread, so it behaves the same at N=20 and N=400.
+            let sem_scores: Vec<f32> = scored.iter()
+                .filter(|(_, is_sym, c)| !*is_sym && c.kind == "semantic")
+                .map(|(s, _, _)| *s).collect();
+            let (bg_mean, bg_std) = if sem_scores.len() >= 4 {
+                let m = sem_scores.iter().sum::<f32>() / sem_scores.len() as f32;
+                let var = sem_scores.iter().map(|s| (s - m).powi(2)).sum::<f32>()
+                    / sem_scores.len() as f32;
+                (m, var.sqrt().max(1e-6))
+            } else { (0.0, -1.0) }; // std<0 => not enough data, skip z-gate
+
             kept = scored.into_iter().map(|(_, _, c)| c).collect();
 
             // Abstention floor on the now-separated semantic score. An off-topic query in
@@ -509,6 +538,31 @@ pub fn ask(
                 if let Some(top) = kept.first().map(|c| c.confidence) {
                     if top >= floor {
                         kept.retain(|c| c.kind != "semantic" || (top - c.confidence) <= gap);
+                    }
+                }
+
+                // Abstention via per-query z-score ("no confident answer"). A static
+                // absolute floor can't work here: a hard paraphrase match and off-topic
+                // noise both score ~0.3-0.45 centered (they overlap), so any constant
+                // threshold either lets noise through or cuts real matches (measured: 0.45
+                // regressed recall@volume to 0.40). The calibrated signal is RELATIVE — how
+                // many σ the top hit stands above THIS query's own similarity distribution
+                // (Mu&Viswanath geometry + QPP-style calibration). A genuine answer is a
+                // clear outlier (high z); an off-topic query is a flat cluster where even
+                // the top sits near the mean (low z). N-independent and ranking-preserving.
+                // Only abstains when the leader is a semantic hit with no strong lexical
+                // support, so a keyword/symbol answer is never suppressed. Tunable via
+                // SAID_ASK_ZMIN; std<0 means too few candidates to calibrate → skip.
+                let z_min: f32 = std::env::var("SAID_ASK_ZMIN").ok()
+                    .and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                let has_strong_lexical = kept.iter()
+                    .any(|c| c.kind != "semantic" && c.confidence >= 0.55);
+                if bg_std > 0.0 && !has_strong_lexical {
+                    if let Some(top) = kept.first() {
+                        if top.kind == "semantic" {
+                            let z = (top.confidence - bg_mean) / bg_std;
+                            if z < z_min { kept.clear(); }
+                        }
                     }
                 }
             }
