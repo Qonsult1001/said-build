@@ -37,6 +37,36 @@ current folder, then a saved default. You can lean on either of the last two.
    - **If you run from a folder with *no* `.said` file and no default set** → `said` will stop and tell
      you to create one, pass `--path`, or run `use`.
 
+## Switching to a different brain
+
+Just point the default at the new one — `use` overwrites the old default, no need to "unset" first:
+
+    said use my-other-brain.said
+
+From now on, commands without `--path` use `my-other-brain.said`. (To use a different brain for a
+single command without changing the default, pass `--path that-brain.said` on just that command.)
+
+## Dropping the default
+
+The default is just a saved *pointer* (one small file), not the brain itself. There's no `use --clear`
+command, so to go back to "no default", delete that pointer file:
+
+- **Windows** → `del "%APPDATA%\said\default"`
+- **macOS / Linux** → `rm ~/.config/said/default`
+
+After that, `said` has no default again: it uses an explicit `--path`, or the single `.said` file in the
+current folder, or asks you to pick one.
+
+## Deleting a brain entirely
+
+A brain is an ordinary file. To get rid of it and all its memories, delete the `.said` file:
+
+    del my-brain.said        # Windows
+    rm my-brain.said         # macOS / Linux
+
+Deleting the brain file does **not** clear the saved default pointer — if that brain was your default,
+also drop the default (above), or `use` a different brain.
+
 ## Result
 
 Everyday commands are now short — `said ask "…"`, `said add "…"` — and target your chosen brain
