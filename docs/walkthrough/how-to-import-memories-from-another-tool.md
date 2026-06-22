@@ -23,17 +23,33 @@ its export and bring those memories in.
      still add those memories by hand with `add` (see
      [How to store and recall personal notes](how-to-store-and-recall-notes.md)).
 
-2. Export your memories from the other tool to a file or folder (follow that tool's own
-   instructions — e.g. mem0's export).
+2. Export your memories from the other tool (follow that tool's own instructions). The
+   exact file format `said` expects depends on the tool:
 
-3. Import them into your brain, naming the source system and the export you just made:
+   - **mem0** → a **JSONL** file (one memory per line), each line with a `memory` field:
 
-       said --path my-brain.said import --from mem0 --source ./my-mem0-export.json
+         {"id":"m1","memory":"The cat sleeps on the windowsill","user_id":"u1"}
+         {"id":"m2","memory":"Coffee is at 8am","user_id":"u1"}
 
-   - **If your export is a folder** → point `--source` at the folder; `said` reads every
-     supported file inside it.
-   - Each imported memory keeps a tag noting where it came from, so you can tell imported
-     memories apart later.
+   - **memvid** → a **JSON array**, each item with a `content` field:
+
+         [{"id":"v1","content":"Project deadline is Friday"},
+          {"id":"v2","content":"Budget approved last week"}]
+
+3. Import them into your brain, naming the source system and the export file:
+
+       said --path my-brain.said import --from mem0 --source ./my-mem0-export.jsonl
+
+   You should see a summary like:
+
+       ✓ Imported from mem0:
+         read:    2
+         written: 2
+
+   - **If you see `... missing 'memory'` (or `'content'`)** → the file isn't in the shape
+     above. mem0 must be JSONL with a `memory` field; memvid must be a JSON array with a
+     `content` field.
+   - Each imported memory keeps a tag noting where it came from.
 
 4. Confirm they arrived:
 
