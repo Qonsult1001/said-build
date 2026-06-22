@@ -109,4 +109,4 @@ why it found the answer even though you asked in different words.
 - Keep adding to this brain and pulling things back out → **[How to store and recall personal notes](how-to-store-and-recall-notes.md)**
 - Stop typing `--path` on every command → **[How to set a default brain file](how-to-set-a-default-brain.md)**
 - Find any memory by meaning, or fetch one by id → **[How to find a memory](how-to-find-a-specific-memory.md)**
-- Every command and flag → the [CLI reference](../said-structure/07-cli-reference/).
+- Every command and flag → the [Command reference](cli-reference.md).

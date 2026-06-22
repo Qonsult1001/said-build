@@ -64,4 +64,4 @@ You can now grow a brain over time and retrieve memories either by **asking** (b
 
 - Stop repeating `--path` → [How to set a default brain file](how-to-set-a-default-brain.md)
 - Finding memories with `ask` and `get` → [How to find a memory](how-to-find-a-specific-memory.md)
-- Full options for `add`, `get`, `delete` → the [CLI reference](../said-structure/07-cli-reference/).
+- Full options for `add`, `get`, `delete` → the [Command reference](cli-reference.md).
