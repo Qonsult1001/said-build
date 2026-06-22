@@ -129,7 +129,11 @@ enum Commands {
         engine: String,
     },
     /// Show how many memories you have
-    Stats,
+    Stats {
+        /// Show the full technical breakdown (indexes, brain-state internals).
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Shrink the memory file (reclaim space)
     ///
     /// Pass --drop-history with either --all or --keep N to permanently purge old
@@ -1284,7 +1288,7 @@ fn main() {
         ),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
-        Commands::Stats => cmd_stats(cli.path.as_deref(), cli.json),
+        Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
         Commands::Compact { drop_history, all, keep } => cmd_compact(cli.path.as_deref(), drop_history, all, keep, cli.json),
         Commands::Config { ref key, ref value } => {
             cmd_config(key.as_deref(), value.as_deref(), cli.json)
@@ -2949,7 +2953,7 @@ fn emit_ask_empty(query: &str, _top: usize, t0: Instant, json: bool, reason: &st
     Ok(())
 }
 
-fn cmd_stats(path: Option<&str>, json: bool) -> Result<(), String> {
+fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String> {
     let brain = open_brain(path)?;
     let s = brain.stats();
     let tombstones = brain.tombstone_count();
@@ -2998,26 +3002,35 @@ fn cmd_stats(path: Option<&str>, json: bool) -> Result<(), String> {
             println!("  Recoverable:       {} deleted memories, {} bytes ({:.1}% of file) [said compact --drop-history to purge]",
                 tombstones, tomb_bytes, pct);
         }
-        println!("  Compressed:        {} bytes", s.compressed_bytes);
-        println!("  Uncompressed:      {} bytes", s.uncompressed_bytes);
-        println!("  Compression ratio: {:.2}x", s.compression_ratio);
-        println!();
-        println!("=== Search Indexes ===");
-        println!("  Memories indexed:  {}", s.index_docs);
-        println!("  Symbol table:      {} unique names", s.symbol_count);
-        println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
-        println!();
-        println!("=== Brain State ===");
-        println!("  Query log:         {} entries", s.brain_queries);
-        println!("  Tracked docs:      {}", s.brain_tracked_docs);
-        println!("  Total recalls:     {}", s.brain_total_recalls);
-        println!("  Boosted docs:      {}  (recall_weight > 1.01)", s.brain_boosted);
-        println!("  Max recall weight: {:.3}", s.brain_max_recall_weight);
-        println!("  Dream cycles:      {}", s.brain_cycles);
-        println!("  s_slow magnitude:  {:.4}  (cross-doc synthesis signal)", s.brain_s_slow_magnitude);
-        println!("  Pending dream:     {} queries  (auto-dreams at {}, threshold scales with corpus)",
-                 s.brain_pending_dream_queries,
-                 sca_core::ask::dynamic_dream_threshold(s.active_frames));
+        // Everything below is internal/diagnostic — only shown with --verbose so the
+        // default view stays focused on what a memory user cares about. (Search-index
+        // counts like Symbol table / Trigram are code-feature internals and read 0 /
+        // absent in a memory brain; brain-state is consolidation diagnostics.)
+        if verbose {
+            println!("  Compressed:        {} bytes", s.compressed_bytes);
+            println!("  Uncompressed:      {} bytes", s.uncompressed_bytes);
+            println!("  Compression ratio: {:.2}x", s.compression_ratio);
+            println!();
+            println!("=== Search Indexes ===");
+            println!("  Memories indexed:  {}", s.index_docs);
+            println!("  Symbol table:      {} unique names", s.symbol_count);
+            println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
+            println!();
+            println!("=== Brain State ===");
+            println!("  Query log:         {} entries", s.brain_queries);
+            println!("  Tracked docs:      {}", s.brain_tracked_docs);
+            println!("  Total recalls:     {}", s.brain_total_recalls);
+            println!("  Boosted docs:      {}  (recall_weight > 1.01)", s.brain_boosted);
+            println!("  Max recall weight: {:.3}", s.brain_max_recall_weight);
+            println!("  Dream cycles:      {}", s.brain_cycles);
+            println!("  s_slow magnitude:  {:.4}  (cross-doc synthesis signal)", s.brain_s_slow_magnitude);
+            println!("  Pending dream:     {} queries  (auto-dreams at {}, threshold scales with corpus)",
+                     s.brain_pending_dream_queries,
+                     sca_core::ask::dynamic_dream_threshold(s.active_frames));
+        } else {
+            println!();
+            println!("(run `said stats --verbose` for indexes and brain-state details)");
+        }
     }
     Ok(())
 }
