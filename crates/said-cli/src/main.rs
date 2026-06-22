@@ -1024,19 +1024,20 @@ enum ForgeVerb {
 /// nested help menu and each action can grow its own flags over time.
 #[derive(Subcommand)]
 enum AdminAction {
-    /// List every tombstoned / deleted frame in the brain, newest first.
-    /// The Recycle Bin analogue â€” nothing is physically lost; admin can
-    /// restore any row by doc_id.
+    /// Show the recycle bin — deleted memories you can still recover, newest first.
+    /// Nothing is lost until you permanently clear it with `compact --drop-history`.
+    /// (Also available as `list-tombstones`.)
+    #[command(alias = "list-tombstones", alias = "recycle-bin")]
     ListTombstones {
-        /// Optional substring filter on doc_id (case-insensitive).
+        /// Optional substring filter on the memory id (case-insensitive).
         #[arg(long)]
         like: Option<String>,
     },
-    /// Restore a tombstoned doc_id back to Active. The most recent
-    /// tombstone wins; any current Active head for that doc_id is demoted
-    /// to tombstone so there's still one Active per doc_id.
+    /// Recover a deleted memory by its id (brings it back from the recycle bin).
+    /// (Also available as `recover`.)
+    #[command(alias = "recover")]
     Restore {
-        /// doc_id of the frame to restore
+        /// id of the memory to recover
         doc_id: String,
     },
     /// Show the deletion trail for a doc_id â€” full lineage with timestamps,
@@ -1405,9 +1406,9 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 println!("{}", serde_json::json!({"tombstones": list, "count": rows.len()}));
             } else {
                 if rows.is_empty() {
-                    println!("No tombstoned frames.");
+                    println!("Recycle bin is empty — no deleted memories to recover.");
                 } else {
-                    println!("Tombstoned frames ({}):", rows.len());
+                    println!("Deleted memories you can recover ({}):", rows.len());
                     for m in rows {
                         let hold = m.tags.iter()
                             .filter(|t| t.starts_with("legal_hold:"))
@@ -1435,9 +1436,11 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                     "doc_id": doc_id,
                 }));
             } else {
-                println!("âœ“ Restored doc_id '{}' as frame #{}.", doc_id, restored_id);
+                let _ = restored_id;
+                println!("âœ“ Recovered memory '{}'.", doc_id);
                 if let Some(old) = displaced {
-                    println!("  Previous active head (frame #{}) demoted to tombstone.", old);
+                    let _ = old;
+                    println!("  (the version that was current has been kept as a past version)");
                 }
             }
         }

@@ -20,20 +20,20 @@ clear it. So a delete you regret is easy to undo.
 
 2. See what's in the recycle bin (deleted memories you can still recover):
 
-       said --path my-brain.said admin list-tombstones
+       said --path my-brain.said admin recycle-bin
 
    You should see the deleted memory listed:
 
-       Tombstoned frames (1):
-         wifi (frame #0, 34 bytes, ...)
+       Deleted memories you can recover (1):
+         wifi (...)
 
 3. Recover it by its id:
 
-       said --path my-brain.said admin restore wifi
+       said --path my-brain.said admin recover wifi
 
    You should see:
 
-       ✓ Restored doc_id 'wifi' as frame #0.
+       ✓ Recovered memory 'wifi'.
 
 4. Confirm it's back:
 
@@ -43,9 +43,9 @@ clear it. So a delete you regret is easy to undo.
 
        The wifi password is sunflower-42.
 
-   - **If `restore` says "no tombstone found"** → that memory was already permanently
+   - **If `recover` says "not in the recycle bin"** → that memory was already permanently
      cleared (see below), so it can't be recovered. Check what's recoverable with
-     `admin list-tombstones`.
+     `admin recycle-bin`.
 
 ## Permanently clearing deleted memories
 

@@ -1885,7 +1885,7 @@ impl FrameStore {
             }
         }
         let (src, idx, _ts, restored_id) = best
-            .ok_or_else(|| format!("no tombstone found for doc_id '{}'", doc_id))?;
+            .ok_or_else(|| format!("'{}' is not in the recycle bin (never deleted, or already permanently cleared)", doc_id))?;
 
         // Displace the current Active head (if any) so there's exactly one Active.
         let mut displaced: Option<u64> = None;

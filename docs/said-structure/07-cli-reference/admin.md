@@ -13,36 +13,41 @@ All admin actions:
 - `brain.save()` on success
 - Honor legal holds (tags starting with `legal_hold:`)
 
-## list-tombstones
+## recycle-bin (alias: list-tombstones)
 
-Recycle Bin view. Every non-Active frame newest-first.
+Recycle Bin view — recoverable deleted memories, newest-first. User-facing command name
+is `recycle-bin`; `list-tombstones` is kept as an alias for backward compatibility.
 
 ```
-said admin list-tombstones [--like <substring>]
+said admin recycle-bin [--like <substring>]
+said admin list-tombstones [--like <substring>]   # alias
 ```
 
 Output:
 ```
-Tombstoned frames (305):
+Deleted memories you can recover (305):
   doc_42 (frame #875, 128 bytes, created_at=1711200000) superseded_by=#876 [legal_hold:CASE-42]
   doc_17 (frame #870, 512 bytes, created_at=1711180000) superseded_by=#871
   ...
 ```
 
-`--like <substr>` filters to doc_ids containing the substring (case-insensitive).
+`--like <substr>` filters to ids containing the substring (case-insensitive). Only
+recoverable (Tombstone) memories are shown; permanently-purged (`compact --drop-history`)
+ones are not.
 
-## restore
+## recover (alias: restore)
 
-Flip the newest tombstone for `doc_id` back to Active; demote the current Active head.
+Bring a deleted memory back. User-facing name is `recover`; `restore` is kept as an alias.
 
 ```
-said admin restore <DOC_ID>
+said admin recover <ID>
+said admin restore <ID>   # alias
 ```
 
 Output:
 ```
-✓ Restored doc_id 'memo' as frame #0.
-  Previous active head (frame #1) demoted to tombstone.
+✓ Recovered memory 'memo'.
+  (the version that was current has been kept as a past version)
 ```
 
 Error paths:
