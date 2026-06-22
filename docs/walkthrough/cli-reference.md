@@ -18,10 +18,10 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 
 ## How many answers does `ask` give back?
 
-`ask` leads with the **best match** for your question. If a few of your memories might
+`ask` leads with the **best memory** for your question. If a few of your memories might
 fit, it shows those too — so it never hides the right one just because it wasn't 100%
 sure. Seeing two or three results means it's being careful, not confused; the top one is
-its best guess.
+the best memory it found.
 
 Each result line looks like this:
 
@@ -38,9 +38,4 @@ Each result line looks like this:
 - `--top <N>` on `ask` — ask for more or fewer results (default is plenty for everyday use).
 - `--id <name>` on `add` — give a memory a memorable name so `get`/`delete` can find it.
 
-## Power-user commands (you don't need these for normal use)
-
-`said` also has lower-level retrieval commands — `query` (raw meaning-only search) and
-`grep` (exact word match). `ask` already combines what they do and is the right choice
-for everyday use; reach for these only if you have a specific reason. Run
-`said <command> --help` to see all options for any command.
+Run `said <command> --help` to see all options for any command.

@@ -4,15 +4,13 @@ Reference for every remaining `said <cmd>` subcommand. Each section is short —
 
 ## Reading
 
-### said search
+### Raw retrieval (`query` / `grep`) — removed from the CLI (2026-06-22)
 
-Pure SCA semantic search. Superseded by [ask](ask.md) for most use cases.
-
-```
-said [--path FILE] search <QUERY> [--top N]
-```
-
-Returns the pure SCA layer only (no grep / sym fusion). Useful when you want raw semantic similarity without the confidence-threshold logic.
+Pure SCA semantic search (`query`) and literal substring search (`grep`) are **no longer
+end-user CLI commands** — the CLI exposes a single retrieval verb, [`ask`](ask.md), to
+keep the surface simple for non-technical users. Both still exist as **internal library
+methods** (`brain.query()`, `brain.grep()`) and are used inside `ask`'s 3-engine fusion
+(grep is Engine B). They are not invocable from the `said` binary.
 
 ### said sym
 
@@ -28,16 +26,6 @@ FrameStore    crates/sca-core/src/frames.rs::FrameStore  (struct:325-354)
 ```
 
 Only exact equality hits count. Use `said sym` + `said ask` together: ask for conceptual, sym for exact.
-
-### said grep
-
-Literal substring via trigram index.
-
-```
-said [--path FILE] grep <PATTERN> [--max N]
-```
-
-Sub-millisecond on corpora up to ~100k frames. Case-insensitive. Pattern is treated as literal text (no regex).
 
 ### said get
 
