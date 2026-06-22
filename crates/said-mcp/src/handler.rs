@@ -805,14 +805,8 @@ impl SaidServerHandler {
             ));
         }
 
-        // Auto-dream: brain-state math only, no LLM. Fires on corpus-scaled
-        // cadence. Matches CLI `said ask` so users get identical learning
-        // whether they hit the brain via CLI or an MCP agent.
-        let stats = brain.stats();
-        let threshold = sca_core::ask::dynamic_dream_threshold(stats.active_frames);
-        if stats.brain_pending_dream_queries >= threshold {
-            let _ = brain.dream(threshold);
-        }
+        // Auto-dream now fires inside sca_core::ask::ask (core) — no duplicate trigger
+        // here. We still persist the brain-state it evolved.
         let _ = brain.save_brain_only();
 
         Ok(CallToolResult::text_content(vec![TextContent::from(output)]))

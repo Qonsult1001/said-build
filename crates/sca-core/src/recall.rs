@@ -409,6 +409,31 @@ pub fn recall_fused(
         }
     }
 
+    // Single-word capitalized entities (e.g. "Mara", "Melanie") — ADDITIVE to the
+    // multi-word path above, which is left untouched (it is tuned for WikimQA/LoCoMo).
+    // The docs' Layer-5 entity boost claims single-word caps are handled; without this
+    // a query like "what does Mara enjoy" ranked other people's same-topic notes above
+    // Mara's own. Skips question words and sentence-initial caps to avoid noise; the
+    // entity flows through the SAME specific_docs grep-injection machinery below.
+    {
+        let words: Vec<&str> = q_clean.split_whitespace().collect();
+        for (idx, w) in words.iter().enumerate() {
+            // strip trailing punctuation for the cap/length test
+            let clean: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+            if clean.len() <= 2 { continue; }
+            let is_cap = clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            let rest_lower = clean.chars().skip(1).all(|c| !c.is_uppercase());
+            // single proper noun: Capitalized, not ALL-CAPS code, not a stopword/question
+            // word (reuse the canonical ASK_STOPWORDS — single source of truth, covers
+            // what/who/which/when/the/…), and not the sentence-initial token (its cap is
+            // grammatical, not an entity signal).
+            let is_stop = crate::ask::is_ask_stopword(&clean.to_lowercase());
+            if is_cap && rest_lower && idx > 0 && !is_stop {
+                phrases.push(clean);
+            }
+        }
+    }
+
     // Comma-separated entity parts (e.g. "Hermann, Prince Of Hohenlohe")
     for phrase in phrases.clone() {
         if phrase.contains(',') {
@@ -575,12 +600,18 @@ pub fn recall_fused(
     }
     for did in &specific_docs {
         if !candidates.contains_key(did) {
+            // Entity/phrase match not already in SCA top-50: inject at a floor so it's
+            // a candidate at all.
             candidates.insert(did.clone(), max_sca * 0.8);
         } else {
+            // Already an SCA candidate: ADD an entity boost (+20% of max_sca, per the
+            // docs' Layer-5 spec) ON TOP of its semantic score — do NOT overwrite it
+            // to a flat value. Overwriting made every entity match tie at the same
+            // score, erasing the semantic ranking that distinguishes one entity's
+            // many memories (e.g. Mara's cello vs Mara's bakery). Additive keeps the
+            // semantic signal as the tie-break.
             let current = *candidates.get(did).unwrap_or(&0.0);
-            if current < max_sca * 0.5 {
-                candidates.insert(did.clone(), max_sca * 0.8);
-            }
+            candidates.insert(did.clone(), current + max_sca * 0.20);
         }
     }
 
