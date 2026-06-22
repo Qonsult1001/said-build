@@ -738,14 +738,8 @@ impl SaidServerHandler {
             ));
         }
 
-        // Auto-dream: same behavior as CLI `said ask`. Corpus-scaled threshold
-        // so small brains adapt fast, enterprise brains stay stable. Pure
-        // math, no LLM, fires silently in the background.
-        let stats = brain.stats();
-        let threshold = sca_core::ask::dynamic_dream_threshold(stats.active_frames);
-        if stats.brain_pending_dream_queries >= threshold {
-            let _ = brain.dream(threshold);
-        }
+        // Auto-dream now fires inside recall_by_pillar (core) — no manual trigger
+        // here. We still persist the brain state it evolved.
         let _ = brain.save_brain_only();
 
         Ok(CallToolResult::text_content(vec![TextContent::from(output)]))
