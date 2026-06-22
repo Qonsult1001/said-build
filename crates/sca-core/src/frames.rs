@@ -1051,13 +1051,18 @@ impl FrameStore {
 
     /// Mark a frame as deleted (tombstone). Does not reclaim space.
     pub fn delete(&mut self, doc_id: &str) -> bool {
+        // User delete = RECOVERABLE (Tombstone), not a hard purge. Tombstone keeps the
+        // payload on disk so `admin restore` can bring the memory back (the documented
+        // Recycle Bin). Setting Deleted here purged the bytes on save, so a restored
+        // frame failed its BLAKE3 check on reopen. Permanent removal is the explicit
+        // `compact --drop-history` path (drop_tombstones), which converts to Deleted.
         if let Some(&idx) = self.doc_id_map.get(doc_id) {
             if idx < self.frames.len() {
-                self.frames[idx].status = FrameStatus::Deleted;
+                self.frames[idx].status = FrameStatus::Tombstone;
             } else {
                 let pending_idx = idx - self.frames.len();
                 if pending_idx < self.pending.len() {
-                    self.pending[pending_idx].meta.status = FrameStatus::Deleted;
+                    self.pending[pending_idx].meta.status = FrameStatus::Tombstone;
                 }
             }
             self.doc_id_map.remove(doc_id);
@@ -1833,9 +1838,12 @@ impl FrameStore {
     /// tags, `superseded_by`, and `created_at` so callers can render a
     /// full deletion log. Active frames are excluded.
     pub fn admin_tombstone_records(&self) -> Vec<&FrameMeta> {
+        // Recycle Bin = recoverable frames only (Tombstone keeps its payload). Deleted
+        // frames were hard-purged by `compact --drop-history` and cannot be restored, so
+        // they are not shown here (showing them implied a restore that BLAKE3-fails).
         let mut out: Vec<&FrameMeta> = self.frames.iter()
             .chain(self.pending.iter().map(|p| &p.meta))
-            .filter(|m| m.status == FrameStatus::Tombstone || m.status == FrameStatus::Deleted)
+            .filter(|m| m.status == FrameStatus::Tombstone)
             .collect();
         out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
         out
@@ -1851,10 +1859,13 @@ impl FrameStore {
     /// `displaced_active_id` is `Some` when a current HEAD was demoted.
     /// Returns `Err` when no Tombstone for that doc_id exists.
     pub fn admin_restore_tombstoned(&mut self, doc_id: &str) -> Result<(u64, Option<u64>), String> {
-        // Find the newest tombstone for doc_id.
+        // Restore the newest TOMBSTONE for doc_id. Tombstones keep their payload, so
+        // they're recoverable. (Deleted = compact --drop-history purged the bytes; those
+        // are intentionally unrecoverable and are excluded from the Recycle Bin view.)
+        let restorable = |s: FrameStatus| s == FrameStatus::Tombstone;
         let mut best: Option<(u8, usize, u64, u64)> = None;  // (src, idx, ts, fid)
         for (i, f) in self.frames.iter().enumerate() {
-            if f.status == FrameStatus::Tombstone && f.doc_id == doc_id {
+            if restorable(f.status) && f.doc_id == doc_id {
                 match best {
                     None => best = Some((0, i, f.created_at, f.id)),
                     Some((_, _, ts, id)) if (f.created_at, f.id) > (ts, id) =>
@@ -1864,7 +1875,7 @@ impl FrameStore {
             }
         }
         for (i, p) in self.pending.iter().enumerate() {
-            if p.meta.status == FrameStatus::Tombstone && p.meta.doc_id == doc_id {
+            if restorable(p.meta.status) && p.meta.doc_id == doc_id {
                 match best {
                     None => best = Some((1, i, p.meta.created_at, p.meta.id)),
                     Some((_, _, ts, id)) if (p.meta.created_at, p.meta.id) > (ts, id) =>
