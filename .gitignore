@@ -35,3 +35,6 @@ learning-factory/
 /said
 /said-mcp.exe
 /said-mcp
+
+# Local Claude settings (contains secrets — never commit)
+.claude/settings.local.json
