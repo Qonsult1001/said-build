@@ -83,23 +83,50 @@ $SAID --path "$B" add "Unicode: café résumé 日本語 [[café]]" --id uni >/d
 out=$($SAID --path "$B" get uni 2>&1|strip); check "unicode memory stored" "café" "$out"
 out=$($SAID --path "$B" list-concepts --prefix caf 2>&1|strip); check "unicode wikilink concept" "café" "$out"
 
-echo "════ 8. MCP PARITY (same ops via MCP server) ════"
+echo "════ 8. PILLARS (episodic / semantic / procedural / external / code) ════"
+PB="$W/pillars.said"; $SAID create "$PB" >/dev/null 2>&1
+# one memory per pillar via MCP remember (MCP takes the brain via --path arg, NOT SAID_PATH)
+out=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remember","arguments":{"content":"Met at cafe Tuesday. [[meeting]]","id":"ep","pillar":"episodic"}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"remember","arguments":{"content":"My cardiologist is Dr Sarah. [[heart]] [[doctor]]","id":"se","pillar":"semantic"}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"remember","arguments":{"content":"Deploy: build then push. [[deploy]]","id":"pr","pillar":"procedural"}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"remember","arguments":{"content":"Spec at https://example.com/spec [[spec]]","id":"ex","pillar":"external"}}}' \
+  '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"remember","arguments":{"content":"fn parse(v){ let a=v[[0]]; m[[i]][[j]]; }","id":"code","pillar":"code"}}}' \
+  '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_concepts","arguments":{}}}' \
+  | "$MCP" --path "$PB" 2>/dev/null)
+concepts7=$(echo "$out" | grep '"id":7')
+check "episodic pillar links ([[meeting]])"   "meeting" "$concepts7"
+check "semantic pillar links ([[heart]])"     "heart"   "$concepts7"
+check "procedural pillar links ([[deploy]])"  "deploy"  "$concepts7"
+check "external pillar links ([[spec]])"      "spec"    "$concepts7"
+checkn "code pillar coins NO junk (0)"  '"concept": "0"' "$concepts7"
+checkn "code pillar coins NO junk (i)"  '"concept": "i"' "$concepts7"
+checkn "code pillar coins NO junk (j)"  '"concept": "j"' "$concepts7"
+# pillar-scoped retrieval: ask with pillar filter returns only that pillar
+out=$($SAID --path "$PB" ask "cardiologist doctor" --json 2>&1|strip)
+check "semantic memory retrievable" "se" "$out"
+out=$($SAID --path "$PB" get code 2>&1|strip)
+check "code memory retrievable" "parse" "$out"
+
+echo "════ 9. MCP PARITY (same ops via MCP server) ════"
 MB="$W/mcp.said"; $SAID create "$MB" >/dev/null 2>&1
 mcp_call(){ printf '%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  "$1" | SAID_PATH="$MB" "$MCP" 2>/dev/null; }
+  "$1" | "$MCP" --path "$MB" 2>/dev/null; }
 out=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'|grep -o '"name":"[a-z_]*"'|tr '\n' ' ')
 check "MCP advertises ask" '"name":"ask"' "$out"
 check "MCP advertises list_concepts" '"name":"list_concepts"' "$out"
-# remember with link, then list_concepts + ask, in-session
+# remember with link, then list_concepts + ask, in-session (correct --path)
 out=$(printf '%s\n%s\n%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remember","arguments":{"content":"Dr Sarah cardiologist [[heart]]","id":"m1"}}}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_concepts","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask","arguments":{"query":"who do I see about my heart"}}}' \
-  | SAID_PATH="$MB" "$MCP" 2>/dev/null)
+  | "$MCP" --path "$MB" 2>/dev/null)
 check "MCP remember+list_concepts shows heart" "heart" "$(echo "$out"|grep '\"id\":3')"
 check "MCP ask finds via wikilink" "cardiologist" "$(echo "$out"|grep '\"id\":4')"
 

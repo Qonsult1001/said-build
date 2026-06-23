@@ -100,3 +100,49 @@ fn link_tag_survives_save_reopen() {
     let _ = std::fs::remove_file(path);
     assert!(concepts.iter().any(|(c,_)| c=="heart"), "link:heart must survive save+reopen");
 }
+
+#[test]
+fn list_concepts_sees_episodic_after_save() {
+    use sca_core::said_file::SaidFile;
+    use sca_core::frames::Pillar;
+    let path = "test_ep_save.said";
+    let _ = std::fs::remove_file(path);
+    let mut b = SaidFile::create(path);
+    assert!(b.auto_load_encoder());
+    // episodic (default pillar), with a wikilink
+    b.remember_with_salience(Some("ep1"), "Dr Sarah cardiologist [[heart]]",
+        None, Pillar::Episodic, vec![]);
+    b.build_index().expect("idx");
+    let before = b.list_concepts(None);
+    eprintln!("before save: {:?}", before);
+    b.save().expect("save");
+    let after = b.list_concepts(None);
+    eprintln!("after save:  {:?}", after);
+    let _ = std::fs::remove_file(path);
+    assert!(after.iter().any(|(c,_)| c=="heart"), "episodic link must survive save in-memory");
+}
+
+#[test]
+fn list_concepts_episodic_on_reopened_brain() {
+    use sca_core::said_file::SaidFile;
+    use sca_core::frames::Pillar;
+    let path = "test_ep_reopen.said";
+    let _ = std::fs::remove_file(path);
+    // 1. create + save with some content (so the file has committed blocks on disk)
+    { let mut b = SaidFile::create(path);
+      assert!(b.auto_load_encoder());
+      b.remember_with_salience(Some("seed"), "seed memory about taxes", None, Pillar::Semantic, vec![]);
+      b.build_index().ok(); b.save().ok(); }
+    // 2. REOPEN from disk (like the MCP server does at startup)
+    let mut b = SaidFile::open(path).expect("open");
+    assert!(b.auto_load_encoder());
+    // 3. remember episodic + [[link]], build, save (exactly MCP's handle_remember)
+    b.remember_with_salience(Some("ep1"), "Dr Sarah cardiologist [[heart]]", None, Pillar::Episodic, vec![]);
+    b.build_index().ok();
+    b.save().expect("save2");
+    // 4. list_concepts on the SAME in-memory instance (like MCP's next call)
+    let after = b.list_concepts(None);
+    eprintln!("reopened-brain after save: {:?}", after);
+    let _ = std::fs::remove_file(path);
+    assert!(after.iter().any(|(c,_)| c=="heart"), "episodic link on reopened brain must be visible");
+}
