@@ -661,7 +661,24 @@ impl SaidFile {
 
     /// Remember with a specific ID. Never chunks — stores whole.
     pub fn remember_as(&mut self, doc_id: &str, content: &str, title: Option<&str>) -> u64 {
-        let frame_id = self.frames.put(doc_id, content.as_bytes(), title);
+        // Parse [[wikilinks]] → link:<concept> tags so the CLI/dir ingest path also gets
+        // build-graph edges (same as remember_with_salience). Single chokepoint for all
+        // plain ingest. No links → no tags → identical to before.
+        let links = crate::ask::parse_wikilinks(content);
+        let frame_id = if links.is_empty() {
+            self.frames.put(doc_id, content.as_bytes(), title)
+        } else {
+            let tags: Vec<String> = links.into_iter().map(|c| format!("link:{}", c)).collect();
+            let opts = crate::frames::PutOptions {
+                doc_id, content, title,
+                memory_type: crate::frames::MemoryType::Episodic,
+                memory_kind: crate::frames::MemoryKind::Fact,
+                subject: crate::frames::MemorySubject::User,
+                scope: crate::frames::MemoryScope::Personal,
+                tags,
+            };
+            self.frames.put_with(&opts)
+        };
         self.dirty = true;
         frame_id
     }
@@ -797,6 +814,17 @@ impl SaidFile {
         for t in &scored.tags {
             if !tags.iter().any(|x| x == t) {
                 tags.push(t.clone());
+            }
+        }
+        // Parse [[wikilinks]] from the body into `link:<concept>` tags — the documented
+        // build-graph edge (3.9). This is the OKF cross-link → .said edge bridge: a note
+        // "Dr. Sarah is the cardiologist [[heart]]" gets a `link:heart` tag, so a query
+        // about "heart" can reach it through the explicit concept edge even though the
+        // body never says "heart" (out-of-scope for the bi-encoder; in-scope via the link).
+        for concept in crate::ask::parse_wikilinks(content) {
+            let tag = format!("link:{}", concept);
+            if !tags.iter().any(|x| x == &tag) {
+                tags.push(tag);
             }
         }
         let frame_id = self.remember_with_pillar(doc_id, content, title, pillar, tags);
@@ -2364,6 +2392,21 @@ impl SaidFile {
     pub fn add_tag(&mut self, doc_id: &str, tag: &str) {
         self.frames.add_tag(doc_id, tag);
         self.dirty = true;
+    }
+
+    /// Active frames that carry a `link:<concept>` wikilink edge for `concept`
+    /// (lowercased). The recall-time half of the build-graph path (3.9): used by
+    /// `ask` to traverse explicit concept links so a query reaches a linked note even
+    /// when the bridge word isn't in its body. Returns doc_ids.
+    pub fn frames_linking_concept(&self, concept: &str) -> Vec<String> {
+        let want = format!("link:{}", concept.to_lowercase());
+        // INCLUDING pending: freshly-added frames live in the pre-flush buffer until
+        // save, and recall must see them (a memory you just added is queryable now).
+        self.frames.get_all_frames_with_pending().iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active)
+            .filter(|m| m.tags.iter().any(|t| t == &want))
+            .map(|m| m.doc_id.clone())
+            .collect()
     }
 
     /// Tombstone an Active frame (no replacement) — for source files that
