@@ -455,6 +455,14 @@ pub fn ask(
                 } else { v.to_vec() }
             };
             let q_c = whiten(&q_emb);
+            // Brain recency/salience signal (Layer 9, docs 3.3): newer + more-recalled
+            // memories rank higher; cold ones fade — like a brain adding and forgetting.
+            // search_internal applies this BEFORE the rerank; without folding it back in,
+            // reordering purely by cosine would ERASE it and near-identical memories ("5
+            // team-meeting notes", "Devi's electrician vs Alex's electrician") would tie
+            // arbitrarily instead of letting recency/salience pick the right one.
+            let s_slow = brain.engine.brain.s_slow_read(&q_emb);
+            let s_slow_boost = if s_slow > 0.1 { 1.0 + (s_slow * 0.01).min(0.5) } else { 1.0 };
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
                 let is_sym = c.kind == "symbol";
                 // Prefer the STORED doc embedding (the exact indexed 64-dim vector) over
@@ -463,29 +471,34 @@ pub fn ask(
                 // re-encode only if the doc has no cached embedding.
                 let doc_emb = brain.engine.core.get_embedding(&c.doc_id).cloned()
                     .or_else(|| brain.engine.encode_query(&c.content));
-                let s = doc_emb.map(|e| cos(&q_c, &whiten(&e))).unwrap_or(0.0);
+                let cosine = doc_emb.map(|e| cos(&q_c, &whiten(&e))).unwrap_or(0.0);
+                // Meaning leads (cosine), the brain breaks ties (recall_weight × recency).
+                // recall_weight is 1.0–2.0, s_slow_boost 1.0–1.5 — a multiplicative nudge,
+                // so the right MEANING still dominates but among near-identical matches the
+                // newest/most-salient wins (the documented Layer-9 behavior).
+                let recall_w = brain.engine.brain.get_recall_weight(&c.doc_id);
+                let s = cosine.max(0.0) * recall_w * s_slow_boost;
                 (s, is_sym, c)
             }).collect();
-            // Reorder by centered cosine ONLY when there is no authoritative lexical
+            // Reorder by combined score ONLY when there is no authoritative lexical
             // discriminator. When a unique multi-keyword `text` hit leads (needle case),
             // that order is authoritative and we must not reshuffle it — we still rescore
             // the semantic tail's confidence + gate it below, just without reordering.
             if !lexically_discriminated {
-                // Sym first (precise lookups), then by centered float cosine.
+                // Sym first (precise lookups), then by combined cosine×brain score.
                 scored.sort_by(|a, b| {
                     b.1.cmp(&a.1).then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
                 });
             }
 
-            // Promote the centered cosine to the candidate's confidence for the SEMANTIC
-            // hits we just rescored. Raw 1-bit confidence sits in the anisotropy-collapsed
-            // ~0.45 band; the centered cosine is well-separated (relevant ~0.55, off-topic
-            // ~0.10 or negative) and is the honest "how good is this match" signal. Sym
-            // and `text` (keyword) hits keep their own confidence — they were never in the
-            // collapsed band. Negative cosines clamp to 0.0 (no anti-match display).
+            // Promote the combined (cosine × brain) score to the candidate's confidence
+            // for the SEMANTIC hits we just rescored. The cosine separates meaning out of
+            // the anisotropy-collapsed 1-bit band; the brain multiplier keeps recency/
+            // salience as the tie-break. Sym and `text` (keyword) hits keep their own
+            // confidence — they were never in the collapsed band.
             for (s, is_sym, c) in scored.iter_mut() {
                 if !*is_sym && c.kind == "semantic" {
-                    c.confidence = s.max(0.0);
+                    c.confidence = *s;
                 }
             }
 
@@ -514,7 +527,10 @@ pub fn ask(
             // Ranking-preserving and N-independent (centering is global), so it does NOT
             // recreate the recall@10 regression a raw-confidence floor caused. Sym/text
             // hits are never floored. Tunable via SAID_ASK_FLOOR.
-            if !deep {
+            // SAID_ASK_ABSTAIN=0 disables the whole floor/gap/abstention block (A/B probe:
+            // documented `ask` returns top-K via relative cutoff + ASK_SCA_GUARANTEED only).
+            let abstain_on = std::env::var("SAID_ASK_ABSTAIN").map(|v| v != "0").unwrap_or(true);
+            if !deep && abstain_on {
                 let floor: f32 = std::env::var("SAID_ASK_FLOOR").ok()
                     .and_then(|v| v.parse().ok()).unwrap_or(0.05);
                 let any_strong = kept.iter().any(|c| c.kind != "semantic" || c.confidence >= floor);
