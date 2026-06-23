@@ -498,25 +498,50 @@ impl ScaEngine {
     /// Chunk text into overlapping passages — char-level (matches Python exactly).
     /// Python: chars = list(text); chunk = "".join(chars[start:end])
     #[allow(dead_code)]
+    /// Split `text` into overlapping passages of `chunk_size` WORDS with `stride`
+    /// words of overlap. The unit is words, matching the documented design
+    /// ("512-word passages with 256-word stride" — see recall::PassageEngine and
+    /// docs/03-core-subsystems/3.2). This previously chunked by CHARACTER, which
+    /// produced ~14× too many passages (a 180KB source file → ~700 passages instead
+    /// of a handful), exploding encode time and the passage-embedding memory — the
+    /// root cause of the index-stage OOM (#4) on large ingests.
     fn chunk_text(text: &str, chunk_size: usize, stride: usize) -> Vec<String> {
-        let chars: Vec<char> = text.chars().collect();
-        let char_count = chars.len();
+        // Word boundaries (byte offsets) so we can slice the original text — preserving
+        // its exact spacing/punctuation — rather than re-joining tokens.
+        let starts: Vec<usize> = text.split_whitespace()
+            .map(|w| w.as_ptr() as usize - text.as_ptr() as usize)
+            .collect();
+        let word_count = starts.len();
         let mut passages = Vec::new();
-        let mut start = 0;
 
-        while start < char_count {
-            let end = (start + chunk_size).min(char_count);
-            let chunk: String = chars[start..end].iter().collect();
-            if chunk.trim().len() >= 50 {
-                passages.push(chunk);
+        if word_count == 0 {
+            return passages;
+        }
+
+        let mut start = 0;
+        while start < word_count {
+            let end = (start + chunk_size).min(word_count);
+            // Byte range: from this window's first word to just before the next window's
+            // first word (or end-of-text for the final window).
+            let byte_start = starts[start];
+            let byte_end = if end < word_count { starts[end] } else { text.len() };
+            let chunk = text[byte_start..byte_end].trim();
+            if chunk.len() >= 50 {
+                passages.push(chunk.to_string());
+            }
+            if end == word_count {
+                break;
             }
             start += stride;
         }
 
-        if passages.is_empty() && !text.is_empty() {
-            let end = chunk_size.min(char_count);
-            let chunk: String = chars[0..end].iter().collect();
-            passages.push(chunk);
+        // Fallback: a short-but-nonempty doc that produced no passage (e.g. < 50 chars)
+        // still gets indexed as a single passage.
+        if passages.is_empty() {
+            let chunk = text.trim();
+            if !chunk.is_empty() {
+                passages.push(chunk.to_string());
+            }
         }
 
         passages
