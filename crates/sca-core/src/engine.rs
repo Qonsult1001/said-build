@@ -326,7 +326,12 @@ impl ScaEngine {
                 *doc_freq.entry(w.to_string()).or_insert(0.0) += 1.0;
             }
             self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
-            self.doc_texts_original.push(text.to_string());
+            // NOTE: do NOT cache doc_texts_original here. It is a full second copy of the
+            // entire corpus, and on the CLI/index path nothing reads it after indexing
+            // (the recall_fused fallback is gated on doc_texts_normalized being empty,
+            // which we just populated). At 64K frames this duplicate copy was a primary
+            // driver of the index-stage OOM (#4). Deserialize paths that genuinely need it
+            // populate it separately.
             all_doc_words.push(words);
         }
 
