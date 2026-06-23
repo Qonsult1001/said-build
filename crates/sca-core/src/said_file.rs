@@ -2409,6 +2409,44 @@ impl SaidFile {
             .collect()
     }
 
+    /// CODE GRAPH — what a symbol CALLS. Given a symbol name, return the doc_ids of the
+    /// frames it references via `call:<name>` edges (extracted from the AST at ingest).
+    /// `symbol` is matched against frame doc_ids/names; returns the callee doc_ids that
+    /// exist in the brain. Walks one hop: symbol → its call targets.
+    pub fn code_calls(&self, symbol: &str) -> Vec<String> {
+        let sym_lower = symbol.to_lowercase();
+        let frames = self.frames.get_all_frames_with_pending();
+        // find the frame(s) whose doc_id/name matches the symbol
+        let callees: std::collections::HashSet<String> = frames.iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active)
+            .filter(|m| m.doc_id.to_lowercase().contains(&sym_lower)
+                || m.title.as_deref().map(|t| t.to_lowercase().contains(&sym_lower)).unwrap_or(false))
+            .flat_map(|m| m.tags.iter()
+                .filter_map(|t| t.strip_prefix("call:").map(|s| s.to_lowercase())))
+            .collect();
+        // resolve callee names to actual doc_ids present in the brain
+        frames.iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active)
+            .filter(|m| {
+                let name = m.doc_id.rsplit("::").nth(1).unwrap_or(&m.doc_id).to_lowercase();
+                callees.iter().any(|c| name == *c || m.doc_id.to_lowercase().contains(c.as_str()))
+            })
+            .map(|m| m.doc_id.clone())
+            .collect()
+    }
+
+    /// CODE GRAPH — who CALLS a symbol (reverse edges). Returns doc_ids of frames that
+    /// carry a `call:<symbol>` edge — the callers of `symbol`.
+    pub fn code_callers(&self, symbol: &str) -> Vec<String> {
+        let want = format!("call:{}", symbol);
+        let want_lower = format!("call:{}", symbol.to_lowercase());
+        self.frames.get_all_frames_with_pending().iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active)
+            .filter(|m| m.tags.iter().any(|t| t == &want || t.to_lowercase() == want_lower))
+            .map(|m| m.doc_id.clone())
+            .collect()
+    }
+
     /// Every distinct `[[wikilink]]` concept in the brain, with how many memories carry
     /// each — sorted by count desc, then name. The dedup/convergence surface: a curating
     /// LLM calls this before adding a memory so it REUSES existing concepts (link `heart`,

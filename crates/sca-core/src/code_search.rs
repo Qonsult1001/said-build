@@ -40,6 +40,67 @@ pub struct CodeChunk {
     pub start_line: usize,
     pub end_line: usize,
     pub kind: String, // "function", "class", "struct", "impl", etc.
+    /// Symbol names this chunk REFERENCES (function calls / type uses). Used to build
+    /// the code knowledge graph: each becomes a `call:<name>` edge so recall can traverse
+    /// from a symbol to the things it calls (and, in reverse, find callers). Extracted
+    /// deterministically from the chunk body — no LLM. Empty for non-code chunks.
+    pub calls: Vec<String>,
+}
+
+/// Extract referenced symbol names (function-call targets) from a code chunk body.
+/// Deterministic, language-agnostic heuristic: an identifier immediately followed by `(`
+/// is a call site. Filters language keywords and the chunk's own name. This is the code
+/// equivalent of `[[wikilinks]]` — `validate_session` calling `check_token` yields a
+/// `check_token` reference, stored as a `call:check_token` edge.
+pub fn extract_calls(body: &str, own_name: &str) -> Vec<String> {
+    // keywords that are followed by `(` but aren't real call targets
+    const KW: &[&str] = &[
+        "if","for","while","switch","match","catch","return","sizeof","typeof","new",
+        "await","yield","throw","with","when","fn","func","def","function","print",
+        "println","assert","panic","let","var","const","using","public","private",
+        "static","async","unsafe","do","else","in","is","as","and","or","not",
+    ];
+    let b = body.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |id: &str, out: &mut Vec<String>| {
+        if id.len() >= 2 && id != own_name && !KW.contains(&id)
+            && id.chars().any(|c| c.is_ascii_alphabetic()) {
+            let s = id.to_string();
+            if !out.contains(&s) { out.push(s); }
+        }
+    };
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let s = i;
+            while i < b.len() && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_') { i += 1; }
+            let ident = &body[s..i];
+            // call form `ident(` (C-family, Rust, Python, JS, …)
+            let mut j = i;
+            while j < b.len() && (b[j] == b' ' || b[j] == b'\t') { j += 1; }
+            if j < b.len() && b[j] == b'(' {
+                push(ident, &mut out);
+            } else if ident.eq_ignore_ascii_case("exec") || ident.eq_ignore_ascii_case("execute") {
+                // SQL stored-proc call: `EXEC proc_name` / `EXECUTE proc_name` (no parens).
+                // The next identifier is the callee.
+                let mut k = j;
+                // optional whitespace already skipped to j; ensure we're at an ident start
+                while k < b.len() && (b[k] == b' ' || b[k] == b'\t') { k += 1; }
+                if k < b.len() && ((b[k] as char).is_ascii_alphabetic() || b[k] == b'_') {
+                    let ps = k;
+                    while k < b.len() && ((b[k] as char).is_ascii_alphanumeric() || b[k] == b'_' || b[k] == b'.') { k += 1; }
+                    // strip schema prefix (dbo.sp_x → sp_x)
+                    let raw = &body[ps..k];
+                    let callee = raw.rsplit('.').next().unwrap_or(raw);
+                    push(callee, &mut out);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 // =========================================================================
@@ -364,6 +425,7 @@ pub fn ast_chunk(source: &str, extension: &str) -> Vec<CodeChunk> {
                 start_line: 1,
                 end_line: source.lines().count(),
                 kind: "file".to_string(),
+                calls: vec![],
             }];
         }
     };
@@ -379,6 +441,7 @@ pub fn ast_chunk(source: &str, extension: &str) -> Vec<CodeChunk> {
                 start_line: 1,
                 end_line: source.lines().count(),
                 kind: "file".to_string(),
+                calls: vec![],
             }];
         }
     };
@@ -397,6 +460,7 @@ pub fn ast_chunk(source: &str, extension: &str) -> Vec<CodeChunk> {
             start_line: 1,
             end_line: source.lines().count(),
             kind: "file".to_string(),
+            calls: vec![],
         }];
     }
 
@@ -477,12 +541,14 @@ fn collect_chunks(
         let name = find_name_node(node, source)
             .unwrap_or_else(|| format!("{}:L{}", kind, start.row + 1));
 
+        let calls = extract_calls(&content, &name);
         chunks.push(CodeChunk {
             name,
             content,
             start_line: start.row + 1,
             end_line: end.row + 1,
             kind: kind.to_string(),
+            calls,
         });
 
         // For impl/class/procedure blocks, also collect their children
@@ -538,6 +604,7 @@ pub fn ast_chunk(source: &str, _extension: &str) -> Vec<CodeChunk> {
             start_line: 1,
             end_line: lines.len(),
             kind: "file".to_string(),
+            calls: vec![],
         }];
     }
     // Fixed 80-line chunks with 20-line overlap
@@ -551,6 +618,7 @@ pub fn ast_chunk(source: &str, _extension: &str) -> Vec<CodeChunk> {
             start_line: start + 1,
             end_line: end,
             kind: "chunk".to_string(),
+            calls: vec![],
         });
         if end >= lines.len() { break; }
         start += 60;
@@ -810,12 +878,14 @@ fn sql_chunk(source: &str) -> Vec<CodeChunk> {
             format!("{}|{}", base_kind, tags.join("|"))
         };
 
+        let calls = extract_calls(&batch_text, &name);
         chunks.push(CodeChunk {
             name,
             content: batch_text,
             start_line: batch_start + 1,
             end_line: *batch_end,
             kind,
+            calls,
         });
     }
 
@@ -826,6 +896,7 @@ fn sql_chunk(source: &str) -> Vec<CodeChunk> {
             start_line: 1,
             end_line: lines.len(),
             kind: "file".to_string(),
+            calls: vec![],
         }];
     }
 

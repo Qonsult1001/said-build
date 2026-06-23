@@ -95,6 +95,18 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
+    /// Code graph: what a symbol CALLS (functions/procs it references)
+    #[cfg(feature = "code")]
+    Calls {
+        /// Symbol name (function / method / proc)
+        name: String,
+    },
+    /// Code graph: who CALLS a symbol (its callers / reverse edges)
+    #[cfg(feature = "code")]
+    Callers {
+        /// Symbol name (function / method / proc)
+        name: String,
+    },
     /// Find memories by meaning (ask in plain English) -- the main command
     ///
     /// Tries symbol lookup, trigram grep, and SCA semantic search in parallel,
@@ -1277,6 +1289,10 @@ fn main() {
         Commands::Delete { ref doc_id } => cmd_delete(cli.path.as_deref(), doc_id, cli.json),
         #[cfg(feature = "code")]
         Commands::Sym { ref name, max, list } => cmd_sym(cli.path.as_deref(), name, max, list, cli.json),
+        #[cfg(feature = "code")]
+        Commands::Calls { ref name } => cmd_code_edges(cli.path.as_deref(), name, false, cli.json),
+        #[cfg(feature = "code")]
+        Commands::Callers { ref name } => cmd_code_edges(cli.path.as_deref(), name, true, cli.json),
         Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
         #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
@@ -2445,6 +2461,13 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                         for tag in &kind_parts[1..] {
                             brain.add_tag(&doc_id, tag);
                         }
+                        // Code knowledge graph: store each referenced symbol as a
+                        // `call:<name>` edge. This makes every function/proc a node and
+                        // its calls traversable — `ask "session expiry"` can walk from a
+                        // matched fn to the functions it calls. Deterministic, in-file.
+                        for callee in &chunk.calls {
+                            brain.add_tag(&doc_id, &format!("call:{}", callee));
+                        }
                         // Record symbol for the SYMS section. Markdown
                         // headings (h1-h6) and config-file keys (JSON pair,
                         // TOML table, YAML block_mapping_pair) are content
@@ -2962,6 +2985,24 @@ fn emit_ask_empty(query: &str, _top: usize, t0: Instant, json: bool, reason: &st
     } else {
         println!("Ask: \"{}\"  (no results: {})", query, reason);
     }
+    Ok(())
+}
+
+#[cfg(feature = "code")]
+fn cmd_code_edges(path: Option<&str>, name: &str, reverse: bool, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let edges = if reverse { brain.code_callers(name) } else { brain.code_calls(name) };
+    if json {
+        println!("{}", serde_json::json!(edges));
+        return Ok(());
+    }
+    let verb = if reverse { "callers of" } else { "calls from" };
+    if edges.is_empty() {
+        println!("No {} '{}'. (Run `said init` on a codebase first; the code graph is built at ingest.)", verb, name);
+        return Ok(());
+    }
+    println!("{} '{}' ({}):", verb, name, edges.len());
+    for d in &edges { println!("  {}", d); }
     Ok(())
 }
 
