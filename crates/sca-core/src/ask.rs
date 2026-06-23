@@ -89,19 +89,43 @@ pub fn is_ask_stopword(w: &str) -> bool {
 /// word isn't in the body). Returns each distinct concept once, lowercased + trimmed.
 pub fn parse_wikilinks(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let bytes = text.as_bytes();
     let mut rest = text;
-    while let Some(start) = rest.find("[[") {
-        let after = &rest[start + 2..];
+    let mut base = 0usize; // absolute offset of `rest` within `text`
+    while let Some(rel_start) = rest.find("[[") {
+        let start = base + rel_start;
+        // Array-indexing guard: `[[` glued to a preceding alphanumeric (matrix[[i]],
+        // vec[[k]]) is code subscripting, NOT a wikilink. A real wikilink stands alone
+        // (preceded by start-of-text or whitespace/punctuation). Skip glued ones.
+        let preceded_by_alnum = start > 0
+            && (bytes[start - 1] as char).is_ascii_alphanumeric();
+        let after = &text[start + 2..];
+        if preceded_by_alnum {
+            base = start + 2;
+            rest = after;
+            continue;
+        }
         if let Some(end) = after.find("]]") {
             let inner = after[..end].trim();
             // Obsidian alias/section forms: [[concept|alias]] / [[concept#heading]] →
             // keep the concept part before | or #.
             let concept = inner.split(|c| c == '|' || c == '#').next().unwrap_or(inner).trim();
-            if !concept.is_empty() && concept.len() <= 64 {
+            // STRICT concept shape — a real wikilink concept is WORDS: ≥2 chars, contains a
+            // letter, and only letter / space / - / _ / ' chars. This deliberately REJECTS
+            // code/math bracket noise ([[1,2],[3,4]], a[[0]]) and single-letter code
+            // indices (matrix[[i]] → 'i') so importing PDFs, code, or any text with literal
+            // `[[` never coins junk concepts.
+            let valid = concept.chars().count() >= 2
+                && concept.len() <= 64
+                && concept.chars().any(|c| c.is_alphabetic())
+                && concept.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '_' || c == '\'');
+            if valid {
                 let c = concept.to_lowercase();
                 if !out.contains(&c) { out.push(c); }
             }
-            rest = &after[end + 2..];
+            // advance past the closing ]]
+            base = start + 2 + end + 2;
+            rest = &text[base..];
         } else {
             break;
         }

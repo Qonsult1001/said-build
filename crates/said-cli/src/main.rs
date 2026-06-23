@@ -134,6 +134,17 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// List the concepts your memories are linked to ([[wikilink]] vocabulary)
+    ///
+    /// Shows every distinct concept and how many memories carry it. Use this before
+    /// adding a memory so you reuse an existing concept (e.g. "heart") instead of
+    /// coining a near-duplicate ("heart-health") — keeps recall consistent.
+    #[command(name = "list-concepts")]
+    ListConcepts {
+        /// Only show concepts starting with this prefix
+        #[arg(long)]
+        prefix: Option<String>,
+    },
     /// Shrink the memory file (reclaim space)
     ///
     /// Pass --drop-history with either --all or --keep N to permanently purge old
@@ -1289,6 +1300,7 @@ fn main() {
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
+        Commands::ListConcepts { prefix } => cmd_list_concepts(cli.path.as_deref(), prefix.as_deref(), cli.json),
         Commands::Compact { drop_history, all, keep } => cmd_compact(cli.path.as_deref(), drop_history, all, keep, cli.json),
         Commands::Config { ref key, ref value } => {
             cmd_config(key.as_deref(), value.as_deref(), cli.json)
@@ -2949,6 +2961,30 @@ fn emit_ask_empty(query: &str, _top: usize, t0: Instant, json: bool, reason: &st
         }));
     } else {
         println!("Ask: \"{}\"  (no results: {})", query, reason);
+    }
+    Ok(())
+}
+
+fn cmd_list_concepts(path: Option<&str>, prefix: Option<&str>, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let concepts = brain.list_concepts(prefix);
+    if json {
+        let arr: Vec<_> = concepts.iter()
+            .map(|(c, n)| serde_json::json!({ "concept": c, "memories": n }))
+            .collect();
+        println!("{}", serde_json::json!(arr));
+        return Ok(());
+    }
+    if concepts.is_empty() {
+        match prefix {
+            Some(p) => println!("No concepts starting with '{}'. Link memories with [[concept]] to build your vocabulary.", p),
+            None => println!("No concepts yet. Link memories with [[concept]] (e.g. add \"... [[heart]]\") to build a connected brain."),
+        }
+        return Ok(());
+    }
+    println!("Concepts ({} distinct):", concepts.len());
+    for (c, n) in &concepts {
+        println!("  {:>4}  {}", n, c);
     }
     Ok(())
 }
