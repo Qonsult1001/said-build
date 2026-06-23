@@ -109,6 +109,15 @@ impl FileData {
             FileData::Mmap(m) => m.len(),
         }
     }
+    /// Bytes held OWNED in process RAM. Mmap is OS-paged from disk → 0 owned. Lets a
+    /// test/diagnostic distinguish "we kept the whole file in RAM" (Owned) from "the file
+    /// lives on disk and we mmap it" (the memory-bounded post-save state).
+    fn owned_len(&self) -> usize {
+        match self {
+            FileData::Owned(v) => v.len(),
+            FileData::Mmap(_) => 0,
+        }
+    }
 }
 
 /// A recalled memory — content + score.
@@ -2212,7 +2221,26 @@ impl SaidFile {
         std::fs::rename(&tmp_path, &self.path)
             .map_err(|e| format!("Rename failed: {}", e))?;
 
-        self.data = FileData::Owned(buf);
+        // Re-attach the in-memory view by MMAP'ing the file we just wrote, instead of
+        // keeping `buf` as a second full copy in RAM (FileData::Owned(buf)). For a large
+        // brain that double-hold doubles peak memory and was a primary contributor to the
+        // save-time OOM (#4). Mmap is OS-paged from disk — reads touch only the blocks
+        // they need, so we drop `buf` and hold zero owned file bytes. Falls back to Owned
+        // only if the mmap fails (tiny/edge cases), preserving correctness.
+        let buf_len = buf.len();
+        drop(buf);
+        self.data = match std::fs::File::open(&self.path)
+            .and_then(|f| unsafe { memmap2::Mmap::map(&f) })
+        {
+            Ok(mmap) => FileData::Mmap(mmap),
+            Err(_) => {
+                // re-read into Owned as a last resort (still correct, just not bounded)
+                match std::fs::read(&self.path) {
+                    Ok(v) => FileData::Owned(v),
+                    Err(e) => return Err(format!("re-open after save failed: {} ({} bytes written)", e, buf_len)),
+                }
+            }
+        };
         self.dirty = false;
         Ok(())
     }
@@ -2392,6 +2420,13 @@ impl SaidFile {
     pub fn add_tag(&mut self, doc_id: &str, tag: &str) {
         self.frames.add_tag(doc_id, tag);
         self.dirty = true;
+    }
+
+    /// Bytes of the file held OWNED in process RAM (0 when the file is mmap'd from disk).
+    /// Diagnostic for the save-memory invariant: after a large save we should be mmap'd,
+    /// not holding a full Owned copy. See tests/test_save_memory.rs.
+    pub fn in_memory_data_len(&self) -> usize {
+        self.data.owned_len()
     }
 
     /// Active frames that carry a `link:<concept>` wikilink edge for `concept`
