@@ -2070,14 +2070,6 @@ fn is_backup_dir(name: &str) -> bool {
     || (!lower.contains('.') && (lower.ends_with("_backup") || lower.ends_with("_old")))
 }
 
-/// Per-file size ceiling for ingestion (init.md "What gets skipped" — the documented
-/// "large size threshold"). 2 MB comfortably holds any hand-written source file; above
-/// it you are looking at minified bundles, generated code, lockfiles, or data blobs —
-/// never the user's authored code. Skipping them is both the #4 OOM fix and a recall
-/// win (no vendor-internals pollution). A client who forgot to .gitignore their deps
-/// still gets a clean brain.
-const MAX_INGEST_FILE_BYTES: u64 = 2 * 1024 * 1024;
-
 /// Build-artifact / vendored-dependency directories that must NEVER be ingested:
 /// they are not the user's source, they bloat the brain with junk (minified vendor
 /// bundles like node_modules/typescript.js), and at scale their passage count is the
@@ -2770,16 +2762,11 @@ fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Ve
             let rel = path.strip_prefix(root).unwrap_or(&path)
                 .to_string_lossy().replace('\\', "/");
             if is_gitignored(&rel, patterns) { continue; }
-            // Documented size threshold (init.md "What gets skipped"): skip files above
-            // MAX_INGEST_FILE_BYTES. These are almost always minified vendor bundles or
-            // generated artifacts (typescript.js is 8.7 MB), not hand-written source. A
-            // single such file char-chunks into tens of thousands of passages — the
-            // index-stage memory blow-up behind #4 — and it pollutes recall with junk.
-            if let Ok(meta) = path.metadata() {
-                if meta.len() > MAX_INGEST_FILE_BYTES {
-                    continue;
-                }
-            }
+            // No per-file size cap: the SCA encode path streams passages one at a time
+            // (engine.rs chunk_text_fold), so even a multi-GB file ingests in bounded
+            // memory. We exclude vendored/build DIRS (is_junk_dir, above) because library
+            // code shouldn't be in the brain regardless of size — but a large *source*
+            // file is ingested in full, not skipped.
             out.push(path);
         }
     }
