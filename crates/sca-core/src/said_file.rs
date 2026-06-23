@@ -1006,9 +1006,10 @@ impl SaidFile {
             return self.grep(query, top_k);
         }
 
-        // Clone cached corpus to avoid borrow conflicts with &mut self
+        // Clone cached corpus to avoid borrow conflicts with &mut self.
+        // (The raw-text clone here was dead — bound to `_texts`, never read — so it is
+        // gone; that was a full-corpus allocation per recall() call. #4)
         let ids = self.corpus_ids.clone();
-        let _texts = self.corpus_texts.clone();
         let texts_lower = self.corpus_texts_lower.clone();
 
         // Layer 1: SCA top-50 (< 1ms, fingerprints only)
@@ -1521,6 +1522,15 @@ impl SaidFile {
         self.corpus_ids = doc_ids;
         self.corpus_texts = doc_texts;
 
+        // Release the engine's RAW-text cache (doc_texts_original). On the CLI/SaidFile
+        // path it is a transient build artifact: it is NEVER read after indexing (its only
+        // reader, recall.rs:307, is a fallback gated on doc_texts_normalized being empty —
+        // which build always populates) and it is NOT serialized (the portable save stores
+        // breadcrumbs only; text lives in frames). Holding it duplicated the entire raw
+        // corpus a second time in RAM and was part of the index-stage OOM (#4). Dropping it
+        // takes the resident text caches from ~4× corpus to ~3×.
+        self.engine.release_original_texts();
+
         Ok(())
     }
 
@@ -1784,7 +1794,6 @@ impl SaidFile {
         // Clone corpus caches for the recall pipeline (needs &mut engine
         // while holding read refs to corpus data).
         let ids = self.corpus_ids.clone();
-        let texts = self.corpus_texts.clone();
         let texts_lower = self.corpus_texts_lower.clone();
 
         // Tag-scope detection: if the query contains a scoping token like
@@ -1825,7 +1834,11 @@ impl SaidFile {
             None,
             top_k,
             &ids,
-            &texts,
+            // Borrow the raw-text cache directly (disjoint field borrow from
+            // &mut self.engine) instead of cloning the whole corpus each query. recall_fused
+            // reads it for bridge-entity extraction (recall.rs:696), so it must be the real
+            // text — but it needs no copy. (#4: was self.corpus_texts.clone())
+            &self.corpus_texts,
             &texts_lower,
             scope_doc_ids.as_ref(),
         );
@@ -2427,6 +2440,18 @@ impl SaidFile {
     /// not holding a full Owned copy. See tests/test_save_memory.rs.
     pub fn in_memory_data_len(&self) -> usize {
         self.data.owned_len()
+    }
+
+    /// Total bytes of raw corpus TEXT held resident in RAM across every cache
+    /// (corpus_texts + corpus_texts_lower + engine.doc_texts_original +
+    /// engine.doc_texts_normalized). Diagnostic for the index-memory invariant (#4):
+    /// at scale these caches duplicate the corpus several times and drive the encode/index
+    /// OOM. A bounded value means we are NOT holding the whole corpus N× in RAM.
+    pub fn resident_text_bytes(&self) -> usize {
+        let sum = |v: &[String]| v.iter().map(|s| s.len()).sum::<usize>();
+        sum(&self.corpus_texts)
+            + sum(&self.corpus_texts_lower)
+            + self.engine.resident_text_bytes()
     }
 
     /// Active frames that carry a `link:<concept>` wikilink edge for `concept`

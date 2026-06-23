@@ -104,6 +104,21 @@ pub struct ScaEngine {
 }
 
 impl ScaEngine {
+    /// Drop the raw-text cache (`doc_texts_original`), reclaiming its RAM. Safe once
+    /// `doc_texts_normalized` is populated: the only reader (recall_fused fallback) is
+    /// gated on normalized being empty, and the portable save serializes breadcrumbs only
+    /// (text lives in frames). Used after indexing to avoid holding the raw corpus twice.
+    pub fn release_original_texts(&mut self) {
+        self.doc_texts_original = Vec::new();
+    }
+
+    /// Total bytes of raw corpus text held resident across the engine's two text caches.
+    /// Diagnostic for the index-memory invariant (#4). See SaidFile::resident_text_bytes.
+    pub fn resident_text_bytes(&self) -> usize {
+        self.doc_texts_normalized.iter().map(|s| s.len()).sum::<usize>()
+            + self.doc_texts_original.iter().map(|s| s.len()).sum::<usize>()
+    }
+
     /// Create a new SCA engine with default settings.
     /// Auto-loads said-lam-static encoder if found next to the binary.
     pub fn new() -> Self {
