@@ -359,27 +359,44 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
+        // Bounded passage buffer: stream passages into a fixed-size batch, encode the
+        // batch in ONE bulk call (the encoder amortizes tokenize+matmul across the batch —
+        // ~100 passages/4ms vs per-passage overhead), fold the embeddings into the running
+        // sums, then CLEAR the buffer and continue. Peak memory is bounded by PASSAGE_BATCH
+        // passages regardless of document size — bulk speed AND constant memory, the
+        // documented streaming intent (cf. CrystallineCore::stream_index for the lexical
+        // path). A multi-GB file ingests fast and flat; no per-file size cap needed.
+        const PASSAGE_BATCH: usize = 256;
+        let mut batch_buf: Vec<String> = Vec::with_capacity(PASSAGE_BATCH);
+
         for (doc_idx, text) in texts.iter().enumerate() {
-            // STREAMING encode: chunk → encode → fold → drop, ONE passage at a time
-            // (Self::chunk_text_fold), so a giant doc never holds all its passages or their
-            // embeddings resident. Result is identical to chunk_text + encode_batch (same
-            // passages, same per-passage L2-normalize, same sums) — only the peak memory
-            // differs. This is the documented "constant memory for very long docs" pattern
-            // (cf. CrystallineCore::stream_index) applied to the SEMANTIC path; the lexical
-            // path (stream_index, below) already streamed. Fixes the #4 OOM at the root, so
-            // no per-file size cap is needed — a multi-GB file ingests in bounded memory.
             let mut doc_sum = vec![0.0f64; embed_dim];
             let mut n_passages: usize = 0;
-            Self::chunk_text_fold(text, 512, 256, |chunk| {
-                let mut emb = encoder.encode_one(chunk);
-                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                for v in &mut emb { *v /= norm; }
-                for (i, &v) in emb.iter().enumerate() {
-                    corpus_sum[i] += v as f64;
-                    doc_sum[i] += v as f64;
+
+            // Fold one batch of encoded passages into corpus_sum + doc_sum, then drop them.
+            let mut flush = |buf: &mut Vec<String>, doc_sum: &mut [f64], n_passages: &mut usize| {
+                if buf.is_empty() { return; }
+                let embs = encoder.encode_batch(buf);
+                for mut emb in embs {
+                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    for v in &mut emb { *v /= norm; }
+                    for (i, &v) in emb.iter().enumerate() {
+                        corpus_sum[i] += v as f64;
+                        doc_sum[i] += v as f64;
+                    }
+                    *n_passages += 1;
                 }
-                n_passages += 1;
+                buf.clear();
+            };
+
+            Self::chunk_text_fold(text, 512, 256, |chunk| {
+                batch_buf.push(chunk.to_string());
+                if batch_buf.len() >= PASSAGE_BATCH {
+                    flush(&mut batch_buf, &mut doc_sum, &mut n_passages);
+                }
             });
+            // flush the tail (partial batch) for this doc before computing its mean
+            flush(&mut batch_buf, &mut doc_sum, &mut n_passages);
             total_passages += n_passages;
 
             // Doc mean: mean(axis=0), re-normalize
