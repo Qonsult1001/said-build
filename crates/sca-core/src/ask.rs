@@ -82,6 +82,33 @@ pub fn is_ask_stopword(w: &str) -> bool {
     ASK_STOPWORDS.contains(&w)
 }
 
+/// Parse `[[concept]]` wikilinks from text into lowercased concept strings — the
+/// documented build-graph edge source (3.9). An OKF/Obsidian note carries concept
+/// cross-links; these become `link:<concept>` tags at ingest and explicit graph edges
+/// the recall path can traverse (so a query reaches a linked note even when the bridge
+/// word isn't in the body). Returns each distinct concept once, lowercased + trimmed.
+pub fn parse_wikilinks(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find("]]") {
+            let inner = after[..end].trim();
+            // Obsidian alias/section forms: [[concept|alias]] / [[concept#heading]] →
+            // keep the concept part before | or #.
+            let concept = inner.split(|c| c == '|' || c == '#').next().unwrap_or(inner).trim();
+            if !concept.is_empty() && concept.len() <= 64 {
+                let c = concept.to_lowercase();
+                if !out.contains(&c) { out.push(c); }
+            }
+            rest = &after[end + 2..];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
 /// Whole-token containment: true if `needle` appears in `haystack` bounded by
 /// non-alphanumeric edges. Substring `.contains()` makes the discriminator "7" match
 /// "office 27"/"office 17" too, so a numeric needle can't beat its near-duplicates.
@@ -371,6 +398,30 @@ pub fn ask(
             content: h.content,
             location: None,
         });
+    }
+
+    // ── Engine D — wikilink graph traversal (build-graph edges) ──────────
+    // For each query keyword, pull notes that carry an explicit `[[keyword]]` concept
+    // link (stored as a `link:<kw>` tag at ingest). This is the documented build-graph
+    // path (3.9): it reaches a linked note even when the bridge word is absent from its
+    // body — the OKF cross-link → .said edge that turns out-of-scope inference
+    // ("heart" → a "cardiologist" note linked [[heart]]) into a direct edge hop. Scored
+    // as a confident keyword-class hit; additive (never demotes) so it can't regress
+    // queries that have no links.
+    for kw in &keywords {
+        for did in brain.frames_linking_concept(kw) {
+            if let Some(scope) = scope_doc_ids {
+                if !scope.contains(&did) { continue; }
+            }
+            let content = brain.get(&did).unwrap_or_default();
+            upsert(&mut candidates, AskCandidate {
+                doc_id: did,
+                confidence: 0.90,   // an explicit concept link is a strong, intentional edge
+                kind: "text",
+                content,
+                location: None,
+            });
+        }
     }
 
     // ── Merge + relative cutoff + truncate ───────────────────────────────
