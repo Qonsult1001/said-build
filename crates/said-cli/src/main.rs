@@ -2070,6 +2070,30 @@ fn is_backup_dir(name: &str) -> bool {
     || (!lower.contains('.') && (lower.ends_with("_backup") || lower.ends_with("_old")))
 }
 
+/// Per-file size ceiling for ingestion (init.md "What gets skipped" — the documented
+/// "large size threshold"). 2 MB comfortably holds any hand-written source file; above
+/// it you are looking at minified bundles, generated code, lockfiles, or data blobs —
+/// never the user's authored code. Skipping them is both the #4 OOM fix and a recall
+/// win (no vendor-internals pollution). A client who forgot to .gitignore their deps
+/// still gets a clean brain.
+const MAX_INGEST_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Build-artifact / vendored-dependency directories that must NEVER be ingested:
+/// they are not the user's source, they bloat the brain with junk (minified vendor
+/// bundles like node_modules/typescript.js), and at scale their passage count is the
+/// primary driver of the index-stage OOM (#4). Both directory walkers consult this so
+/// the skip list can never drift between them. Matched by exact directory-segment name.
+fn is_junk_dir(name: &str) -> bool {
+    matches!(name,
+        "node_modules" | "target" | "dist" | "build" | "out"
+        | "__pycache__" | ".venv" | "venv" | "site-packages"
+        | ".next" | ".nuxt" | ".svelte-kit" | ".turbo" | ".parcel-cache"
+        | ".gradle" | ".tox" | ".mypy_cache" | ".pytest_cache"
+        | "bin" | "obj" | "packages" | "vendor" | "bower_components"
+        | "coverage" | ".cache" | ".vite"
+    )
+}
+
 fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -2081,19 +2105,7 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
             // Skip hidden dirs and common junk
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name.starts_with('.')
-                || name == "target"
-                || name == "node_modules"
-                || name == "__pycache__"
-                || name == ".venv"
-                || name == "venv"
-                || name == "dist"
-                || name == ".next"
-                || name == "build"
-                || name == ".git"
-                || name == ".tox"
-                || name == ".mypy_cache"
-                || name == ".pytest_cache"
-                || name == "site-packages"
+                || is_junk_dir(&name)
                 || is_backup_dir(&name)
             {
                 continue;
@@ -2739,6 +2751,10 @@ fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Ve
             if name.starts_with('.') { continue; }
             // Skip backup / stale copy directories (LAM, said-lam, memvid all have these)
             if is_backup_dir(&name) { continue; }
+            // Skip build artifacts / vendored deps (node_modules, target, dist, …).
+            // These are NOT in every nested .gitignore the walker sees, so relying on
+            // .gitignore alone let 72MB of node_modules into a full-repo init (#4 OOM).
+            if is_junk_dir(&name) { continue; }
 
             // Check .gitignore
             let rel = path.strip_prefix(root).unwrap_or(&path)
@@ -2753,9 +2769,18 @@ fn walk_dir_gitignore(dir: &Path, root: &Path, patterns: &[String], out: &mut Ve
         } else if path.is_file() {
             let rel = path.strip_prefix(root).unwrap_or(&path)
                 .to_string_lossy().replace('\\', "/");
-            if !is_gitignored(&rel, patterns) {
-                out.push(path);
+            if is_gitignored(&rel, patterns) { continue; }
+            // Documented size threshold (init.md "What gets skipped"): skip files above
+            // MAX_INGEST_FILE_BYTES. These are almost always minified vendor bundles or
+            // generated artifacts (typescript.js is 8.7 MB), not hand-written source. A
+            // single such file char-chunks into tens of thousands of passages — the
+            // index-stage memory blow-up behind #4 — and it pollutes recall with junk.
+            if let Ok(meta) = path.metadata() {
+                if meta.len() > MAX_INGEST_FILE_BYTES {
+                    continue;
+                }
             }
+            out.push(path);
         }
     }
 }
