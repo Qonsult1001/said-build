@@ -24,14 +24,18 @@ note_for(){ local i="$1"; case $((i%8)) in
   6) echo "Dr. Halloran$i is the cardiologist at the downtown clinic.";;
   *) echo "The Pellican$i project deadline is the last Friday of March.";;
 esac; }
+# REALISTIC queries: each names the entity the way a user who stored the note would recall
+# it (the proper noun in the note), then asks by meaning. This is how `ask` is actually
+# used — NOT "number $i"/"case $i", which reference an id the note never exposes as a
+# standalone token and which collides as a substring with sibling ids (242 ⊃ 2).
 query_for(){ local i="$1"; case $((i%8)) in
   0) echo "lexical|what is the wifi password for the ${city[$((i%10))]} office";;
   1) echo "anchored-para|what foods can't Vortek$i eat";;
-  2) echo "conceptual|who do I call about a water leak number $i";;
+  2) echo "conceptual|who do I call to fix a burst pipe, Brennan$i";;
   3) echo "semantic|what does Marlow$i do for fun";;
   4) echo "entity-attr|what kind of animal does Sindri$i keep";;
   5) echo "numeric|what is the code for locker $i";;
-  6) echo "multihop|who treats heart problems case $i";;
+  6) echo "multihop|who treats heart problems, Dr Halloran$i";;
   *) echo "time-para|when is the Pellican$i project due";;
 esac; }
 
