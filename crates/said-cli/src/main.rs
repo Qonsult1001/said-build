@@ -2364,6 +2364,26 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     let mut added = 0u64;
     let mut skipped = 0u64;
 
+    // Build the set of already-indexed file hashes ONCE, up front. The per-file dedup
+    // check used to call brain.frames.active_doc_ids() (allocating a Vec of every doc_id)
+    // and scan all frames' tags FOR EACH FILE — O(files × frames), i.e. ~475M ops + 14k
+    // large allocations on a 14k-file / 33k-frame repo. That quadratic scan was the bulk
+    // of init's 283s phase-1 cost. Collect every `blake3:<hex>` tag once, then each file's
+    // check is an O(1) HashSet lookup.
+    let mut indexed_hashes: std::collections::HashSet<String> = {
+        let mut set = std::collections::HashSet::new();
+        for did in brain.frames.active_doc_ids() {
+            if let Some(meta) = brain.frames.get_meta(did) {
+                for t in &meta.tags {
+                    if t.starts_with("blake3:") {
+                        set.insert(t.clone());
+                    }
+                }
+            }
+        }
+        set
+    };
+
     // PHASE 1: Walk files â†’ read â†’ AST chunk â†’ store as frames
     let t_phase1 = std::time::Instant::now();
     for (file_idx, file_path) in files.iter().enumerate() {
@@ -2397,13 +2417,10 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
             }
         };
 
-        // Skip if already indexed with same hash (unchanged file)
-        let already_indexed = brain.frames.active_doc_ids().iter().any(|did| {
-            brain.frames.get_meta(did)
-                .map(|m| m.tags.iter().any(|t| t == &hash_tag))
-                .unwrap_or(false)
-        });
-        if already_indexed {
+        // Skip if already indexed with same hash (unchanged file) — O(1) set lookup
+        // instead of the former O(frames) scan per file.
+        if !indexed_hashes.insert(hash_tag.clone()) {
+            // already present (either pre-indexed, or a duplicate file earlier this run)
             skipped += 1;
             continue;
         }
