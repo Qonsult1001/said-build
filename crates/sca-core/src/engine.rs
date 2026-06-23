@@ -359,44 +359,24 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
-        // Bounded passage buffer: stream passages into a fixed-size batch, encode the
-        // batch in ONE bulk call (the encoder amortizes tokenize+matmul across the batch —
-        // ~100 passages/4ms vs per-passage overhead), fold the embeddings into the running
-        // sums, then CLEAR the buffer and continue. Peak memory is bounded by PASSAGE_BATCH
-        // passages regardless of document size — bulk speed AND constant memory, the
-        // documented streaming intent (cf. CrystallineCore::stream_index for the lexical
-        // path). A multi-GB file ingests fast and flat; no per-file size cap needed.
-        const PASSAGE_BATCH: usize = 256;
-        let mut batch_buf: Vec<String> = Vec::with_capacity(PASSAGE_BATCH);
-
         for (doc_idx, text) in texts.iter().enumerate() {
+            // NOTE: identical chunking to non-streaming path — full passages, no cap.
+            // This is the HEAD-proven path that preserves quality.
+            let passages = Self::chunk_text(text, 512, 256);
+            let passage_embs = encoder.encode_batch(&passages);
+            drop(passages);
+
+            // Normalize per passage + accumulate corpus sum + doc sum
             let mut doc_sum = vec![0.0f64; embed_dim];
-            let mut n_passages: usize = 0;
-
-            // Fold one batch of encoded passages into corpus_sum + doc_sum, then drop them.
-            let mut flush = |buf: &mut Vec<String>, doc_sum: &mut [f64], n_passages: &mut usize| {
-                if buf.is_empty() { return; }
-                let embs = encoder.encode_batch(buf);
-                for mut emb in embs {
-                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                    for v in &mut emb { *v /= norm; }
-                    for (i, &v) in emb.iter().enumerate() {
-                        corpus_sum[i] += v as f64;
-                        doc_sum[i] += v as f64;
-                    }
-                    *n_passages += 1;
+            let n_passages = passage_embs.len();
+            for mut emb in passage_embs {
+                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                for v in &mut emb { *v /= norm; }
+                for (i, &v) in emb.iter().enumerate() {
+                    corpus_sum[i] += v as f64;
+                    doc_sum[i] += v as f64;
                 }
-                buf.clear();
-            };
-
-            Self::chunk_text_fold(text, 512, 256, |chunk| {
-                batch_buf.push(chunk.to_string());
-                if batch_buf.len() >= PASSAGE_BATCH {
-                    flush(&mut batch_buf, &mut doc_sum, &mut n_passages);
-                }
-            });
-            // flush the tail (partial batch) for this doc before computing its mean
-            flush(&mut batch_buf, &mut doc_sum, &mut n_passages);
+            }
             total_passages += n_passages;
 
             // Doc mean: mean(axis=0), re-normalize
@@ -519,63 +499,27 @@ impl ScaEngine {
     /// Python: chars = list(text); chunk = "".join(chars[start:end])
     #[allow(dead_code)]
     fn chunk_text(text: &str, chunk_size: usize, stride: usize) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let char_count = chars.len();
         let mut passages = Vec::new();
-        Self::chunk_text_fold(text, chunk_size, stride, |c| passages.push(c.to_string()));
-        passages
-    }
+        let mut start = 0;
 
-    /// Test-only accessor for `chunk_text` (equivalence test against the original chunker).
-    #[doc(hidden)]
-    pub fn chunk_text_public(text: &str, chunk_size: usize, stride: usize) -> Vec<String> {
-        Self::chunk_text(text, chunk_size, stride)
-    }
-
-    /// Streaming chunker — yields each `chunk_size`-char passage (with `stride` overlap)
-    /// to `emit` ONE AT A TIME and drops it, instead of materializing a `Vec<String>` of
-    /// every passage. This keeps memory bounded to a single passage regardless of document
-    /// size, so a multi-MB (or multi-GB) file ingests without holding all its passages —
-    /// and all their embeddings — resident at once. That all-passages-at-once
-    /// materialization was the remaining index-stage memory blow-up behind #4.
-    ///
-    /// Same windowing as the original char chunker (chars, 512/256, >=50-char keep guard,
-    /// single-passage fallback for short docs) so the passages — and therefore recall —
-    /// are byte-identical to before; only the allocation profile changes. We walk the
-    /// text by char-boundary byte offsets (like `stream_index`) so we never even build the
-    /// `Vec<char>` the old chunker did.
-    fn chunk_text_fold<F: FnMut(&str)>(text: &str, chunk_size: usize, stride: usize, mut emit: F) {
-        debug_assert!(chunk_size > 0 && stride > 0);
-        // Char-index → byte-offset cursor walk. `starts[i]` is the byte offset of the i-th
-        // char; we keep only the byte offset of the current window start and re-derive the
-        // window end by counting `chunk_size` chars forward — O(1) extra memory.
-        let mut emitted = false;
-        let mut win_start_char = 0usize;
-        // Precompute nothing: iterate char_indices, but to support stride we re-scan from a
-        // remembered byte offset each window. Cheap relative to encoding.
-        let char_byte = |from_byte: usize, chars_fwd: usize| -> usize {
-            // byte offset `chars_fwd` chars after `from_byte` (clamped to text end)
-            match text[from_byte..].char_indices().nth(chars_fwd) {
-                Some((off, _)) => from_byte + off,
-                None => text.len(),
-            }
-        };
-        let total_chars = text.chars().count();
-        let mut win_start_byte = 0usize;
-        while win_start_char < total_chars {
-            let win_end_byte = char_byte(win_start_byte, chunk_size);
-            let chunk = &text[win_start_byte..win_end_byte];
+        while start < char_count {
+            let end = (start + chunk_size).min(char_count);
+            let chunk: String = chars[start..end].iter().collect();
             if chunk.trim().len() >= 50 {
-                emit(chunk);
-                emitted = true;
+                passages.push(chunk);
             }
-            // advance by stride chars
-            win_start_byte = char_byte(win_start_byte, stride);
-            win_start_char += stride;
+            start += stride;
         }
 
-        if !emitted && !text.is_empty() {
-            let end = char_byte(0, chunk_size);
-            emit(&text[0..end]);
+        if passages.is_empty() && !text.is_empty() {
+            let end = chunk_size.min(char_count);
+            let chunk: String = chars[0..end].iter().collect();
+            passages.push(chunk);
         }
+
+        passages
     }
 
     /// Try to auto-load the static encoder.
