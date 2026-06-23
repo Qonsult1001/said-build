@@ -524,6 +524,12 @@ impl ScaEngine {
         passages
     }
 
+    /// Test-only accessor for `chunk_text` (equivalence test against the original chunker).
+    #[doc(hidden)]
+    pub fn chunk_text_public(text: &str, chunk_size: usize, stride: usize) -> Vec<String> {
+        Self::chunk_text(text, chunk_size, stride)
+    }
+
     /// Streaming chunker — yields each `chunk_size`-char passage (with `stride` overlap)
     /// to `emit` ONE AT A TIME and drops it, instead of materializing a `Vec<String>` of
     /// every passage. This keeps memory bounded to a single passage regardless of document
