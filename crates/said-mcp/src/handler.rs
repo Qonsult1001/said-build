@@ -508,6 +508,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::SearchTool(t) => self.handle_search(t),
             SaidTools::AskTool(t) => self.handle_ask(t),
             SaidTools::GetTool(t) => self.handle_get(t),
+            SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
             SaidTools::StatusTool(_) => self.handle_status(),
@@ -817,6 +818,20 @@ impl SaidServerHandler {
                 format!("Document not found: {}", t.doc_id),
             )])),
         }
+    }
+
+    fn handle_list_concepts(&self, t: ListConceptsTool) -> Result<CallToolResult, CallToolError> {
+        let brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let concepts = brain.list_concepts(t.prefix.as_deref());
+        // Return JSON so the caller's LLM can parse and reuse concepts programmatically.
+        let arr: Vec<serde_json::Value> = concepts.iter()
+            .map(|(c, n)| serde_json::json!({ "concept": c, "memories": n }))
+            .collect();
+        let body = serde_json::to_string_pretty(&arr)
+            .unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
     }
 
     #[allow(unused_mut)]

@@ -80,6 +80,21 @@ pub struct GetTool {
     pub doc_id: String,
 }
 
+#[mcp_tool(
+    name = "list_concepts",
+    description = "List the concepts memories are linked to ([[wikilink]] vocabulary), with \
+                   how many memories carry each. ALWAYS call this BEFORE remembering a new \
+                   memory so you reuse an existing concept (e.g. link 'heart', not a new \
+                   'heart-health') — this keeps the concept graph converged so recall stays \
+                   consistent. Returns [{concept, memories}] sorted by frequency.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ListConceptsTool {
+    /// Optional: only return concepts starting with this prefix (case-insensitive).
+    pub prefix: Option<String>,
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Tool 3: INGEST — add files to the brain
 // ════════════════════════════════════════════════════════════════════════════
@@ -1128,7 +1143,7 @@ pub struct LearnFixTool {
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
@@ -1136,7 +1151,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       RecallFixTool, LearnFixTool]);
 
 #[cfg(feature = "forge")]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool,
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,

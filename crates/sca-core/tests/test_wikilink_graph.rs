@@ -77,3 +77,26 @@ fn link_tag_is_stored() {
     let _ = std::fs::remove_file(path);
     assert!(linked.contains(&"d0".to_string()), "link:heart tag should be stored & found");
 }
+
+#[test]
+fn link_tag_survives_save_reopen() {
+    use sca_core::said_file::SaidFile;
+    use sca_core::frames::Pillar;
+    let path = "test_link_save.said";
+    let _ = std::fs::remove_file(path);
+    {
+        let mut b = SaidFile::create(path);
+        assert!(b.auto_load_encoder());
+        b.remember_with_salience(Some("d0"), "Dr Sarah cardiologist [[heart]]",
+            None, Pillar::Episodic, vec![]);
+        b.build_index().expect("idx");
+        b.save().expect("save");
+    }
+    // reopen fresh — exactly what MCP/CLI do on a persisted file
+    let mut b2 = SaidFile::open(path).expect("open");
+    let _ = b2.auto_load_encoder();
+    let concepts = b2.list_concepts(None);
+    eprintln!("after save+reopen, concepts = {:?}", concepts);
+    let _ = std::fs::remove_file(path);
+    assert!(concepts.iter().any(|(c,_)| c=="heart"), "link:heart must survive save+reopen");
+}

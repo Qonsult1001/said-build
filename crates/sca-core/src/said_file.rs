@@ -2409,6 +2409,30 @@ impl SaidFile {
             .collect()
     }
 
+    /// Every distinct `[[wikilink]]` concept in the brain, with how many memories carry
+    /// each — sorted by count desc, then name. The dedup/convergence surface: a curating
+    /// LLM calls this before adding a memory so it REUSES existing concepts (link `heart`,
+    /// not a new `heart-health`) and the concept graph self-converges instead of
+    /// fragmenting. `prefix` (lowercased) filters to concepts starting with it.
+    pub fn list_concepts(&self, prefix: Option<&str>) -> Vec<(String, usize)> {
+        let pfx = prefix.map(|p| p.to_lowercase());
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for m in self.frames.get_all_frames_with_pending() {
+            if m.status != crate::frames::FrameStatus::Active { continue; }
+            for t in &m.tags {
+                if let Some(concept) = t.strip_prefix("link:") {
+                    if let Some(ref p) = pfx {
+                        if !concept.starts_with(p.as_str()) { continue; }
+                    }
+                    *counts.entry(concept.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut out: Vec<(String, usize)> = counts.into_iter().collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
     /// Tombstone an Active frame (no replacement) — for source files that
     /// disappear on re-init. Returns true if a frame was tombstoned.
     pub fn tombstone_frame(&mut self, doc_id: &str) -> bool {
