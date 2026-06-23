@@ -1091,24 +1091,32 @@ pub fn search_full_scoped(
     // the scope set for post-filtering the final results (the SCA engine
     // scores against the FULL index, so we need to drop out-of-scope hits
     // after scoring).
-    let (c_ids, c_texts, c_lower) = if let Some(scope) = scope_doc_ids {
-        let mut ids = Vec::new();
-        let mut texts = Vec::new();
-        let mut lower = Vec::new();
-        for (i, id) in corpus_ids.iter().enumerate() {
-            if scope.contains(id) {
-                ids.push(corpus_ids[i].clone());
-                texts.push(corpus_texts[i].clone());
-                lower.push(corpus_texts_lower[i].clone());
+    // Narrow the corpus slices only when a scope filter is active. The common
+    // (unscoped) path BORROWS the caller's slices via Cow — previously this did
+    // corpus_texts.to_vec() + corpus_texts_lower.to_vec(), cloning the ENTIRE raw +
+    // lowercased corpus on every query (a transient 2× corpus spike that, at scale, was a
+    // primary driver of the index/query OOM #4). Scoped queries still allocate, but only
+    // the narrowed subset.
+    use std::borrow::Cow;
+    let (c_ids, c_texts, c_lower): (Cow<[String]>, Cow<[String]>, Cow<[String]>) =
+        if let Some(scope) = scope_doc_ids {
+            let mut ids = Vec::new();
+            let mut texts = Vec::new();
+            let mut lower = Vec::new();
+            for (i, id) in corpus_ids.iter().enumerate() {
+                if scope.contains(id) {
+                    ids.push(corpus_ids[i].clone());
+                    texts.push(corpus_texts[i].clone());
+                    lower.push(corpus_texts_lower[i].clone());
+                }
             }
-        }
-        (ids, texts, lower)
-    } else {
-        (corpus_ids.to_vec(), corpus_texts.to_vec(), corpus_texts_lower.to_vec())
-    };
-    let corpus_ids = &c_ids;
-    let corpus_texts = &c_texts;
-    let corpus_texts_lower = &c_lower;
+            (Cow::Owned(ids), Cow::Owned(texts), Cow::Owned(lower))
+        } else {
+            (Cow::Borrowed(corpus_ids), Cow::Borrowed(corpus_texts), Cow::Borrowed(corpus_texts_lower))
+        };
+    let corpus_ids: &[String] = &c_ids;
+    let corpus_texts: &[String] = &c_texts;
+    let corpus_texts_lower: &[String] = &c_lower;
     // ── NIAH detection ──────────────────────────────────────────────────
     // Passkey/needle queries need keyword-overlap × 1000 + align_niah_qrels.
     // Detected by CODE_INTENT_WORDS in the query OR a pure-numeric 5-10
