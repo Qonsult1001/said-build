@@ -107,7 +107,47 @@ like `out`/`packages` that frequently hold real content.
    - Verified: `lexical_word_index_bytes` (word-keyed only) 1,865 B/doc on a realistic
      vocab-reuse corpus; recall + lexical + sym + wikilinks + multi-hop all preserved.
 
-Note: `doc_texts_fast` (raw per-doc normalized text) is NOT word-keyed and is unchanged — it
-scales with content (big SQL chunks), not vocabulary. The passage-count explosion in the
-SCA encode (char-chunked 512/256 → ~700 passages on a 400KB SQL chunk) is a SEPARATE concern
-from the lexical index, tracked independently.
+3. **Corpus-text caches streamed out** (the second OOM lever, after interning) — applied the
+   `stream_index`/SPIMI/mmap principle: *text is stored ONCE on disk in the mmap'd FrameStore
+   (`read_frame_text`); everything else is derived on demand, never a resident full-corpus
+   String copy.* Four such copies were built at init; each removed, recall green after each
+   (`scripts/regression-check.sh` 15/15). Measured on `G:/development/Wonga/Amortization`
+   (918 text-heavy SQL docs):
+
+   | step | what | peak |
+   |------|------|------|
+   | — | baseline (after interning) | 1083 MB |
+   | a | drop `doc_texts_normalized` (Option A, 47aa7ed) — entity match reads `doc_texts_fast` | 920 MB |
+   | b | `corpus_texts_lower` built LAZILY on first query from frames (5a17402) | 832 MB |
+   | c | drop `all_doc_words` `Vec<Vec<String>>` — tokenize per-doc on demand (636866d) | 729 MB |
+   | d | stop caching `doc_texts_fast` — reconstruct from interned word set (c5a609e) | 531 MB |
+
+   - **(a)** `doc_texts_normalized` (full normalized corpus, ~159MB) gated behind
+     `SAID_KEEP_NORMALIZED`; `entity_match_score` now reads `CrystallineCore::doc_normalized_text`.
+   - **(b)** `corpus_texts_lower` (full lowercased corpus, 159MB) is no longer built in
+     `build_index`. `ensure_corpus_cached()` builds it lazily on the first query that needs the
+     grep re-rank, reading raw text from the mmap'd frames. (`corpus_texts` raw was already
+     empty-placeholder + read-on-demand.)
+   - **(c)** `add_docs_quantized` now takes `doc_texts: &[String]` (borrowed) and calls
+     `simple_tokenize` per-doc INSIDE the word-index loop — one doc's words, then dropped.
+     Phase A keeps only the `doc_freq` map; gammas tokenize per-doc transiently. The ~237MB
+     `Vec<Vec<String>>` of every word is gone.
+   - **(d)** `doc_texts_fast` (per-doc normalized text, ~150MB) is REDUNDANT with
+     `doc_word_sets_fast` (interned u32 ids). Build sites push empty strings; phrase-match
+     readers already had a `doc_words_joined(idx)` fallback; added `doc_normalized_text(idx)`
+     for the one reader that lacked it.
+
+   After (a)–(d): tracked lexical+saidfile caches = **~25MB** (was 184MB). The remaining
+   ~500MB peak is the **FrameStore** — every frame's content held in RAM until `save()`
+   (read-phase floor measured ~190–287MB) plus compact/save transients. That is the
+   architectural floor and a SEPARATE concern from the corpus-text caches (it is the same
+   data the `.said` file holds; the lever is mmap-streaming the FrameStore itself).
+   Smaller `SAID_TEXT_CHUNK` does NOT lower the peak (chunk=128 → 553MB vs chunk=512 → 531MB):
+   the encode transient is already bounded; the floor is the FrameStore, not the chunk.
+
+   Diagnostics (gated by `SAID_MEM_REPORT=1`): `lexical_mem_report()`,
+   `saidfile_mem_report()`, `TrigramIndex::approx_bytes()`, phase-A `[mem]` line.
+
+Note: the passage-count "explosion" in the SCA encode (char-chunked 512/256 → ~700 passages
+on a 400KB SQL chunk) is EXPECTED and tuned (see memory `said-index-memory-oom`) — NOT a bug,
+and a SEPARATE concern from the lexical/corpus-text caches above.
