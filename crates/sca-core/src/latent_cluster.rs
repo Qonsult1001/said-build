@@ -919,10 +919,63 @@ impl StaticEncoder {
     }
 
     /// Load from a local model directory (reads tokenizer.json + model.safetensors
-    /// + config.json). Uses the pure-Rust own path — no HF tokenizers.
+    /// + config.json). Uses the pure-Rust own path — no HF tokenizers, so the
+    /// ~250MB first-encode transient never fires.
+    ///
+    /// If `model_name` is NOT a local directory (e.g. a HuggingFace Hub repo id
+    /// like "minishlab/potion-base-8M"), we fall back to model2vec's resolver to
+    /// fetch/locate the files, then still encode through the own path. This keeps
+    /// hub ids working without adding hf-hub as a runtime dependency of sca-core.
     pub fn from_pretrained(model_name: &str) -> Result<Self, String> {
-        let own = OwnStaticEncoder::from_pretrained(model_name)?;
+        if std::path::Path::new(model_name).is_dir() {
+            let own = OwnStaticEncoder::from_pretrained(model_name)?;
+            return Ok(Self { own, model: None });
+        }
+        // Hub id (or non-dir): let model2vec resolve the files, then build the own
+        // encoder from the resolved local snapshot dir. model2vec caches the repo
+        // under the HF hub cache; we locate that dir and load our tokenizer+weights
+        // from it so the encode path stays pure-Rust.
+        let dir = Self::resolve_hub_dir(model_name)?;
+        let own = OwnStaticEncoder::from_pretrained(&dir)?;
         Ok(Self { own, model: None })
+    }
+
+    /// Resolve a HuggingFace Hub repo id to a local snapshot directory containing
+    /// tokenizer.json + model.safetensors + config.json. Returns the dir path.
+    ///
+    /// We first look in the local hf-hub cache (the common case — the model is
+    /// already downloaded). Only if it isn't cached do we ask model2vec to fetch
+    /// it, which requires model2vec's `hf-hub` feature (off in this build) — so an
+    /// uncached hub id surfaces the same error model2vec produced before #4.
+    fn resolve_hub_dir(repo_id: &str) -> Result<String, String> {
+        if let Some(dir) = Self::cached_hub_snapshot(repo_id) {
+            return Ok(dir);
+        }
+        // Not cached: let model2vec resolve/download (needs its hf-hub feature),
+        // then re-scan the cache for the snapshot.
+        model2vec_rs::model::StaticModel::from_pretrained(repo_id, None, None, None)
+            .map_err(|e| format!("Failed to resolve hub model '{repo_id}': {e}"))?;
+        Self::cached_hub_snapshot(repo_id)
+            .ok_or_else(|| format!("no complete snapshot for '{repo_id}' after fetch"))
+    }
+
+    /// Find a complete (tokenizer+model+config) snapshot dir for `repo_id` in the
+    /// local hf-hub cache, if present.
+    fn cached_hub_snapshot(repo_id: &str) -> Option<String> {
+        let safe = repo_id.replace('/', "--");
+        let repo_dir = dirs_cache_hub()
+            .join(format!("models--{safe}"))
+            .join("snapshots");
+        std::fs::read_dir(&repo_dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.join("tokenizer.json").exists()
+                    && p.join("model.safetensors").exists()
+                    && p.join("config.json").exists()
+            })
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     /// Load the encoder directly from in-memory bytes — no filesystem.
@@ -1083,6 +1136,32 @@ impl OwnStaticEncoder {
         }
         sum
     }
+}
+
+/// Locate the HuggingFace Hub cache dir (`<HF_HOME|~/.cache/huggingface>/hub`,
+/// or `HF_HUB_CACHE` if set). Mirrors hf-hub's default so we can find the
+/// snapshot model2vec just downloaded. Used only for hub-id resolution.
+#[cfg(feature = "static-embed")]
+fn dirs_cache_hub() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Ok(c) = std::env::var("HF_HUB_CACHE") {
+        if !c.is_empty() {
+            return PathBuf::from(c);
+        }
+    }
+    if let Ok(h) = std::env::var("HF_HOME") {
+        if !h.is_empty() {
+            return PathBuf::from(h).join("hub");
+        }
+    }
+    // Default: ~/.cache/huggingface/hub (USERPROFILE on Windows, HOME elsewhere).
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    PathBuf::from(home)
+        .join(".cache")
+        .join("huggingface")
+        .join("hub")
 }
 
 /// Char-level truncation to the first `max_chars` chars (model2vec `truncate_str`).
