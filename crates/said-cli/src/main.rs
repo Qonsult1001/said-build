@@ -2593,6 +2593,9 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         eprintln!("\r  [2/3] Encoded (SCA):  100%  ({:.1}s)                                        ",
                   t_phase2.elapsed().as_secs_f64());
     }
+    if std::env::var("SAID_MEM_REPORT").is_ok() {
+        eprintln!("  {}", brain.lexical_mem_report());
+    }
 
     // PHASE 3: Compact blocks + save to disk
     let t_phase3 = std::time::Instant::now();

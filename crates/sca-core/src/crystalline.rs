@@ -2317,6 +2317,30 @@ impl CrystallineCore {
         self.doc_texts_fast.get(idx).map(|s| s.as_str())
     }
 
+    /// Diagnostic: approximate heap bytes held by each lexical `_fast` structure.
+    /// Used to find the dominant allocation behind the index-stage OOM (#4).
+    /// Counts String/key bytes + container slot overhead (rough but comparable).
+    pub fn lexical_mem_report(&self) -> String {
+        fn s_bytes(s: &str) -> usize { s.len() + 24 } // String header ~24B + bytes
+        let doc_texts: usize = self.doc_texts_fast.iter().map(|s| s_bytes(s)).sum();
+        let doc_word_sets: usize = self.doc_word_sets_fast.iter()
+            .map(|set| set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
+        let doc_word_tf: usize = self.doc_word_tf_fast.iter()
+            .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
+        let word_inv: usize = self.word_inverted_fast.iter()
+            .map(|(w, set)| s_bytes(w) + set.len() * 8 + 48).sum();
+        let phonetic: usize = self.phonetic_index_fast.iter()
+            .map(|(k, set)| s_bytes(k) + set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
+        let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum();
+        let mb = |b: usize| (b as f64) / 1_048_576.0;
+        format!(
+            "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  | TOTAL={:.0}MB",
+            self.doc_ids.len(),
+            mb(doc_texts), mb(doc_word_sets), mb(doc_word_tf), mb(word_inv), mb(phonetic), mb(vocab),
+            mb(doc_texts + doc_word_sets + doc_word_tf + word_inv + phonetic + vocab),
+        )
+    }
+
     /// Clear only the word index structures (not quantized matrix or doc IDs).
     pub fn clear_word_index(&mut self) {
         self.word_inverted_fast.clear();
@@ -2873,10 +2897,9 @@ impl CrystallineCore {
         for bits in processed {
             self.matrix_quantized.extend(bits);
         }
-        
+
         // Set rerank_depth to total docs
         self.rerank_depth = self.doc_ids.len();
-        
     }
 
     /// Build word-level structures from raw texts (no embeddings needed).

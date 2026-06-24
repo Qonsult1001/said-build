@@ -1323,6 +1323,11 @@ impl SaidFile {
     ///
     /// Docs can span multiple passages, so matrix rows are keyed by
     /// `passage_offsets[doc_idx]`, not `doc_idx` directly. We concatenate
+    /// Diagnostic passthrough: per-structure heap usage of the lexical index (#4 OOM).
+    pub fn lexical_mem_report(&self) -> String {
+        self.engine.core.lexical_mem_report()
+    }
+
     /// every passage belonging to this doc so the Hamming distance reflects
     /// the doc as a whole, not just its first passage.
     fn get_fingerprint(&self, doc_id: &str) -> Option<Vec<u8>> {
