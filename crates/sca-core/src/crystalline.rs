@@ -2425,6 +2425,11 @@ impl CrystallineCore {
     }
 
     /// Diagnostic: per-structure breakdown of `lexical_mem_bytes`. SAID_MEM_REPORT=1.
+    /// Resident bytes of the quantized fingerprint matrix (grows per doc). #4 encode scale.
+    pub fn matrix_quantized_bytes(&self) -> usize {
+        self.matrix_quantized.len()
+    }
+
     pub fn lexical_mem_report(&self) -> String {
         let (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
         let mb = |b: usize| (b as f64) / 1_048_576.0;

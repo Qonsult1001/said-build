@@ -1690,23 +1690,50 @@ impl SaidFile {
                     // recompute-on-growth design, applied within one init). Each chunk's raw
                     // text is read, encoded, lower-cached, then DROPPED before the next — so
                     // the full ~3.8 GB corpus text is NEVER resident at once.
-                    // 512 balances encoder batch efficiency against the transient per-chunk
-                    // memory (all_doc_words/doc_texts_normalized for the chunk). Measured:
-                    // chunk=2000 → ~432MB transient, chunk=512 → ~110MB. Overridable via env.
-                    let text_chunk: usize = std::env::var("SAID_TEXT_CHUNK").ok()
-                        .and_then(|s| s.parse().ok()).unwrap_or(512);
+                    // #4 encode streaming: chunk by BYTES, not a fixed doc count, so the
+                    // per-chunk transient (the chunk's `texts` Vec + the passages encoded from
+                    // it) is bounded by a byte budget REGARDLESS of doc size — aligned with the
+                    // ingest spill, which also flushes by bytes. A fixed 512-doc chunk holds
+                    // ~200MB when those 512 docs are big SQL files (1560 passages each), but a
+                    // few hundred small C# files. Byte-budgeting packs FEWER big docs / MORE
+                    // small docs per chunk → flat transient either way. A doc larger than the
+                    // budget still forms its own chunk (index_batch already streams a single
+                    // doc's passages internally, so one big doc is bounded). SAID_TEXT_CHUNK
+                    // (a byte budget) overrides; SAID_TEXT_CHUNK_DOCS caps docs/chunk for the
+                    // encoder-batch-efficiency floor on tiny-doc corpora.
+                    let chunk_byte_budget: usize = std::env::var("SAID_TEXT_CHUNK").ok()
+                        .and_then(|s| s.parse().ok()).unwrap_or(64 * 1024 * 1024);
+                    let max_chunk_docs: usize = std::env::var("SAID_TEXT_CHUNK_DOCS").ok()
+                        .and_then(|s| s.parse().ok()).unwrap_or(4096);
                     let mut first = true;
-                    let chunks: Vec<Vec<String>> = doc_ids.chunks(text_chunk).map(|c| c.to_vec()).collect();
-                    for chunk_ids in &chunks {
-                        let texts: Vec<String> = chunk_ids.iter()
-                            .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
-                            .collect();
+                    let mut i = 0usize;
+                    while i < doc_ids.len() {
+                        // Pack the next chunk: read frame texts until we hit the byte budget
+                        // (or the doc cap). At least one doc per chunk (big docs go solo).
+                        let mut chunk_ids: Vec<String> = Vec::new();
+                        let mut texts: Vec<String> = Vec::new();
+                        let mut bytes = 0usize;
+                        while i < doc_ids.len() && chunk_ids.len() < max_chunk_docs {
+                            let id = &doc_ids[i];
+                            let t = self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default();
+                            let tlen = t.len();
+                            // Stop before adding a doc that would blow the budget — UNLESS the
+                            // chunk is still empty (a single over-budget doc must go through).
+                            if !chunk_ids.is_empty() && bytes + tlen > chunk_byte_budget {
+                                break;
+                            }
+                            chunk_ids.push(id.clone());
+                            texts.push(t);
+                            bytes += tlen;
+                            i += 1;
+                        }
                         if first {
-                            self.engine.index_batch_with_progress(chunk_ids, &texts, |_, _, _| {})?;
+                            self.engine.index_batch_with_progress(&chunk_ids, &texts, |_, _, _| {})?;
                             first = false;
                         } else {
-                            self.engine.index_batch_incremental(chunk_ids, &texts)?;
+                            self.engine.index_batch_incremental(&chunk_ids, &texts)?;
                         }
+                        let _ = bytes;
                         // texts dropped here before the next chunk is read. corpus_texts_lower
                         // is NOT built here (#4) — it's built lazily on first query from frames.
                     }
