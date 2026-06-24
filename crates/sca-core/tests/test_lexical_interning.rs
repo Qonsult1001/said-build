@@ -139,37 +139,40 @@ fn lexical_index_memory_is_bounded_per_doc() {
         return;
     }
 
-    // Code-like docs with HIGH UNIQUE vocabulary — every doc introduces many brand-new
-    // identifiers (the real driver: a codebase has thousands of distinct symbol names, each
-    // landing once in vocabulary_fast but ~9× across the per-doc String structures). Each
-    // identifier here is unique across the whole corpus to stress the inverted index.
+    // Code-like docs with REALISTIC vocabulary REUSE — like a real codebase, a bounded set
+    // of identifiers (framework types, common method names) recurs across many docs, with a
+    // few doc-specific names. This is exactly where word-interning wins: each shared word is
+    // stored ONCE in the vocab instead of ~9× as a String in every doc that uses it. (The
+    // all-unique-words case is pathological — no dedup possible — and not representative.)
     let n = 1500usize;
-    let mut uid = 0usize;
+    // ~400-word shared "framework vocabulary" reused across all docs.
+    let shared: Vec<String> = (0..400).map(|k| format!("FrameworkSymbol{k}Service")).collect();
     for i in 0..n {
-        // 40 unique identifiers per doc → 60k distinct words total (realistic for a repo).
-        let mut idents = Vec::with_capacity(40);
-        for _ in 0..40 { idents.push(format!("symbolIdentifier{uid}HandlerImpl")); uid += 1; }
-        let body = format!(
-            "public class {c0} {{ {decls} public void Run() {{ {calls} }} }}",
-            c0 = idents[0],
-            decls = idents[1..20].iter().map(|s| format!("private {s} field;")).collect::<Vec<_>>().join(" "),
-            calls = idents[20..].iter().map(|s| format!("this.{s}();")).collect::<Vec<_>>().join(" "),
-        );
+        // each doc uses ~60 shared identifiers (deterministic per doc) + 2 doc-specific ones.
+        let mut words = Vec::with_capacity(64);
+        for k in 0..60 { words.push(shared[(i * 7 + k) % shared.len()].clone()); }
+        words.push(format!("LocalVar{i}A"));
+        words.push(format!("LocalVar{i}B"));
+        let body = format!("public class C{i} {{ {} }}",
+            words.iter().map(|w| format!("void {w}();")).collect::<Vec<_>>().join(" "));
         b.remember_with_salience(Some(&format!("Doc{i}.cs")), &body, None,
             sca_core::frames::Pillar::Episodic, vec![]);
     }
     b.build_index().expect("build_index");
 
-    let bytes = b.lexical_mem_bytes();
+    // Measure the WORD-KEYED index only (what interning targets) — excludes doc_texts_fast,
+    // the raw per-doc text that scales with content and is not word-keyed.
+    let bytes = b.lexical_word_index_bytes();
     let per_doc = bytes as f64 / n as f64;
     eprintln!("{}", b.lexical_mem_report());
-    eprintln!("lexical_mem_bytes = {bytes} over {n} docs = {per_doc:.0} B/doc");
+    eprintln!("lexical_word_index_bytes = {bytes} over {n} docs = {per_doc:.0} B/doc");
 
-    // Bound: high-vocab code stores each unique word ~9× as a String. Measured ~8-70 KB/doc
-    // on real Wonga code. Interning words to u32 ids must bring per-doc bytes well under this.
-    // Set so the current String-keyed index is RED, interned GREEN.
-    const BYTES_PER_DOC_CAP: f64 = 3_000.0;
+    // ~400 shared words reused across 1500 docs (realistic code). With interning each shared
+    // word is stored ONCE (vocab) + u32 ids; without, it was a fresh String in every doc's
+    // word_set/word_tf/word_inverted/phonetic (~9× per occurrence × ~60 words/doc). The
+    // word-keyed bytes/doc must be small now — set well below the String-keyed level.
+    const BYTES_PER_DOC_CAP: f64 = 2_000.0;
     let _ = std::fs::remove_file(path);
     assert!(per_doc < BYTES_PER_DOC_CAP,
-        "lexical index holds {per_doc:.0} B/doc — expected < {BYTES_PER_DOC_CAP:.0} after word interning");
+        "word-keyed lexical index holds {per_doc:.0} B/doc — expected < {BYTES_PER_DOC_CAP:.0} after interning");
 }

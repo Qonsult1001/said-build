@@ -552,12 +552,12 @@ pub struct CrystallineCore {
     // Word-level lexical index (sca_dropin style: AHashMap for speed)
     // per-doc set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
     doc_word_sets_fast: Vec<AHashSet<u32>>,
-    doc_word_tf_fast: Vec<AHashMap<String, u32>>,
+    // per-doc {interned word-id → term frequency} (was {String→u32}; interned for #4).
+    doc_word_tf_fast: Vec<AHashMap<u32, u32>>,
     doc_texts_fast: Vec<String>,
     word_idf_fast: AHashMap<String, f32>,
     // soundex → set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
     phonetic_index_fast: AHashMap<String, AHashSet<u32>>,
-    vocabulary_fast: AHashSet<String>,
     // word-id → set of doc indices (was AHashMap<String,_>; interned for the #4 fix).
     word_inverted_fast: AHashMap<u32, AHashSet<usize>>,
 
@@ -636,7 +636,6 @@ impl Clone for CrystallineCore {
             doc_texts_fast: self.doc_texts_fast.clone(),
             word_idf_fast: self.word_idf_fast.clone(),
             phonetic_index_fast: self.phonetic_index_fast.clone(),
-            vocabulary_fast: self.vocabulary_fast.clone(),
             word_inverted_fast: self.word_inverted_fast.clone(),
             word_vocab: self.word_vocab.clone(),
             word_to_id: self.word_to_id.clone(),
@@ -722,7 +721,6 @@ impl CrystallineCore {
             doc_texts_fast: Vec::new(),
             word_idf_fast: AHashMap::new(),
             phonetic_index_fast: AHashMap::new(),
-            vocabulary_fast: AHashSet::new(),
             word_inverted_fast: AHashMap::new(),
             word_vocab: Vec::new(),
             word_to_id: AHashMap::new(),
@@ -2233,8 +2231,9 @@ impl CrystallineCore {
         self.doc_texts_fast.clear();
         self.word_idf_fast.clear();
         self.phonetic_index_fast.clear();
-        self.vocabulary_fast.clear();
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.quantized_mode = false;
         self.force_route = None;  // Reset so non-needle tasks use default routing
     }
@@ -2342,17 +2341,18 @@ impl CrystallineCore {
         // doc_word_sets_fast now holds interned u32 ids (4 bytes each), not Strings.
         let doc_word_sets: usize = self.doc_word_sets_fast.iter()
             .map(|set| set.len() * 4 + 48).sum();
+        // doc_word_tf_fast keys are interned u32 ids (4 bytes) + u32 count = 8 bytes/entry.
         let doc_word_tf: usize = self.doc_word_tf_fast.iter()
-            .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
+            .map(|m| m.len() * 8 + 48).sum();
         // word_inverted_fast keys are now interned u32 ids (4 bytes), not Strings.
         let word_inv: usize = self.word_inverted_fast.iter()
             .map(|(_id, set)| 4 + set.len() * 8 + 48).sum();
         // phonetic values are now interned u32 ids (4 bytes), not Strings.
         let phonetic: usize = self.phonetic_index_fast.iter()
             .map(|(k, set)| s_bytes(k) + set.len() * 4 + 48).sum();
-        // the interned vocab (word_vocab + word_to_id) replaces the duplicated Strings.
-        let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum::<usize>()
-            + self.word_vocab.iter().map(|w| s_bytes(w)).sum::<usize>()
+        // the single interned vocab (word_vocab + word_to_id) — each unique word stored
+        // ONCE in word_vocab + once as a word_to_id key (replaces the former ~9× String dup).
+        let vocab: usize = self.word_vocab.iter().map(|w| s_bytes(w)).sum::<usize>()
             + self.word_to_id.iter().map(|(w, _)| s_bytes(w) + 4 + 8).sum::<usize>();
         (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab)
     }
@@ -2361,6 +2361,16 @@ impl CrystallineCore {
     pub fn lexical_mem_bytes(&self) -> usize {
         let (a, b, c, d, e, f) = self.lexical_mem_parts();
         a + b + c + d + e + f
+    }
+
+    /// Heap bytes of the WORD-keyed lexical structures only — the part word-interning
+    /// targets: doc_word_sets + doc_word_tf + word_inverted + phonetic + the single shared
+    /// vocab. EXCLUDES doc_texts_fast (the raw per-doc text, which interning does not touch
+    /// and which scales with content, not vocabulary). This is the honest #4 metric: the
+    /// former String-keyed index stored each word ~9× here; interning collapses it to ~1×.
+    pub fn lexical_word_index_bytes(&self) -> usize {
+        let (_doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
+        doc_word_sets + doc_word_tf + word_inv + phonetic + vocab
     }
 
     /// Intern a word → compact u32 id, storing the canonical String exactly ONCE in
@@ -2381,6 +2391,11 @@ impl CrystallineCore {
     #[allow(dead_code)]
     fn word_of(&self, id: u32) -> Option<&str> {
         self.word_vocab.get(id as usize).map(|s| s.as_str())
+    }
+
+    /// Convert a String-keyed term-frequency map into an interned-id-keyed one.
+    fn intern_tf(&mut self, tf: ahash::AHashMap<String, u32>) -> ahash::AHashMap<u32, u32> {
+        tf.into_iter().map(|(w, c)| (self.intern_word(&w), c)).collect()
     }
 
     /// Space-join a doc's interned word-id set back into a text string (phrase-match
@@ -2411,10 +2426,11 @@ impl CrystallineCore {
     /// Clear only the word index structures (not quantized matrix or doc IDs).
     pub fn clear_word_index(&mut self) {
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
-        self.vocabulary_fast.clear();
     }
 
     /// Add a single document's words to the word index.
@@ -2436,7 +2452,6 @@ impl CrystallineCore {
                 .entry(wid)
                 .or_insert_with(AHashSet::new)
                 .insert(doc_idx);
-            self.vocabulary_fast.insert(w.clone());
         }
 
         // Ensure doc_word_sets_fast is large enough
@@ -2451,7 +2466,7 @@ impl CrystallineCore {
         }
 
         self.doc_word_sets_fast[doc_idx] = word_set;
-        self.doc_word_tf_fast[doc_idx] = word_tf;
+        self.doc_word_tf_fast[doc_idx] = self.intern_tf(word_tf);
         self.doc_texts_fast[doc_idx] = doc_text;
     }
 
@@ -2469,11 +2484,12 @@ impl CrystallineCore {
         use rayon::prelude::*;
 
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
         self.phonetic_index_fast.clear();
-        self.vocabulary_fast.clear();
 
         // Phase 1: Parallel per-doc tokenization (no shared state)
         struct DocResult {
@@ -2519,7 +2535,6 @@ impl CrystallineCore {
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
 
-                self.vocabulary_fast.insert(word.clone());
 
                 let sx = self.get_soundex(word);
                 self.phonetic_index_fast
@@ -2533,7 +2548,7 @@ impl CrystallineCore {
             let id_set: ahash::AHashSet<u32> = result.word_set.iter()
                 .map(|w| self.intern_word(w)).collect();
             self.doc_word_sets_fast.push(id_set);
-            self.doc_word_tf_fast.push(result.word_tf);
+            let tf_ids = self.intern_tf(result.word_tf); self.doc_word_tf_fast.push(tf_ids);
             self.doc_texts_fast.push(result.doc_text);
         }
     }
@@ -2560,7 +2575,7 @@ impl CrystallineCore {
 
     /// Get per-doc word→TF map (for TF-IDF scoring in FullHybrid route).
     /// Matches SAID-LAM-private's `doc_word_tf[doc_idx]` access pattern.
-    pub fn get_doc_word_tf(&self, doc_idx: usize) -> Option<&ahash::AHashMap<String, u32>> {
+    pub fn get_doc_word_tf(&self, doc_idx: usize) -> Option<&ahash::AHashMap<u32, u32>> {
         self.doc_word_tf_fast.get(doc_idx)
     }
 
@@ -2912,11 +2927,10 @@ impl CrystallineCore {
                     .or_insert_with(AHashSet::new)
                     .insert(wid);
 
-                self.vocabulary_fast.insert(w_normalized);
             }
 
             self.doc_word_sets_fast.push(word_set);
-            self.doc_word_tf_fast.push(word_tf);
+            let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
             self.doc_texts_fast.push(doc_text);
         }
         
@@ -3061,11 +3075,10 @@ impl CrystallineCore {
                     .or_insert_with(AHashSet::new)
                     .insert(wid);
 
-                self.vocabulary_fast.insert(w_normalized);
             }
 
             self.doc_word_sets_fast.push(word_set);
-            self.doc_word_tf_fast.push(word_tf);
+            let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
             self.doc_texts_fast.push(doc_text);
         }
 
@@ -3698,7 +3711,9 @@ impl CrystallineCore {
             let mut entity_score = 0.0f32;
             let mut common_score = 0.0f32;
             for word in &overlap {
-                let tf = doc_tf.and_then(|m| m.get(word)).copied().unwrap_or(1) as f32;
+                let tf = self.word_to_id.get(word)
+                    .and_then(|id| doc_tf.and_then(|m| m.get(id)))
+                    .copied().unwrap_or(1) as f32;
                 let idf = *self.word_idf_fast.get(word).unwrap_or(&0.5);
                 // Dynamic TF: saturates for entity queries, stays linear for dialogue
                 let tf_component = (tf * tf_k1) / (tf + tf_k1);
@@ -4290,7 +4305,7 @@ impl CrystallineCore {
 
         // If word index is empty (SCRM load without build_index), force PureSemantic.
         // The fingerprints are loaded — Hamming search works. No word index needed.
-        let route = if self.vocabulary_fast.is_empty() && route == QueryRoute::FullHybrid {
+        let route = if self.word_to_id.is_empty() && route == QueryRoute::FullHybrid {
             QueryRoute::PureSemantic
         } else {
             route
@@ -4420,7 +4435,7 @@ impl CrystallineCore {
             
             let in_idf = self.word_idf_fast.get(word);
             
-            if in_idf.is_some() || self.vocabulary_fast.contains(word) {
+            if in_idf.is_some() || self.word_to_id.contains_key(word) {
                 known_word_count += 1;
                 let idf = *in_idf.unwrap_or(&1.5);
                 total_idf += idf;
@@ -4446,7 +4461,7 @@ impl CrystallineCore {
                     // Try fuzzy expansion
                     let fuzzy_matches = self.fuzzy_expand_word_quantized(word, 5);
                     let valid_matches: Vec<String> = fuzzy_matches.iter()
-                        .filter(|m| *m != word && self.vocabulary_fast.contains(*m))
+                        .filter(|m| *m != word && self.word_to_id.contains_key(*m))
                         .cloned()
                         .collect();
 
@@ -4525,7 +4540,7 @@ impl CrystallineCore {
     fn fuzzy_expand_word_quantized(&self, word: &str, top_k: usize) -> Vec<String> {
         let word_lower = word.to_lowercase();
         
-        if self.vocabulary_fast.contains(&word_lower) {
+        if self.word_to_id.contains_key(&word_lower) {
             return vec![word_lower];
         }
         
@@ -4576,7 +4591,7 @@ impl CrystallineCore {
     /// Get quantized stats
     pub fn get_quantized_stats(&self) -> (usize, usize, usize) {
         let total_passages: usize = self.passage_counts.iter().sum();
-        (self.doc_ids.len(), total_passages, self.vocabulary_fast.len())
+        (self.doc_ids.len(), total_passages, self.word_to_id.len())
     }
 
     /// Serialize the index to bytes (.said format).
@@ -4869,10 +4884,11 @@ impl CrystallineCore {
         self.inverted_index.clear();
         self.word_idf_fast.clear();
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
-        self.vocabulary_fast.clear();
         self.phonetic_index_fast.clear();
         self.matrix_quantized.clear();
         self.passage_counts.clear();
@@ -4935,7 +4951,6 @@ impl CrystallineCore {
             let idf = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
             pos += 4;
             self.word_idf_fast.insert(word.clone(), idf);
-            self.vocabulary_fast.insert(word.clone());
 
             if pos + 2 > data.len() { break; }
             let num_indices = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;

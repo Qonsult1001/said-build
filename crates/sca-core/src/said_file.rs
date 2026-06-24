@@ -1333,6 +1333,12 @@ impl SaidFile {
         self.engine.core.lexical_mem_bytes()
     }
 
+    /// Heap bytes of the WORD-keyed lexical structures only (excludes raw doc text).
+    /// The metric word-interning targets. See CrystallineCore::lexical_word_index_bytes.
+    pub fn lexical_word_index_bytes(&self) -> usize {
+        self.engine.core.lexical_word_index_bytes()
+    }
+
     /// every passage belonging to this doc so the Hamming distance reflects
     /// the doc as a whole, not just its first passage.
     fn get_fingerprint(&self, doc_id: &str) -> Option<Vec<u8>> {
