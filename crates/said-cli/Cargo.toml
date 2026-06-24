@@ -59,6 +59,11 @@ release = ["code", "docs", "ocr", "whisper", "embed-model", "lsp", "forge", "for
 #   full         everything readable: code + docs (PDF/DOCX) + OCR + LSP
 # ---------------------------------------------------------------------------
 brain = ["embed-model"]
-coding = ["embed-model", "code"]
-coding-plus = ["embed-model", "code", "lsp"]
-full = ["embed-model", "code", "docs", "ocr", "lsp"]
+# `simd` pulls in simsimd's runtime-dispatched (AVX2/AVX-512 auto-detected) Hamming core —
+# the documented 3-4× speedup on the top-50 retrieval path (docs/said-structure/09-cargo-
+# features.md). Enabled by default in the coding builds; the scalar count_ones() fallback
+# remains for targets without it.
+simd = ["sca-core/simd"]
+coding = ["embed-model", "code", "simd"]
+coding-plus = ["embed-model", "code", "lsp", "simd"]
+full = ["embed-model", "code", "docs", "ocr", "lsp", "simd"]

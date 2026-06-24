@@ -314,6 +314,9 @@ impl ScaEngine {
             encoder.encode_one("test").len()
         };
 
+        let _dbg_t = std::env::var("SAID_PHASE_DBG").is_ok();
+        macro_rules! phase_t { ($label:expr, $t:expr) => { if _dbg_t { eprintln!("    [phase] {}: {:.2}s", $label, $t.elapsed().as_secs_f64()); } }; }
+        let _t = std::time::Instant::now();
         // A. Build word document-frequency (for IDF). We tokenize each doc transiently and
         // accumulate only the doc_freq map — NOT a per-doc word list. The old all_doc_words
         // Vec<Vec<String>> (every word of every doc, ~237MB on a text-heavy chunk) is gone;
@@ -360,6 +363,7 @@ impl ScaEngine {
             eprintln!("  [mem] index_batch phase A: doc_texts_normalized={:.0}MB  all_doc_words=0MB (removed #4)", mb(dtn));
         }
 
+        phase_t!("A doc_freq", _t); let _t = std::time::Instant::now();
         // B. Stream per-doc: chunk → encode → doc mean → write to mmap temp
         //    RAM stays flat — each doc's passages and embeddings freed immediately.
         let bytes_per_mean = embed_dim * 4; // f32
@@ -377,50 +381,51 @@ impl ScaEngine {
         // most ONE chunk of embeddings at a time so peak memory stays bounded. The fold into
         // doc_sum/corpus_sum is sequential IN PASSAGE ORDER, so the f64 accumulation is
         // bit-identical to the original sequential path (rayon collect preserves order).
+        // Cross-DOCUMENT parallel encode (#4 throughput). Each doc is independent — its
+        // passages encode to ONE doc-mean — so we par_iter ACROSS docs to saturate all cores
+        // (the within-doc parallelism alone under-fed the pool for low-passage docs: measured
+        // 2.7/12 cores). Per doc we return (doc_mean, doc_passage_sum, n_passages); the doc's
+        // passages are still encoded one-at-a-time + folded, so per-thread memory = one passage
+        // embedding. corpus_sum is then folded sequentially IN DOC ORDER for bit-identity, and
+        // scratch is written at each doc's disjoint offset. Same float ops as the serial path.
         use rayon::prelude::*;
-        const ENC_CHUNK: usize = 256;
-        for (doc_idx, text) in texts.iter().enumerate() {
-            let passages = Self::chunk_text(text, 512, 256);
-            let mut doc_sum = vec![0.0f64; embed_dim];
-            let n_passages = passages.len();
-            for chunk in passages.chunks(ENC_CHUNK) {
-                let embs: Vec<Vec<f32>> = chunk
-                    .par_iter()
-                    .map(|passage| {
-                        let mut emb = encoder.encode_one(passage);
-                        let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                        for v in &mut emb { *v /= norm; }
-                        emb
-                    })
-                    .collect();
-                for emb in &embs {
-                    for (i, &v) in emb.iter().enumerate() {
-                        corpus_sum[i] += v as f64;
-                        doc_sum[i] += v as f64;
-                    }
+        struct DocEnc { doc_mean: Vec<f32>, passage_sum: Vec<f64>, n_passages: usize }
+        let per_doc: Vec<DocEnc> = texts
+            .par_iter()
+            .map(|text| {
+                let passages = Self::chunk_text(text, 512, 256);
+                let n_passages = passages.len();
+                let mut psum = vec![0.0f64; embed_dim];
+                for passage in &passages {
+                    let mut emb = encoder.encode_one(passage);
+                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    for v in &mut emb { *v /= norm; }
+                    for (i, &v) in emb.iter().enumerate() { psum[i] += v as f64; }
                 }
-            }
-            drop(passages);
-            total_passages += n_passages;
+                let mut doc_mean: Vec<f32> = psum.iter()
+                    .map(|&s| (s / n_passages.max(1) as f64) as f32)
+                    .collect();
+                let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                for v in &mut doc_mean { *v /= norm; }
+                DocEnc { doc_mean, passage_sum: psum, n_passages }
+            })
+            .collect();
 
-            // Doc mean: mean(axis=0), re-normalize
-            let mut doc_mean: Vec<f32> = doc_sum.iter()
-                .map(|&s| (s / n_passages.max(1) as f64) as f32)
-                .collect();
-            let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-            for v in &mut doc_mean { *v /= norm; }
-
-            // Write to scratch (disk-backed mmap on native, RAM on wasm)
+        // Sequential fold (in doc order) — bit-identical accumulation; disjoint scratch writes.
+        for (doc_idx, d) in per_doc.iter().enumerate() {
+            for (i, &v) in d.passage_sum.iter().enumerate() { corpus_sum[i] += v; }
+            total_passages += d.n_passages;
             let offset = doc_idx * bytes_per_mean;
-            let bytes: &[u8] = bytemuck::cast_slice(&doc_mean);
+            let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
             scratch.as_mut_slice()[offset..offset + bytes_per_mean].copy_from_slice(bytes);
-
             if (doc_idx + 1) % 50 == 0 || doc_idx + 1 == n_docs {
                 progress(doc_idx + 1, n_docs, total_passages);
             }
         }
+        drop(per_doc);
         scratch.flush()?;
 
+        phase_t!("B encode", _t); let _t = std::time::Instant::now();
         // C. Corpus mean. Full build: compute from this batch's passage sums and set
         //    it. Incremental: REUSE the persisted mean so the new docs quantize into
         //    the SAME space as the existing corpus (comparable fingerprints). If a
@@ -469,6 +474,7 @@ impl ScaEngine {
             (avg_idf / 5.0).min(1.0).min(0.3)
         }).collect();
 
+        phase_t!("C-E mean/std/gammas", _t); let _t = std::time::Instant::now();
         // F. Load IDF into CrystallineCore
         let idf_keys: Vec<String> = self.word_idf.keys().cloned().collect();
         let idf_values: Vec<f32> = idf_keys.iter()
@@ -487,7 +493,9 @@ impl ScaEngine {
         }
         let passage_counts: Vec<usize> = vec![1; n_docs];
 
+        phase_t!("F-G idf/read-means", _t); let _t = std::time::Instant::now();
         // H. Add all docs to CrystallineCore (tokenizes per-doc from texts internally)
+        let _h = &_t;
         self.core.add_docs_quantized(
             doc_ids.to_vec(),
             all_embs,
@@ -495,6 +503,7 @@ impl ScaEngine {
             gammas,
             texts,
         );
+        phase_t!("H add_docs_quantized (word index)", *_h);
 
         // I. Upload quantized fingerprints to GPU (if available)
         #[cfg(feature = "gpu")]

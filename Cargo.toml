@@ -1,3 +1,12 @@
 [workspace]
 members = ["crates/sca-core", "crates/said-cli", "crates/said-mcp", "crates/said-forge", "crates/said-prompts", "crates/said-vault", "crates/said-llm", "crates/said-orchestration"]
 resolver = "2"
+
+# #4 throughput: the release default (lto=off, codegen-units=16) leaves the encode hot path
+# un-inlined across crate boundaries. The encoder is a tight scalar loop (mean-pool token
+# rows) — LTO + a single codegen unit let the optimizer inline + vectorize it. Pair with
+# `.cargo/config.toml` target-cpu=native for AVX. Zero behaviour change (fingerprints are
+# bit-identical — same float ops, just better-compiled).
+[profile.release]
+lto = "thin"
+codegen-units = 1
