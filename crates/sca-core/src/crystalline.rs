@@ -2331,6 +2331,19 @@ impl CrystallineCore {
         self.doc_texts_fast.get(idx).map(|s| s.as_str())
     }
 
+    /// Per-doc normalized text (lowercase, word-level), owned. Falls back to reconstructing
+    /// from the interned word set when doc_texts_fast is not cached (#4: it's no longer built
+    /// at index time — the words live once in doc_word_sets_fast as u32 ids).
+    pub fn doc_normalized_text(&self, idx: usize) -> Option<String> {
+        if let Some(t) = self.doc_texts_fast.get(idx) {
+            if !t.is_empty() { return Some(t.clone()); }
+        }
+        if idx < self.doc_word_sets_fast.len() {
+            return Some(self.doc_words_joined(idx));
+        }
+        None
+    }
+
     /// Per-structure approximate heap bytes of the lexical `_fast` index.
     /// Returns (doc_texts, doc_word_sets, doc_word_tf, word_inverted, phonetic, vocab).
     /// Counts String/key bytes + container slot overhead (rough but comparable + stable,
@@ -2550,7 +2563,7 @@ impl CrystallineCore {
                 .map(|w| self.intern_word(w)).collect();
             self.doc_word_sets_fast.push(id_set);
             let tf_ids = self.intern_tf(result.word_tf); self.doc_word_tf_fast.push(tf_ids);
-            self.doc_texts_fast.push(result.doc_text);
+            self.doc_texts_fast.push(String::new()); // #4: not cached
         }
     }
 
@@ -2938,7 +2951,7 @@ impl CrystallineCore {
 
             self.doc_word_sets_fast.push(word_set);
             let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
-            self.doc_texts_fast.push(doc_text);
+            self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
         }
         
         // Compute dynamic scale if holographic
@@ -3086,7 +3099,7 @@ impl CrystallineCore {
 
             self.doc_word_sets_fast.push(word_set);
             let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
-            self.doc_texts_fast.push(doc_text);
+            self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
         }
 
         self.rerank_depth = self.doc_ids.len();

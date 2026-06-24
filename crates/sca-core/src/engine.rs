@@ -1054,10 +1054,10 @@ impl ScaEngine {
             && !self.doc_texts_normalized[doc_idx].is_empty()
         {
             &self.doc_texts_normalized[doc_idx]
-        } else if let Some(t) = self.core.get_doc_text_by_index(doc_idx) {
-            t
         } else {
-            owned = String::new();
+            // doc_texts_fast is no longer built at index time (#4); reconstruct the per-doc
+            // normalized text from the interned word set on demand.
+            owned = self.core.doc_normalized_text(doc_idx).unwrap_or_default();
             &owned
         };
         let mut hits = 0;
