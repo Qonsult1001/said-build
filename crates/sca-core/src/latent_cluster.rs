@@ -863,13 +863,23 @@ pub struct EncodedEntry {
     pub source: EncoderSource,
 }
 
-/// Static encoder using Model2Vec — token lookup table + mean pooling.
+/// Static encoder — token lookup table + mean pooling (Model2Vec semantics).
 ///
 /// Enabled with the `static-embed` feature flag. When unavailable,
 /// falls back to requiring external embeddings (precision path only).
+///
+/// Issue #4: the default encode path is the self-contained [`OwnStaticEncoder`]
+/// (hand-written WordPiece + pooling) so the HF `tokenizers` first-encode
+/// ~250MB transient is NEVER triggered. The model2vec `StaticModel` is kept
+/// only for the byte-identity test / reference path.
 #[cfg(feature = "static-embed")]
 pub struct StaticEncoder {
-    model: model2vec_rs::model::StaticModel,
+    /// Pure-Rust path used for ALL production encoding (no HF tokenizers).
+    own: OwnStaticEncoder,
+    /// Reference model2vec model — loaded lazily ONLY when explicitly requested
+    /// via the model2vec helpers (identity test). `None` in normal operation,
+    /// so the HF `tokenizers` first-encode transient never fires.
+    model: Option<model2vec_rs::model::StaticModel>,
 }
 
 #[cfg(feature = "static-embed")]
@@ -887,61 +897,255 @@ impl StaticEncoder {
     #[cfg(feature = "embed-model")]
     const CONFIG_BYTES: &[u8] = include_bytes!("../../../SAID-LAM-private/said-lam-static-4M/config.json");
 
-    /// Load from embedded model (zero external files).
-    /// Writes to temp dir on first call, loads from there.
+    /// Embedded tokenizer/model/config bytes (for the in-memory own-encoder path).
     #[cfg(feature = "embed-model")]
-    pub fn from_embedded() -> Result<Self, String> {
-        // Content-addressed temp dir: keyed by the model bytes' length so swapping the
-        // embedded model (e.g. 64-dim → 256-dim) writes to a NEW dir and never loads a
-        // stale cached model from a prior binary. (len is a cheap, sufficient cache key
-        // here — different models differ in size.)
-        let key = Self::MODEL_BYTES.len();
-        let dir = std::env::temp_dir().join(format!("said-lam-static-embedded-{key}"));
-        let model_f = dir.join("model.safetensors");
-        if !model_f.exists() {
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            std::fs::write(&model_f, Self::MODEL_BYTES)
-                .map_err(|e| format!("Write model: {}", e))?;
-            std::fs::write(dir.join("tokenizer.json"), Self::TOKENIZER_BYTES)
-                .map_err(|e| format!("Write tokenizer: {}", e))?;
-            std::fs::write(dir.join("config.json"), Self::CONFIG_BYTES)
-                .map_err(|e| format!("Write config: {}", e))?;
-        }
-        Self::from_pretrained(dir.to_str().unwrap_or("said-lam-static-embedded"))
+    pub fn embedded_bytes() -> (&'static [u8], &'static [u8], &'static [u8]) {
+        (Self::TOKENIZER_BYTES, Self::MODEL_BYTES, Self::CONFIG_BYTES)
     }
 
-    /// Load a Model2Vec model from local path or HuggingFace Hub.
+    /// Load from embedded model (zero external files, zero temp files).
+    ///
+    /// Issue #4: parses the embedded tokenizer/model/config bytes straight into
+    /// the pure-Rust [`OwnStaticEncoder`] — no temp-dir round-trip and, crucially,
+    /// no HF `tokenizers` first-encode ~250MB transient.
+    #[cfg(feature = "embed-model")]
+    pub fn from_embedded() -> Result<Self, String> {
+        let own = OwnStaticEncoder::from_bytes(
+            Self::TOKENIZER_BYTES,
+            Self::MODEL_BYTES,
+            Self::CONFIG_BYTES,
+        )?;
+        Ok(Self { own, model: None })
+    }
+
+    /// Load from a local model directory (reads tokenizer.json + model.safetensors
+    /// + config.json). Uses the pure-Rust own path — no HF tokenizers.
     pub fn from_pretrained(model_name: &str) -> Result<Self, String> {
-        let model = model2vec_rs::model::StaticModel::from_pretrained(model_name, None, None, None)
-            .map_err(|e| format!("Failed to load Model2Vec '{}': {}", model_name, e))?;
-        Ok(Self { model })
+        let own = OwnStaticEncoder::from_pretrained(model_name)?;
+        Ok(Self { own, model: None })
     }
 
     /// Load the encoder directly from in-memory bytes — no filesystem.
-    /// Required for wasm (no temp-file path) and avoids the temp-dir round-trip
-    /// on native. Same model as `from_pretrained`; only the source differs.
+    /// Required for wasm (no temp-file path). Pure-Rust own path.
     pub fn from_bytes(
         tokenizer: &[u8],
         safetensors: &[u8],
         config: &[u8],
     ) -> Result<Self, String> {
-        let model = model2vec_rs::model::StaticModel::from_bytes(
-            tokenizer, safetensors, config, None,
-        )
-        .map_err(|e| format!("Failed to load Model2Vec from bytes: {}", e))?;
-        Ok(Self { model })
+        let own = OwnStaticEncoder::from_bytes(tokenizer, safetensors, config)?;
+        Ok(Self { own, model: None })
     }
 
     /// Encode a single text. Returns embedding vector.
     pub fn encode_one(&self, text: &str) -> Vec<f32> {
-        self.model.encode_single(text)
+        self.own.encode_one(text)
     }
 
     /// Encode a batch of texts. Returns one embedding per text.
     pub fn encode_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
-        self.model.encode(texts)
+        self.own.encode_batch(texts)
     }
+
+    // -------------------------------------------------------------------------
+    // model2vec reference path — used ONLY by the byte-identity test (#4).
+    // This is the ONLY path that touches HF `tokenizers` (and its first-encode
+    // ~250MB transient), so it must never be on the production hot path.
+    // -------------------------------------------------------------------------
+
+    /// Load a model2vec `StaticModel` (HF tokenizers) from a local dir, for the
+    /// byte-identity reference. Production code must use `from_pretrained`.
+    pub fn from_model2vec(model_name: &str) -> Result<Self, String> {
+        let model = model2vec_rs::model::StaticModel::from_pretrained(model_name, None, None, None)
+            .map_err(|e| format!("Failed to load Model2Vec '{}': {}", model_name, e))?;
+        let own = OwnStaticEncoder::from_pretrained(model_name)?;
+        Ok(Self { own, model: Some(model) })
+    }
+
+    /// Encode a batch via the model2vec (HF tokenizers) reference path.
+    /// Panics if this encoder wasn't built with [`from_model2vec`].
+    pub fn encode_batch_model2vec(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        self.model
+            .as_ref()
+            .expect("encode_batch_model2vec requires from_model2vec")
+            .encode(texts)
+    }
+}
+
+/// Self-contained static encoder (issue #4): hand-written WordPiece tokenizer +
+/// embedding lookup + mean pooling. Byte-identical to model2vec's `StaticModel`
+/// but without HF `tokenizers` — avoiding its ~250MB first-encode transient.
+#[cfg(feature = "static-embed")]
+pub struct OwnStaticEncoder {
+    tokenizer: crate::wordpiece_tok::WordPieceTokenizer,
+    /// Flat row-major embedding table: `rows * cols` f32.
+    embeddings: Vec<f32>,
+    rows: usize,
+    cols: usize,
+    /// L2-normalize the pooled output (config `normalize`, default true).
+    normalize: bool,
+}
+
+#[cfg(feature = "static-embed")]
+impl OwnStaticEncoder {
+    /// model2vec's default encode args: max_length=512, batch_size=1024.
+    const MAX_LENGTH: usize = 512;
+
+    /// Load from a local model directory.
+    pub fn from_pretrained(model_name: &str) -> Result<Self, String> {
+        let dir = std::path::Path::new(model_name);
+        let tok = std::fs::read(dir.join("tokenizer.json"))
+            .map_err(|e| format!("read tokenizer.json: {e}"))?;
+        let model = std::fs::read(dir.join("model.safetensors"))
+            .map_err(|e| format!("read model.safetensors: {e}"))?;
+        let cfg = std::fs::read(dir.join("config.json"))
+            .map_err(|e| format!("read config.json: {e}"))?;
+        Self::from_bytes(&tok, &model, &cfg)
+    }
+
+    /// Load from in-memory tokenizer/safetensors/config bytes.
+    pub fn from_bytes(tokenizer: &[u8], safetensors: &[u8], config: &[u8]) -> Result<Self, String> {
+        let tokenizer = crate::wordpiece_tok::WordPieceTokenizer::from_tokenizer_json(tokenizer)?;
+        let (embeddings, rows, cols) = parse_embeddings(safetensors)?;
+        // config `normalize` (default true), mirroring model2vec.
+        let cfg: serde_json::Value =
+            serde_json::from_slice(config).map_err(|e| format!("parse config.json: {e}"))?;
+        let normalize = cfg
+            .get("normalize")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        Ok(Self { tokenizer, embeddings, rows, cols, normalize })
+    }
+
+    /// Embedding dimension (cols).
+    pub fn dim(&self) -> usize {
+        self.cols
+    }
+
+    /// Encode one text → embedding.
+    pub fn encode_one(&self, text: &str) -> Vec<f32> {
+        // model2vec's encode_single goes through the batch path; mirror that.
+        self.encode_batch(std::slice::from_ref(&text.to_string()))
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    /// Encode a batch of texts → one embedding each. Mirrors model2vec
+    /// `encode_with_args(texts, max_length=512, batch_size=1024)`.
+    pub fn encode_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        let median = self.tokenizer.median_token_length();
+        let unk = self.tokenizer.unk_token_id();
+        texts
+            .iter()
+            .map(|text| {
+                // 1. cheap char pre-truncation to max_length * median_token_length chars.
+                let truncated = truncate_chars(text, Self::MAX_LENGTH.saturating_mul(median));
+                // 2. tokenize (add_special_tokens=false).
+                let mut ids = self.tokenizer.encode(truncated);
+                // 3. filter out unk, truncate to max_length tokens.
+                if let Some(unk_id) = unk {
+                    ids.retain(|&id| id != unk_id);
+                }
+                ids.truncate(Self::MAX_LENGTH);
+                // 4. mean-pool + optional L2-normalize.
+                self.pool_ids(&ids)
+            })
+            .collect()
+    }
+
+    /// Mean-pool token ids into one vector (weights=None, token_mapping=None →
+    /// row_idx=id, scale=1.0), then optional L2-normalize. Mirrors `pool_ids`.
+    fn pool_ids(&self, ids: &[u32]) -> Vec<f32> {
+        let dim = self.cols;
+        let mut sum = vec![0.0f32; dim];
+        let mut cnt = 0usize;
+        for &id in ids {
+            let row = id as usize;
+            if row >= self.rows {
+                continue; // out-of-range guard (model2vec would index-panic; ids are in-vocab)
+            }
+            let base = row * dim;
+            let slice = &self.embeddings[base..base + dim];
+            for (s, &v) in sum.iter_mut().zip(slice.iter()) {
+                *s += v;
+            }
+            cnt += 1;
+        }
+        let denom = cnt.max(1) as f32;
+        for x in &mut sum {
+            *x /= denom;
+        }
+        if self.normalize {
+            let norm = sum.iter().map(|&v| v * v).sum::<f32>().sqrt().max(1e-12);
+            for x in &mut sum {
+                *x /= norm;
+            }
+        }
+        sum
+    }
+}
+
+/// Char-level truncation to the first `max_chars` chars (model2vec `truncate_str`).
+#[cfg(feature = "static-embed")]
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    s.char_indices()
+        .nth(max_chars)
+        .map_or(s, |(byte_idx, _)| &s[..byte_idx])
+}
+
+/// Parse the `embeddings` F32 2-D tensor out of a safetensors buffer.
+///
+/// safetensors layout: `[u64 LE header_len][JSON header][raw tensor bytes]`.
+/// We read only the `embeddings` tensor (model2vec also accepts `0` /
+/// `embedding.weight`, but our models always name it `embeddings`).
+#[cfg(feature = "static-embed")]
+fn parse_embeddings(buf: &[u8]) -> Result<(Vec<f32>, usize, usize), String> {
+    if buf.len() < 8 {
+        return Err("safetensors too small".to_string());
+    }
+    let header_len = u64::from_le_bytes(buf[0..8].try_into().unwrap()) as usize;
+    let header_end = 8usize
+        .checked_add(header_len)
+        .filter(|&e| e <= buf.len())
+        .ok_or_else(|| "safetensors header length out of range".to_string())?;
+    let header: serde_json::Value = serde_json::from_slice(&buf[8..header_end])
+        .map_err(|e| format!("parse safetensors header: {e}"))?;
+    let tensor = header
+        .get("embeddings")
+        .or_else(|| header.get("0"))
+        .or_else(|| header.get("embedding.weight"))
+        .ok_or_else(|| "safetensors: no `embeddings` tensor".to_string())?;
+    let dtype = tensor.get("dtype").and_then(serde_json::Value::as_str).unwrap_or("");
+    if dtype != "F32" {
+        return Err(format!("embeddings dtype {dtype} unsupported (expected F32)"));
+    }
+    let shape: Vec<usize> = tensor
+        .get("shape")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "embeddings: missing shape".to_string())?
+        .iter()
+        .map(|v| v.as_u64().unwrap_or(0) as usize)
+        .collect();
+    if shape.len() != 2 {
+        return Err(format!("embeddings shape not 2-D: {shape:?}"));
+    }
+    let (rows, cols) = (shape[0], shape[1]);
+    let offsets = tensor
+        .get("data_offsets")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "embeddings: missing data_offsets".to_string())?;
+    let a = offsets[0].as_u64().unwrap_or(0) as usize;
+    let b = offsets[1].as_u64().unwrap_or(0) as usize;
+    let start = header_end + a;
+    let end = header_end + b;
+    if end > buf.len() || (b - a) != rows * cols * 4 {
+        return Err("embeddings: data range inconsistent with shape".to_string());
+    }
+    let floats: Vec<f32> = buf[start..end]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    Ok((floats, rows, cols))
 }
 
 /// Dual-encoder for latent space: routes between fast (static) and precision (external) paths.

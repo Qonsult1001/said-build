@@ -46,6 +46,10 @@ pub mod lsp_client;
 pub mod said_file;
 pub mod engine;
 pub mod latent_cluster;
+// Hand-written WordPiece tokenizer for static-embed inference (issue #4):
+// avoids HF `tokenizers`' ~250MB first-encode transient.
+#[cfg(feature = "static-embed")]
+pub mod wordpiece_tok;
 pub mod dream;
 pub mod recall;
 pub mod salience;
