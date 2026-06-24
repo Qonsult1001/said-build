@@ -557,7 +557,8 @@ pub struct CrystallineCore {
     // soundex → set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
     phonetic_index_fast: AHashMap<String, AHashSet<u32>>,
     vocabulary_fast: AHashSet<String>,
-    word_inverted_fast: AHashMap<String, AHashSet<usize>>,
+    // word-id → set of doc indices (was AHashMap<String,_>; interned for the #4 fix).
+    word_inverted_fast: AHashMap<u32, AHashSet<usize>>,
 
     // Word interning (#4 OOM fix): a single canonical store of each unique word, so the
     // lexical `_fast` structures above can key on a compact `u32` id instead of duplicating
@@ -2341,8 +2342,9 @@ impl CrystallineCore {
             .map(|set| set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
         let doc_word_tf: usize = self.doc_word_tf_fast.iter()
             .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
+        // word_inverted_fast keys are now interned u32 ids (4 bytes), not Strings.
         let word_inv: usize = self.word_inverted_fast.iter()
-            .map(|(w, set)| s_bytes(w) + set.len() * 8 + 48).sum();
+            .map(|(_id, set)| 4 + set.len() * 8 + 48).sum();
         // phonetic values are now interned u32 ids (4 bytes), not Strings.
         let phonetic: usize = self.phonetic_index_fast.iter()
             .map(|(k, set)| s_bytes(k) + set.len() * 4 + 48).sum();
@@ -2414,8 +2416,9 @@ impl CrystallineCore {
             doc_text.push_str(w);
             word_set.insert(w.clone());
             *word_tf.entry(w.clone()).or_insert(0) += 1;
+            let wid = self.intern_word(w);
             self.word_inverted_fast
-                .entry(w.clone())
+                .entry(wid)
                 .or_insert_with(AHashSet::new)
                 .insert(doc_idx);
             self.vocabulary_fast.insert(w.clone());
@@ -2495,15 +2498,15 @@ impl CrystallineCore {
         // Phase 2: Sequential merge (builds shared inverted index + phonetic + vocabulary)
         for (doc_idx, result) in results.into_iter().enumerate() {
             for word in &result.unique_words {
+                let wid = self.intern_word(word);
                 self.word_inverted_fast
-                    .entry(word.clone())
+                    .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
 
                 self.vocabulary_fast.insert(word.clone());
 
                 let sx = self.get_soundex(word);
-                let wid = self.intern_word(word);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
@@ -2869,14 +2872,14 @@ impl CrystallineCore {
                 
                 word_set.insert(w_normalized.clone());
                 *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
-                
+
+                let wid = self.intern_word(&w_normalized);
                 self.word_inverted_fast
-                    .entry(w_normalized.clone())
+                    .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
-                
+
                 let sx = self.get_soundex(&w_normalized);
-                let wid = self.intern_word(&w_normalized);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
@@ -3019,13 +3022,13 @@ impl CrystallineCore {
                 word_set.insert(w_normalized.clone());
                 *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
 
+                let wid = self.intern_word(&w_normalized);
                 self.word_inverted_fast
-                    .entry(w_normalized.clone())
+                    .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
 
                 let sx = self.get_soundex(&w_normalized);
-                let wid = self.intern_word(&w_normalized);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
@@ -3937,10 +3940,12 @@ impl CrystallineCore {
         }
         let mut candidates: AHashSet<usize> = AHashSet::new();
 
-        // Word-level candidates (from word_inverted_fast)
+        // Word-level candidates (from word_inverted_fast, keyed by interned word-id)
         for word in q_expanded.iter() {
-            if let Some(doc_indices) = self.word_inverted_fast.get(word) {
-                candidates.extend(doc_indices.iter());
+            if let Some(&wid) = self.word_to_id.get(word) {
+                if let Some(doc_indices) = self.word_inverted_fast.get(&wid) {
+                    candidates.extend(doc_indices.iter());
+                }
             }
         }
 
@@ -4598,8 +4603,8 @@ impl CrystallineCore {
             buf.extend_from_slice(&(wb.len() as u16).to_le_bytes());
             buf.extend_from_slice(wb);
             buf.extend_from_slice(&idf.to_le_bytes());
-            // Word inverted index entries
-            if let Some(doc_indices) = self.word_inverted_fast.get(word) {
+            // Word inverted index entries (look up via the interned word-id)
+            if let Some(doc_indices) = self.word_to_id.get(word).and_then(|wid| self.word_inverted_fast.get(wid)) {
                 let indices: Vec<u16> = doc_indices.iter().map(|&i| i as u16).collect();
                 buf.extend_from_slice(&(indices.len() as u16).to_le_bytes());
                 for idx in &indices {
@@ -4920,7 +4925,8 @@ impl CrystallineCore {
                 }
             }
             if !doc_indices.is_empty() {
-                self.word_inverted_fast.insert(word.clone(), doc_indices);
+                let wid = self.intern_word(&word);
+                self.word_inverted_fast.insert(wid, doc_indices);
             }
 
             // Phonetic index
