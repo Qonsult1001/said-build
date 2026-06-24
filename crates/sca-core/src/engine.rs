@@ -349,6 +349,15 @@ impl ScaEngine {
             self.word_idf = new_idf.collect();
         }
 
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let dtn: usize = self.doc_texts_normalized.iter().map(|s| s.len()).sum();
+            let adw_words: usize = all_doc_words.iter().map(|v| v.len()).sum();
+            let adw_bytes: usize = all_doc_words.iter().flat_map(|v| v.iter()).map(|s| s.len() + 24).sum();
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            eprintln!("  [mem] index_batch phase A: doc_texts_normalized={:.0}MB  all_doc_words={:.0}MB ({} words)",
+                mb(dtn), mb(adw_bytes), adw_words);
+        }
+
         // B. Stream per-doc: chunk → encode → doc mean → write to mmap temp
         //    RAM stays flat — each doc's passages and embeddings freed immediately.
         let bytes_per_mean = embed_dim * 4; // f32
@@ -359,24 +368,30 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
+        // Bulk-batch passage streaming, per doc (mirrors stream_index's constant-memory
+        // design + model2vec's 1024 batch). A single large doc (e.g. a 400 KB SQL chunk →
+        // ~1,560 passages) used to materialize ALL its passages AND all their embeddings at
+        // once — the encode-phase memory spike (#4). Now we generate the doc's passages,
+        // encode them in batches of PASSAGE_BATCH, fold each batch's embeddings into the
+        // running doc-sum, then DROP the batch. Peak per-doc memory = PASSAGE_BATCH passages
+        // + their embeddings, regardless of doc size. Bulk batch → encoder stays amortized.
+        const PASSAGE_BATCH: usize = 1024;
         for (doc_idx, text) in texts.iter().enumerate() {
-            // NOTE: identical chunking to non-streaming path — full passages, no cap.
-            // This is the HEAD-proven path that preserves quality.
             let passages = Self::chunk_text(text, 512, 256);
-            let passage_embs = encoder.encode_batch(&passages);
-            drop(passages);
-
-            // Normalize per passage + accumulate corpus sum + doc sum
             let mut doc_sum = vec![0.0f64; embed_dim];
-            let n_passages = passage_embs.len();
-            for mut emb in passage_embs {
-                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                for v in &mut emb { *v /= norm; }
-                for (i, &v) in emb.iter().enumerate() {
-                    corpus_sum[i] += v as f64;
-                    doc_sum[i] += v as f64;
+            let n_passages = passages.len();
+            for batch in passages.chunks(PASSAGE_BATCH) {
+                let embs = encoder.encode_batch(batch);
+                for mut emb in embs {
+                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    for v in &mut emb { *v /= norm; }
+                    for (i, &v) in emb.iter().enumerate() {
+                        corpus_sum[i] += v as f64;
+                        doc_sum[i] += v as f64;
+                    }
                 }
             }
+            drop(passages);
             total_passages += n_passages;
 
             // Doc mean: mean(axis=0), re-normalize

@@ -1525,9 +1525,13 @@ impl SaidFile {
                     // recompute-on-growth design, applied within one init). Each chunk's raw
                     // text is read, encoded, lower-cached, then DROPPED before the next — so
                     // the full ~3.8 GB corpus text is NEVER resident at once.
-                    const TEXT_CHUNK: usize = 2000;
+                    // 512 balances encoder batch efficiency against the transient per-chunk
+                    // memory (all_doc_words/doc_texts_normalized for the chunk). Measured:
+                    // chunk=2000 → ~432MB transient, chunk=512 → ~110MB. Overridable via env.
+                    let text_chunk: usize = std::env::var("SAID_TEXT_CHUNK").ok()
+                        .and_then(|s| s.parse().ok()).unwrap_or(512);
                     let mut first = true;
-                    let chunks: Vec<Vec<String>> = doc_ids.chunks(TEXT_CHUNK).map(|c| c.to_vec()).collect();
+                    let chunks: Vec<Vec<String>> = doc_ids.chunks(text_chunk).map(|c| c.to_vec()).collect();
                     for chunk_ids in &chunks {
                         let texts: Vec<String> = chunk_ids.iter()
                             .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
