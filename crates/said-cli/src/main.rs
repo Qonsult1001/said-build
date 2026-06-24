@@ -2356,6 +2356,19 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     };
     try_load_encoder(&mut brain);
 
+    // Streaming-ingest spill (#4): cap the in-RAM `pending` frame buffer so a
+    // large `said init` ingests at constant memory instead of holding the whole
+    // corpus until save(). Default 128 MB; override with SAID_SPILL_BUDGET
+    // (bytes). Setting it to 0 disables the spill (legacy hold-in-RAM). Must be
+    // set BEFORE the phase-1 ingest loop so every remember_as honours it.
+    let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(128 * 1024 * 1024);
+    if spill_budget > 0 {
+        brain.set_stream_spill_budget(spill_budget);
+    }
+
     // Mode guard: `said init` embeds AST chunks as full frames, which counts
     // as content ingest. Enterprise brains refuse this. Callers should use
     // `said admin convert-to-pointer` (planned) or switch to portable mode.

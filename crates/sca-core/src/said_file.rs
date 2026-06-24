@@ -706,6 +706,10 @@ impl SaidFile {
             self.frames.put_with(&opts)
         };
         self.dirty = true;
+        // Streaming-ingest spill (#4): `said init` ingests via remember_as, so
+        // the budget must be honoured on this path too (not just the salience
+        // facade). No-op unless set_stream_spill_budget was called.
+        self.maybe_spill_pending();
         frame_id
     }
 
@@ -866,19 +870,22 @@ impl SaidFile {
     ///     committed frame bytes from `self.data` at `meta.offset`; spilled
     ///     frames satisfy both, so the final save round-trips unchanged.
     ///
-    /// A HEADER_SIZE_V7_1 placeholder is laid down before the first batch so
-    /// every committed offset is > 0 (save()'s uncompacted path filters frames
-    /// with `offset > 0`). The scratch file is NOT a valid .said — it is only a
-    /// byte container for offset resolution and is overwritten by save()'s
-    /// tmp+rename, then removed.
+    /// On the FIRST spill the scratch file is SEEDED with the current
+    /// `self.data` bytes — for a re-init over an existing brain that is the
+    /// whole prior .said, whose committed frames carry offsets into it. We then
+    /// replace `self.data` with the spill mmap, so those existing offsets MUST
+    /// stay valid; seeding keeps byte N at byte N. New spilled frames append
+    /// after. For a fresh `create()` (`self.data` empty) a HEADER_SIZE_V7_1
+    /// zero placeholder is laid down instead so every committed offset is > 0
+    /// (save()'s uncompacted path filters frames with `offset > 0`). The
+    /// scratch file is NOT a valid .said — only a byte container for offset
+    /// resolution — and is removed by save() after it copies the bytes out.
     fn spill_pending_to_disk(&mut self) -> Result<(), String> {
         use std::io::Write;
 
         let spill_path = self.spill_scratch_path();
 
-        // Lay down the placeholder header on the very first spill so committed
-        // offsets are non-zero. We track end-of-file in `self.spill_offset`
-        // rather than stat-ing the file each time.
+        // We track end-of-file in `self.spill_offset` rather than stat-ing.
         let first_spill = !std::path::Path::new(&spill_path).exists();
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -886,10 +893,18 @@ impl SaidFile {
             .open(&spill_path)
             .map_err(|e| format!("open spill file: {}", e))?;
         if first_spill {
-            // Zero placeholder header — never parsed, only reserves offset space.
-            let header = vec![0u8; HEADER_SIZE_V7_1];
-            file.write_all(&header).map_err(|e| format!("write spill header: {}", e))?;
-            self.spill_offset = HEADER_SIZE_V7_1 as u64;
+            let existing_len = self.data.len();
+            if existing_len >= HEADER_SIZE_V7_1 {
+                // Re-init: seed with the prior file so existing committed
+                // offsets remain valid once we swap `self.data` to the spill.
+                file.write_all(self.data.as_slice()).map_err(|e| format!("seed spill from existing data: {}", e))?;
+                self.spill_offset = existing_len as u64;
+            } else {
+                // Fresh brain: zero placeholder header, never parsed.
+                let header = vec![0u8; HEADER_SIZE_V7_1];
+                file.write_all(&header).map_err(|e| format!("write spill header: {}", e))?;
+                self.spill_offset = HEADER_SIZE_V7_1 as u64;
+            }
         }
 
         // Commit pending → bytes at the current absolute end-of-file offset.
@@ -1448,7 +1463,17 @@ impl SaidFile {
     /// `passage_offsets[doc_idx]`, not `doc_idx` directly. We concatenate
     /// Diagnostic passthrough: per-structure heap usage of the lexical index (#4 OOM).
     pub fn lexical_mem_report(&self) -> String {
-        self.engine.core.lexical_mem_report()
+        // Append the FrameStore footprint so the streaming-spill (#4) is
+        // observable: `pending=` is the RAW corpus bytes still held in RAM,
+        // `data_owned=` is bytes of the .said held Owned (mmap counts as 0).
+        // With a spill budget set, `pending` should hover near the budget
+        // instead of climbing to the whole corpus size.
+        format!(
+            "{}\n  frame_store_mem: pending={:.1}MB data_owned={:.1}MB",
+            self.engine.core.lexical_mem_report(),
+            self.frames.pending_bytes() as f64 / (1024.0 * 1024.0),
+            self.data.owned_len() as f64 / (1024.0 * 1024.0),
+        )
     }
 
     /// every passage belonging to this doc so the Hamming distance reflects
