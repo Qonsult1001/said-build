@@ -325,13 +325,17 @@ impl ScaEngine {
             for w in &unique {
                 *doc_freq.entry(w.to_string()).or_insert(0.0) += 1.0;
             }
-            self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
-            // NOTE: do NOT cache doc_texts_original here. It is a full second copy of the
-            // entire corpus, and on the CLI/index path nothing reads it after indexing
-            // (the recall_fused fallback is gated on doc_texts_normalized being empty,
-            // which we just populated). At 64K frames this duplicate copy was a primary
-            // driver of the index-stage OOM (#4). Deserialize paths that genuinely need it
-            // populate it separately.
+            // #4 memory: do NOT cache doc_texts_normalized here — it is a full normalized
+            // copy of the entire corpus (measured 159MB on Amortization, scales to GBs on
+            // big repos). entity_match_score now reads CrystallineCore's per-doc normalized
+            // text (doc_texts_fast) instead, so this dedicated cache is redundant on the
+            // CLI/index path. Measured: Amortization peak 1083MB → 920MB, recall unchanged
+            // (15/15 regression green). doc_texts_original is also not cached (same reason);
+            // both empty → recall.rs ensure_ready rebuild is a no-op, entity scoring uses
+            // doc_texts_fast. (SAID_KEEP_NORMALIZED forces the old cache back for diagnostics.)
+            if std::env::var("SAID_KEEP_NORMALIZED").is_ok() {
+                self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
+            }
             all_doc_words.push(words);
         }
 
@@ -1040,10 +1044,22 @@ impl ScaEngine {
             Some(idx) => idx,
             None => return 0.0,
         };
-        if doc_idx >= self.doc_texts_normalized.len() {
-            return 0.0;
-        }
-        let doc_text = &self.doc_texts_normalized[doc_idx];
+        // Prefer the dedicated normalized cache when present (PyO3/deserialize path); on the
+        // CLI/init path it is now left empty to save ~corpus-sized RAM (#4), and we fall back
+        // to CrystallineCore's per-doc normalized text (doc_texts_fast). Both are lowercase
+        // normalized; entity tokens are proper nouns (len>=3) so the >=3-word filter in
+        // doc_texts_fast doesn't drop them.
+        let owned;
+        let doc_text: &str = if doc_idx < self.doc_texts_normalized.len()
+            && !self.doc_texts_normalized[doc_idx].is_empty()
+        {
+            &self.doc_texts_normalized[doc_idx]
+        } else if let Some(t) = self.core.get_doc_text_by_index(doc_idx) {
+            t
+        } else {
+            owned = String::new();
+            &owned
+        };
         let mut hits = 0;
         for ent in entities {
             let ent_lower = Self::normalize_unicode(ent).to_lowercase();

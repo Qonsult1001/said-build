@@ -2415,11 +2415,12 @@ impl CrystallineCore {
     pub fn lexical_mem_report(&self) -> String {
         let (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
         let mb = |b: usize| (b as f64) / 1_048_576.0;
+        let text_store = self.text_store.total_bytes() as usize; // the InMemoryTextStore raw-text copy
         format!(
-            "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  | TOTAL={:.0}MB",
+            "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  text_store={:.0}MB  | TOTAL={:.0}MB",
             self.doc_ids.len(),
-            mb(doc_texts), mb(doc_word_sets), mb(doc_word_tf), mb(word_inv), mb(phonetic), mb(vocab),
-            mb(doc_texts + doc_word_sets + doc_word_tf + word_inv + phonetic + vocab),
+            mb(doc_texts), mb(doc_word_sets), mb(doc_word_tf), mb(word_inv), mb(phonetic), mb(vocab), mb(text_store),
+            mb(doc_texts + doc_word_sets + doc_word_tf + word_inv + phonetic + vocab + text_store),
         )
     }
 
