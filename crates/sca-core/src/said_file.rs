@@ -1328,6 +1328,22 @@ impl SaidFile {
         self.engine.core.lexical_mem_report()
     }
 
+    /// SaidFile-level resident memory dump (the holders NOT in CrystallineCore's lexical
+    /// report): the corpus text caches, the trigram index, and the file data handle.
+    /// Used to find the full #4 memory picture beyond the lexical index.
+    pub fn saidfile_mem_report(&self) -> String {
+        let mb = |b: usize| (b as f64) / 1_048_576.0;
+        let ct: usize = self.corpus_texts.iter().map(|s| s.len()).sum();
+        let ctl: usize = self.corpus_texts_lower.iter().map(|s| s.len()).sum();
+        let cids: usize = self.corpus_ids.iter().map(|s| s.len() + 24).sum();
+        let dtn: usize = self.engine.doc_texts_normalized.iter().map(|s| s.len()).sum();
+        let trg = self.trigram_index.as_ref().map(|t| t.approx_bytes()).unwrap_or(0);
+        let data = match &self.data { FileData::Owned(v) => v.len(), FileData::Mmap(_) => 0 };
+        format!(
+            "saidfile_mem: corpus_texts={:.0}MB corpus_texts_lower={:.0}MB corpus_ids={:.0}MB doc_texts_normalized={:.0}MB trigram={:.0}MB data_owned={:.0}MB",
+            mb(ct), mb(ctl), mb(cids), mb(dtn), mb(trg), mb(data))
+    }
+
     /// Total approximate heap bytes of the lexical `_fast` index (#4 OOM driver).
     pub fn lexical_mem_bytes(&self) -> usize {
         self.engine.core.lexical_mem_bytes()

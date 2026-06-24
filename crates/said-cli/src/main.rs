@@ -2604,6 +2604,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     }
     if std::env::var("SAID_MEM_REPORT").is_ok() {
         eprintln!("  {}", brain.lexical_mem_report());
+        eprintln!("  {}", brain.saidfile_mem_report());
     }
 
     // PHASE 3: Compact blocks + save to disk
@@ -2618,6 +2619,9 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     if !json {
         eprintln!("\r  [3/3] Compacted + saved  ({:.1}s)                        ",
                   t_phase3.elapsed().as_secs_f64());
+    }
+    if std::env::var("SAID_MEM_REPORT").is_ok() {
+        eprintln!("  [post-save] {}", brain.saidfile_mem_report());
     }
 
     // Auto-tag new frames for any lens files (State Synchronization)
