@@ -550,7 +550,8 @@ pub struct CrystallineCore {
     pub(crate) bytes_per_passage: usize,
     
     // Word-level lexical index (sca_dropin style: AHashMap for speed)
-    doc_word_sets_fast: Vec<AHashSet<String>>,
+    // per-doc set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
+    doc_word_sets_fast: Vec<AHashSet<u32>>,
     doc_word_tf_fast: Vec<AHashMap<String, u32>>,
     doc_texts_fast: Vec<String>,
     word_idf_fast: AHashMap<String, f32>,
@@ -1816,7 +1817,7 @@ impl CrystallineCore {
                     .map(|m| m.keys().cloned().collect())
                     .unwrap_or_default();
                 let hit_idf: f32 = q_expanded.iter()
-                    .filter(|w| doc_words.contains(*w))
+                    .filter(|w| doc_words.contains(w.as_str()))
                     .map(|w| *self.word_idf.get(w).unwrap_or(&1.0))
                     .sum();
                 if hit_idf > 0.0 {
@@ -2338,8 +2339,9 @@ impl CrystallineCore {
     fn lexical_mem_parts(&self) -> (usize, usize, usize, usize, usize, usize) {
         fn s_bytes(s: &str) -> usize { s.len() + 24 } // String header ~24B + bytes
         let doc_texts: usize = self.doc_texts_fast.iter().map(|s| s_bytes(s)).sum();
+        // doc_word_sets_fast now holds interned u32 ids (4 bytes each), not Strings.
         let doc_word_sets: usize = self.doc_word_sets_fast.iter()
-            .map(|set| set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
+            .map(|set| set.len() * 4 + 48).sum();
         let doc_word_tf: usize = self.doc_word_tf_fast.iter()
             .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
         // word_inverted_fast keys are now interned u32 ids (4 bytes), not Strings.
@@ -2381,6 +2383,19 @@ impl CrystallineCore {
         self.word_vocab.get(id as usize).map(|s| s.as_str())
     }
 
+    /// Space-join a doc's interned word-id set back into a text string (phrase-match
+    /// fallback used when doc_texts_fast is empty). Order is set-iteration order — same
+    /// as the previous String-set behavior.
+    fn doc_words_joined(&self, doc_idx: usize) -> String {
+        match self.doc_word_sets_fast.get(doc_idx) {
+            Some(set) => set.iter()
+                .filter_map(|&id| self.word_of(id))
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => String::new(),
+        }
+    }
+
     /// Diagnostic: per-structure breakdown of `lexical_mem_bytes`. SAID_MEM_REPORT=1.
     pub fn lexical_mem_report(&self) -> String {
         let (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
@@ -2414,9 +2429,9 @@ impl CrystallineCore {
         for w in words {
             if !doc_text.is_empty() { doc_text.push(' '); }
             doc_text.push_str(w);
-            word_set.insert(w.clone());
-            *word_tf.entry(w.clone()).or_insert(0) += 1;
             let wid = self.intern_word(w);
+            word_set.insert(wid);
+            *word_tf.entry(w.clone()).or_insert(0) += 1;
             self.word_inverted_fast
                 .entry(wid)
                 .or_insert_with(AHashSet::new)
@@ -2513,7 +2528,11 @@ impl CrystallineCore {
                     .insert(wid);
             }
 
-            self.doc_word_sets_fast.push(result.word_set);
+            // Convert this doc's word-set (Strings) to interned ids (all already interned
+            // in the loop above, so this just resolves them).
+            let id_set: ahash::AHashSet<u32> = result.word_set.iter()
+                .map(|w| self.intern_word(w)).collect();
+            self.doc_word_sets_fast.push(id_set);
             self.doc_word_tf_fast.push(result.word_tf);
             self.doc_texts_fast.push(result.doc_text);
         }
@@ -2524,8 +2543,18 @@ impl CrystallineCore {
         self.art_prefilter(q_expanded, query_text)
     }
 
-    /// Get doc word set by index (for lexical scoring in engine.rs).
-    pub fn get_doc_word_set(&self, doc_idx: usize) -> Option<&ahash::AHashSet<String>> {
+    /// True if doc `doc_idx` contains `word` (resolves the word to its interned id).
+    /// Replaces the former `get_doc_word_set(...).contains(word)` pattern now that the
+    /// per-doc sets key on u32 ids (#4 interning).
+    pub fn doc_has_word(&self, doc_idx: usize, word: &str) -> bool {
+        match (self.word_to_id.get(word), self.doc_word_sets_fast.get(doc_idx)) {
+            (Some(id), Some(set)) => set.contains(id),
+            _ => false,
+        }
+    }
+
+    /// Get doc word-id set by index (internal lexical scoring).
+    pub fn get_doc_word_set(&self, doc_idx: usize) -> Option<&ahash::AHashSet<u32>> {
         self.doc_word_sets_fast.get(doc_idx)
     }
 
@@ -2656,9 +2685,7 @@ impl CrystallineCore {
                 if !self.doc_texts_fast.is_empty() && i1 < self.doc_texts_fast.len() && i2 < self.doc_texts_fast.len() {
                     (self.doc_texts_fast[i1].clone(), self.doc_texts_fast[i2].clone())
                 } else if i1 < self.doc_word_sets_fast.len() && i2 < self.doc_word_sets_fast.len() {
-                    let t1: String = self.doc_word_sets_fast[i1].iter().cloned().collect::<Vec<_>>().join(" ");
-                    let t2: String = self.doc_word_sets_fast[i2].iter().cloned().collect::<Vec<_>>().join(" ");
-                    (t1, t2)
+                    (self.doc_words_joined(i1), self.doc_words_joined(i2))
                 } else {
                     return false;
                 }
@@ -2691,7 +2718,7 @@ impl CrystallineCore {
                 if !self.doc_texts_fast.is_empty() && i < self.doc_texts_fast.len() {
                     self.doc_texts_fast[i].clone() // already lowercase
                 } else if i < self.doc_word_sets_fast.len() {
-                    self.doc_word_sets_fast[i].iter().cloned().collect::<Vec<_>>().join(" ")
+                    self.doc_words_joined(i)
                 } else {
                     return 0;
                 }
@@ -2722,7 +2749,7 @@ impl CrystallineCore {
             let doc_text = if !self.doc_texts_fast.is_empty() && i < self.doc_texts_fast.len() {
                 self.doc_texts_fast[i].to_lowercase()
             } else if i < self.doc_word_sets_fast.len() {
-                self.doc_word_sets_fast[i].iter().cloned().collect::<Vec<_>>().join(" ")
+                self.doc_words_joined(i)
             } else {
                 continue;
             };
@@ -2870,10 +2897,10 @@ impl CrystallineCore {
                     continue;
                 }
                 
-                word_set.insert(w_normalized.clone());
+                let wid = self.intern_word(&w_normalized);
+                word_set.insert(wid);
                 *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
 
-                let wid = self.intern_word(&w_normalized);
                 self.word_inverted_fast
                     .entry(wid)
                     .or_insert_with(AHashSet::new)
@@ -2887,7 +2914,7 @@ impl CrystallineCore {
 
                 self.vocabulary_fast.insert(w_normalized);
             }
-            
+
             self.doc_word_sets_fast.push(word_set);
             self.doc_word_tf_fast.push(word_tf);
             self.doc_texts_fast.push(doc_text);
@@ -3019,10 +3046,10 @@ impl CrystallineCore {
                     continue;
                 }
 
-                word_set.insert(w_normalized.clone());
+                let wid = self.intern_word(&w_normalized);
+                word_set.insert(wid);
                 *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
 
-                let wid = self.intern_word(&w_normalized);
                 self.word_inverted_fast
                     .entry(wid)
                     .or_insert_with(AHashSet::new)
@@ -3277,12 +3304,12 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
                     }
-                    
+
                     let score = if idf_total > 0.0 { idf_matched / idf_total } else { 0.0 };
                     (score, matched)
                 } else {
@@ -3438,7 +3465,7 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
@@ -3507,7 +3534,7 @@ impl CrystallineCore {
             let doc_words = &self.doc_word_sets_fast[doc_idx];
 
             let hit_idf: f32 = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .map(|w| *self.word_idf_fast.get(w).unwrap_or(&1.0))
                 .sum();
 
@@ -3652,7 +3679,7 @@ impl CrystallineCore {
             
             // 2. LEXICAL SCORE (Full TF-IDF)
             let overlap: AHashSet<String> = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .cloned()
                 .collect();
             
@@ -3697,7 +3724,7 @@ impl CrystallineCore {
             let mut phrase_match_boost = 1.0f32;
             if !phrase_windows.is_empty() && !overlap.is_empty() {
                 'outer: for pw in &phrase_windows {
-                    if !pw.clean_words.iter().all(|w| doc_words.contains(w)) { continue; }
+                    if !pw.clean_words.iter().all(|w| self.doc_has_word(doc_idx, w)) { continue; }
                     if doc_text.contains(&pw.phrase) {
                         phrase_match_boost = if pw.w_size == 4 { 1.25 } else { 1.15 };
                         break 'outer;
@@ -3714,7 +3741,7 @@ impl CrystallineCore {
                 for word in &query_original_words {
                     if word.len() >= 3 && word.chars().next().unwrap().is_uppercase() {
                         let word_lower = word.to_lowercase();
-                        if doc_text.contains(*word) || doc_words.contains(&word_lower) {
+                        if doc_text.contains(*word) || self.doc_has_word(doc_idx, &word_lower) {
                             final_score *= 1.15;
                             break;
                         }
@@ -3995,7 +4022,7 @@ impl CrystallineCore {
             let doc_words = &self.doc_word_sets_fast[doc_idx];
 
             let hit_idf: f32 = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .map(|w| *self.word_idf_fast.get(w).unwrap_or(&1.0))
                 .sum();
 
@@ -4136,7 +4163,7 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
@@ -4913,19 +4940,19 @@ impl CrystallineCore {
             if pos + 2 > data.len() { break; }
             let num_indices = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
             pos += 2;
+            let wid = self.intern_word(&word);
             let mut doc_indices = AHashSet::new();
             for _ in 0..num_indices {
                 if pos + 2 > data.len() { break; }
                 let doc_idx = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
                 pos += 2;
                 doc_indices.insert(doc_idx);
-                // Also populate doc_word_sets_fast
+                // Also populate doc_word_sets_fast (interned id)
                 if doc_idx < num_docs {
-                    self.doc_word_sets_fast[doc_idx].insert(word.clone());
+                    self.doc_word_sets_fast[doc_idx].insert(wid);
                 }
             }
             if !doc_indices.is_empty() {
-                let wid = self.intern_word(&word);
                 self.word_inverted_fast.insert(wid, doc_indices);
             }
 

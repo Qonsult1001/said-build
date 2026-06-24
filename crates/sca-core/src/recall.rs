@@ -261,10 +261,9 @@ pub fn search_pure_lexical(
     let mut results: Vec<(String, f32)> = Vec::new();
     let n_docs = core.num_documents();
     for doc_idx in 0..n_docs {
-        let Some(doc_words) = core.get_doc_word_set(doc_idx) else { continue };
         let hit_idf: f32 = q_expanded
             .iter()
-            .filter(|w| doc_words.contains(*w))
+            .filter(|w| core.doc_has_word(doc_idx, w))
             .map(|w| core.get_word_idf(w))
             .sum();
         if hit_idf > 0.0 {
