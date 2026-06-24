@@ -1471,41 +1471,37 @@ impl SaidFile {
     where
         F: FnMut(usize, usize, usize),
     {
-        let mut doc_ids: Vec<String> = Vec::new();
-        let mut doc_texts: Vec<String> = Vec::new();
-
-        let all_ids: Vec<String> = self.frames.active_doc_ids().iter().map(|s| s.to_string()).collect();
-        for doc_id in &all_ids {
+        // Collect only the active doc IDs (cheap — ids, not text). The texts are read from
+        // the mmap'd frames in CHUNKS below so the full corpus text is NEVER resident at
+        // once (at 35k Wonga frames the raw text is ~3.8 GB — collecting it all up front was
+        // the index-stage OOM, #4). We still need ALL ids to detect the incremental case.
+        let all_active: Vec<String> = self.frames.active_doc_ids().iter().map(|s| s.to_string()).collect();
+        let mut doc_ids: Vec<String> = Vec::with_capacity(all_active.len());
+        for doc_id in &all_active {
+            // keep an id only if its frame has non-empty text (matches prior behavior)
             if let Some(text) = self.frames.read_frame_text(doc_id, self.data.as_slice()) {
                 if !text.is_empty() {
-                    doc_ids.push(doc_id.to_string());
-                    doc_texts.push(text);
+                    doc_ids.push(doc_id.clone());
                 }
             }
-        }
-        if std::env::var("SAID_MEM_REPORT").is_ok() {
-            let dt: usize = doc_texts.iter().map(|s| s.len()).sum();
-            let di: usize = doc_ids.iter().map(|s| s.len()).sum();
-            eprintln!("  [mem] build_index collected doc_texts: {} docs, {:.1} MB text + {:.1} MB ids resident",
-                doc_texts.len(), dt as f64 / 1_048_576.0, di as f64 / 1_048_576.0);
         }
 
         // INCREMENTAL vs FULL — one path decides. If the index is already populated
         // (corpus_ids non-empty) and the only change is NEW frames appended (existing
         // ids unchanged), and the growth is below the recompute threshold, append just
-        // the new frames against the persisted corpus mean (O(new) not O(all)). This is
-        // the documented "recompute on growth" design (3.1) and makes `learn-fix`,
-        // `add`, and PDF/Word ingest all O(N)-incremental for free — same global path.
+        // the new frames against the persisted corpus mean (O(new) not O(all)).
         let indexed: std::collections::HashSet<&str> =
             self.corpus_ids.iter().map(|s| s.as_str()).collect();
         let prior = self.corpus_ids.len();
         let existing_still_present = !indexed.is_empty()
             && doc_ids.iter().filter(|d| indexed.contains(d.as_str())).count() == prior;
         let new_ids: Vec<String> = doc_ids.iter().filter(|d| !indexed.contains(d.as_str())).cloned().collect();
-        // Recompute on growth: full rebuild if the corpus grew by > this fraction
-        // since the last full build (keeps the corpus mean representative).
         let growth_ok = prior > 0 && (new_ids.len() as f32) <= (prior as f32) * RECOMPUTE_GROWTH;
         let can_incremental = existing_still_present && growth_ok && !new_ids.is_empty();
+
+        // Build corpus_texts_lower incrementally so we hold at most ONE chunk of raw text
+        // plus the (smaller) growing lowercase cache — never the full raw corpus twice.
+        let mut corpus_texts_lower: Vec<String> = Vec::with_capacity(doc_ids.len());
 
         if !doc_ids.is_empty() {
             #[cfg(feature = "static-embed")]
@@ -1513,46 +1509,79 @@ impl SaidFile {
                 if self.engine.encode_query("test").is_none() {
                     let _ = self.engine.try_auto_load_encoder();
                 }
+
                 if can_incremental {
                     // Append ONLY the new frames; existing fingerprints untouched.
+                    let _ = &progress;
                     let new_texts: Vec<String> = new_ids.iter()
-                        .filter_map(|id| doc_ids.iter().position(|d| d == id).map(|i| doc_texts[i].clone()))
+                        .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
                         .collect();
-                    let _ = progress;
                     self.engine.index_batch_incremental(&new_ids, &new_texts)?;
+                    // corpus_texts_lower is rebuilt fully from frames after the if-block.
                 } else {
                     self.engine.clear();
-                    self.engine.index_batch_with_progress(&doc_ids, &doc_texts, progress)?;
+                    // CHUNKED full build: first chunk does the full mean-establishing build;
+                    // later chunks append incrementally against that mean (the documented
+                    // recompute-on-growth design, applied within one init). Each chunk's raw
+                    // text is read, encoded, lower-cached, then DROPPED before the next — so
+                    // the full ~3.8 GB corpus text is NEVER resident at once.
+                    const TEXT_CHUNK: usize = 2000;
+                    let mut first = true;
+                    let chunks: Vec<Vec<String>> = doc_ids.chunks(TEXT_CHUNK).map(|c| c.to_vec()).collect();
+                    for chunk_ids in &chunks {
+                        let texts: Vec<String> = chunk_ids.iter()
+                            .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
+                            .collect();
+                        if first {
+                            self.engine.index_batch_with_progress(chunk_ids, &texts, |_, _, _| {})?;
+                            first = false;
+                        } else {
+                            self.engine.index_batch_incremental(chunk_ids, &texts)?;
+                        }
+                        for t in &texts { corpus_texts_lower.push(t.to_lowercase()); }
+                        // texts dropped here before the next chunk is read
+                    }
                 }
-                // s_slow_write happens at QUERY time (in search_internal), not
-                // index time. The brain learns from what users ASK, not from
-                // bulk data. Eliminating the per-doc encode_query loop saves
-                // ~5 minutes on a 27K-frame corpus (verified on SAID-ECHO).
             }
             #[cfg(not(feature = "static-embed"))]
             {
-                let _ = (progress, can_incremental, &new_ids);
+                let _ = (&progress, can_incremental, &new_ids);
                 self.engine.clear();
-                for (id, text) in doc_ids.iter().zip(doc_texts.iter()) {
-                    self.engine.stream_index(id, text, 512);
+                const TEXT_CHUNK: usize = 2000;
+                for chunk_ids in doc_ids.chunks(TEXT_CHUNK) {
+                    let texts = read_texts(chunk_ids, &self.frames, self.data.as_slice());
+                    for (id, text) in chunk_ids.iter().zip(texts.iter()) {
+                        self.engine.stream_index(id, text, 512);
+                        corpus_texts_lower.push(text.to_lowercase());
+                    }
                 }
             }
         }
 
-        // Cache texts for grep re-rank
-        self.corpus_texts_lower = doc_texts.iter().map(|t| t.to_lowercase()).collect();
-        self.corpus_ids = doc_ids;
-        self.corpus_texts = doc_texts;
+        // For the incremental path, corpus_texts_lower above is empty (we only read new
+        // texts). Rebuild it for the FULL id set from frames so query-time grep has it.
+        if can_incremental || corpus_texts_lower.len() != doc_ids.len() {
+            corpus_texts_lower.clear();
+            for id in &doc_ids {
+                corpus_texts_lower.push(
+                    self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default().to_lowercase());
+            }
+        }
 
-        // Release the engine's RAW-text cache (doc_texts_original). On the CLI/SaidFile
-        // path it is a transient build artifact: it is NEVER read after indexing (its only
-        // reader, recall.rs:307, is a fallback gated on doc_texts_normalized being empty —
-        // which build always populates) and it is NOT serialized (the portable save stores
-        // breadcrumbs only; text lives in frames). Holding it duplicated the entire raw
-        // corpus a second time in RAM and was part of the index-stage OOM (#4). Dropping it
-        // takes the resident text caches from ~4× corpus to ~3×.
+        // corpus_texts (RAW) is kept as N EMPTY-STRING placeholders — same shape as the
+        // open()/deserialize path (said_file.rs ~573): position-indexed readers (recall
+        // scope-narrowing at recall.rs:1108) need len()==corpus_ids.len(), but the actual
+        // raw text is read from the mmap'd frames on demand. This removes a full second
+        // resident copy of the corpus text. NOTE: rebuild_trigram_index's `texts_from_cache`
+        // guard is hardened (below) to treat all-empty placeholders as "not cached" so it
+        // reads real text from frames — otherwise `sym`/trigram would index empty text.
+        self.corpus_texts = vec![String::new(); doc_ids.len()];
+        self.corpus_texts_lower = corpus_texts_lower;
+        self.corpus_ids = doc_ids;
+
         self.engine.release_original_texts();
 
+        let _ = progress;
         Ok(())
     }
 
@@ -1988,8 +2017,13 @@ impl SaidFile {
     /// mmap via frames.read_frame_text().
     pub fn rebuild_trigram_index(&mut self) {
         // Pick the doc_id list and text source
+        // Use the cached corpus text ONLY if it actually holds text. With the chunked
+        // build_index, corpus_texts is N empty-string PLACEHOLDERS (raw text read from frames
+        // on demand) — treat that as "not cached" so we read real text from the frames here,
+        // otherwise the trigram + symbol index would be built from empty text.
+        let corpus_texts_has_text = self.corpus_texts.iter().any(|t| !t.is_empty());
         let (doc_ids, texts_from_cache): (Vec<String>, bool) = if !self.corpus_ids.is_empty()
-            && !self.corpus_texts.is_empty()
+            && corpus_texts_has_text
             && self.corpus_ids.len() == self.corpus_texts.len()
         {
             (self.corpus_ids.clone(), true)
