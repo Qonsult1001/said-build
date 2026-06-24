@@ -554,9 +554,18 @@ pub struct CrystallineCore {
     doc_word_tf_fast: Vec<AHashMap<String, u32>>,
     doc_texts_fast: Vec<String>,
     word_idf_fast: AHashMap<String, f32>,
-    phonetic_index_fast: AHashMap<String, AHashSet<String>>,
+    // soundex → set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
+    phonetic_index_fast: AHashMap<String, AHashSet<u32>>,
     vocabulary_fast: AHashSet<String>,
     word_inverted_fast: AHashMap<String, AHashSet<usize>>,
+
+    // Word interning (#4 OOM fix): a single canonical store of each unique word, so the
+    // lexical `_fast` structures above can key on a compact `u32` id instead of duplicating
+    // the same `String` ~9× across them. `word_vocab[id] == word`; `word_to_id[word] == id`.
+    // Populated alongside the String structures during migration (one structure at a time),
+    // so each step is independently testable against the recall + memory gates.
+    word_vocab: Vec<String>,
+    word_to_id: AHashMap<String, u32>,
     
     // Hybrid search weights
     hybrid_alpha_semantic: f32,
@@ -627,6 +636,8 @@ impl Clone for CrystallineCore {
             phonetic_index_fast: self.phonetic_index_fast.clone(),
             vocabulary_fast: self.vocabulary_fast.clone(),
             word_inverted_fast: self.word_inverted_fast.clone(),
+            word_vocab: self.word_vocab.clone(),
+            word_to_id: self.word_to_id.clone(),
             hybrid_alpha_semantic: self.hybrid_alpha_semantic,
             hybrid_alpha_lexical: self.hybrid_alpha_lexical,
             rerank_depth: self.rerank_depth,
@@ -711,6 +722,8 @@ impl CrystallineCore {
             phonetic_index_fast: AHashMap::new(),
             vocabulary_fast: AHashSet::new(),
             word_inverted_fast: AHashMap::new(),
+            word_vocab: Vec::new(),
+            word_to_id: AHashMap::new(),
             hybrid_alpha_semantic: 0.60,
             hybrid_alpha_lexical: 0.40,
             rerank_depth: 100,
@@ -2330,9 +2343,13 @@ impl CrystallineCore {
             .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
         let word_inv: usize = self.word_inverted_fast.iter()
             .map(|(w, set)| s_bytes(w) + set.len() * 8 + 48).sum();
+        // phonetic values are now interned u32 ids (4 bytes), not Strings.
         let phonetic: usize = self.phonetic_index_fast.iter()
-            .map(|(k, set)| s_bytes(k) + set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
-        let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum();
+            .map(|(k, set)| s_bytes(k) + set.len() * 4 + 48).sum();
+        // the interned vocab (word_vocab + word_to_id) replaces the duplicated Strings.
+        let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum::<usize>()
+            + self.word_vocab.iter().map(|w| s_bytes(w)).sum::<usize>()
+            + self.word_to_id.iter().map(|(w, _)| s_bytes(w) + 4 + 8).sum::<usize>();
         (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab)
     }
 
@@ -2340,6 +2357,26 @@ impl CrystallineCore {
     pub fn lexical_mem_bytes(&self) -> usize {
         let (a, b, c, d, e, f) = self.lexical_mem_parts();
         a + b + c + d + e + f
+    }
+
+    /// Intern a word → compact u32 id, storing the canonical String exactly ONCE in
+    /// `word_vocab`. Subsequent lookups of the same word return the existing id (no new
+    /// allocation). This is the foundation for keying the lexical `_fast` structures on
+    /// u32 instead of duplicating each word's String across all of them (#4 OOM fix).
+    fn intern_word(&mut self, word: &str) -> u32 {
+        if let Some(&id) = self.word_to_id.get(word) {
+            return id;
+        }
+        let id = self.word_vocab.len() as u32;
+        self.word_vocab.push(word.to_string());
+        self.word_to_id.insert(word.to_string(), id);
+        id
+    }
+
+    /// Resolve an interned id back to its word (None if out of range).
+    #[allow(dead_code)]
+    fn word_of(&self, id: u32) -> Option<&str> {
+        self.word_vocab.get(id as usize).map(|s| s.as_str())
     }
 
     /// Diagnostic: per-structure breakdown of `lexical_mem_bytes`. SAID_MEM_REPORT=1.
@@ -2466,10 +2503,11 @@ impl CrystallineCore {
                 self.vocabulary_fast.insert(word.clone());
 
                 let sx = self.get_soundex(word);
+                let wid = self.intern_word(word);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
-                    .insert(word.clone());
+                    .insert(wid);
             }
 
             self.doc_word_sets_fast.push(result.word_set);
@@ -2838,11 +2876,12 @@ impl CrystallineCore {
                     .insert(doc_idx);
                 
                 let sx = self.get_soundex(&w_normalized);
+                let wid = self.intern_word(&w_normalized);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
-                    .insert(w_normalized.clone());
-                
+                    .insert(wid);
+
                 self.vocabulary_fast.insert(w_normalized);
             }
             
@@ -2986,10 +3025,11 @@ impl CrystallineCore {
                     .insert(doc_idx);
 
                 let sx = self.get_soundex(&w_normalized);
+                let wid = self.intern_word(&w_normalized);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
-                    .insert(w_normalized.clone());
+                    .insert(wid);
 
                 self.vocabulary_fast.insert(w_normalized);
             }
@@ -4462,9 +4502,11 @@ impl CrystallineCore {
             Some(c) => c,
             None => return vec![word_lower],
         };
-        
+
+        // candidates are interned word-ids; resolve each back to its String for levenshtein.
         let mut ranked: Vec<(String, usize)> = candidates.iter()
-            .map(|c| (c.clone(), self.levenshtein(&word_lower, c)))
+            .filter_map(|&id| self.word_of(id).map(|w| w.to_string()))
+            .map(|c| { let d = self.levenshtein(&word_lower, &c); (c, d) })
             .filter(|(_, dist)| *dist <= 2)
             .collect();
         
@@ -4883,10 +4925,11 @@ impl CrystallineCore {
 
             // Phonetic index
             let sx = self.get_soundex(&word);
+            let wid = self.intern_word(&word);
             self.phonetic_index_fast
                 .entry(sx)
                 .or_insert_with(AHashSet::new)
-                .insert(word);
+                .insert(wid);
         }
 
         // --- Section 4: matrix_quantized ---
