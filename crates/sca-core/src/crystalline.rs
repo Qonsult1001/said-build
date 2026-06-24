@@ -2866,7 +2866,11 @@ impl CrystallineCore {
         embeddings_flat: Vec<f32>,
         passage_counts: Vec<usize>,
         _gammas: Vec<f32>,
-        doc_words: Vec<Vec<String>>,
+        // #4 memory: take the per-doc TEXT (borrowed) and tokenize one doc at a time inside
+        // the word-index loop below, instead of receiving a pre-built Vec<Vec<String>> of
+        // EVERY word in EVERY doc (~237MB transient on a text-heavy chunk). The caller already
+        // holds these texts; we borrow them and never materialize the full word list.
+        doc_texts: &[String],
     ) {
         self.quantized_mode = true;
         let start_idx = self.doc_ids.len();
@@ -2887,14 +2891,16 @@ impl CrystallineCore {
             current_offset += passage_count;
         }
         
-        // Word-Level Indexing (sca_dropin style)
-        for (i, words) in doc_words.iter().enumerate() {
+        // Word-Level Indexing (sca_dropin style) — tokenize each doc's text on demand,
+        // process, and drop, so the full corpus word list is never resident at once (#4).
+        for (i, text) in doc_texts.iter().enumerate() {
+            let words = self.simple_tokenize(text);
             let doc_idx = start_idx + i;
             let mut word_set = AHashSet::new();
             let mut word_tf: AHashMap<String, u32> = AHashMap::new();
             let mut doc_text = String::new();
-            
-            for w in words {
+
+            for w in &words {
                 let w_lower = w.to_lowercase();
 
                 // Normalize: strip trailing punctuation

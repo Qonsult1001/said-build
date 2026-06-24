@@ -230,14 +230,13 @@ impl ScaEngine {
         };
         let gamma = (avg_idf / 5.0).min(1.0).min(0.3);
 
-        // 4. Add to CrystallineCore quantized index
-        let doc_words: Vec<Vec<String>> = vec![words];
+        // 4. Add to CrystallineCore quantized index (tokenizes from the text internally)
         self.core.add_docs_quantized(
             vec![doc_id.to_string()],
             flat_embs,
             vec![passage_texts.len()],
             vec![gamma],
-            doc_words,
+            std::slice::from_ref(&text.to_string()),
         );
 
         Ok(())
@@ -315,9 +314,11 @@ impl ScaEngine {
             encoder.encode_one("test").len()
         };
 
-        // A. Build normalized texts + word IDF + doc words
+        // A. Build word document-frequency (for IDF). We tokenize each doc transiently and
+        // accumulate only the doc_freq map — NOT a per-doc word list. The old all_doc_words
+        // Vec<Vec<String>> (every word of every doc, ~237MB on a text-heavy chunk) is gone;
+        // gammas (E) and the word index (H) now tokenize per-doc from `texts` on demand (#4).
         let mut doc_freq: HashMap<String, f32> = HashMap::new();
-        let mut all_doc_words: Vec<Vec<String>> = Vec::with_capacity(n_docs);
 
         for text in texts {
             let words = Self::simple_tokenize(text);
@@ -336,7 +337,7 @@ impl ScaEngine {
             if std::env::var("SAID_KEEP_NORMALIZED").is_ok() {
                 self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
             }
-            all_doc_words.push(words);
+            // words is dropped here — not accumulated (#4).
         }
 
         // Compute IDF: ln((N+1)/(freq+1)) + 1.0 — matches Python exactly.
@@ -355,11 +356,8 @@ impl ScaEngine {
 
         if std::env::var("SAID_MEM_REPORT").is_ok() {
             let dtn: usize = self.doc_texts_normalized.iter().map(|s| s.len()).sum();
-            let adw_words: usize = all_doc_words.iter().map(|v| v.len()).sum();
-            let adw_bytes: usize = all_doc_words.iter().flat_map(|v| v.iter()).map(|s| s.len() + 24).sum();
             let mb = |b: usize| (b as f64) / 1_048_576.0;
-            eprintln!("  [mem] index_batch phase A: doc_texts_normalized={:.0}MB  all_doc_words={:.0}MB ({} words)",
-                mb(dtn), mb(adw_bytes), adw_words);
+            eprintln!("  [mem] index_batch phase A: doc_texts_normalized={:.0}MB  all_doc_words=0MB (removed #4)", mb(dtn));
         }
 
         // B. Stream per-doc: chunk → encode → doc mean → write to mmap temp
@@ -450,8 +448,10 @@ impl ScaEngine {
             self.core.set_corpus_std(corpus_std);
         }
 
-        // E. Gammas
-        let gammas: Vec<f32> = all_doc_words.iter().map(|words| {
+        // E. Gammas — tokenize each doc's text on demand (transient, one doc at a time)
+        // instead of reading a resident all_doc_words Vec (#4).
+        let gammas: Vec<f32> = texts.iter().map(|text| {
+            let words = Self::simple_tokenize(text);
             let avg_idf = if !words.is_empty() {
                 words.iter()
                     .map(|w| self.word_idf.get(w).copied().unwrap_or(0.5))
@@ -480,13 +480,13 @@ impl ScaEngine {
         }
         let passage_counts: Vec<usize> = vec![1; n_docs];
 
-        // H. Add all docs to CrystallineCore
+        // H. Add all docs to CrystallineCore (tokenizes per-doc from texts internally)
         self.core.add_docs_quantized(
             doc_ids.to_vec(),
             all_embs,
             passage_counts,
             gammas,
-            all_doc_words,
+            texts,
         );
 
         // I. Upload quantized fingerprints to GPU (if available)

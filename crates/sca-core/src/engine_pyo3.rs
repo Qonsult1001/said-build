@@ -1023,7 +1023,11 @@ impl LamEngine {
         gammas: Vec<f32>,
         doc_words: Vec<Vec<String>>,
     ) {
-        self.crystalline.add_docs_quantized(ids, embeddings_flat, passage_counts, gammas, doc_words);
+        // add_docs_quantized now tokenizes per-doc from text (#4 memory). The PyO3 binding
+        // still passes pre-tokenized words, so reconstruct a text string per doc (join) —
+        // simple_tokenize will re-split it identically.
+        let doc_texts: Vec<String> = doc_words.iter().map(|w| w.join(" ")).collect();
+        self.crystalline.add_docs_quantized(ids, embeddings_flat, passage_counts, gammas, &doc_texts);
     }
     
     /// Unified quantized search via crystalline
