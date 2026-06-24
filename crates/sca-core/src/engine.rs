@@ -370,24 +370,34 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
-        // Per-passage STREAMING encode (#4). Now that we own the tokenizer + pooling
-        // (crate::latent_cluster::OwnStaticEncoder, no HF `tokenizers`), we encode ONE passage
-        // at a time via encode_one and fold its embedding straight into the running doc-/corpus
-        // sums, then drop it. Peak per-doc memory = ONE passage's embedding (embed_dim f32),
-        // regardless of doc size — instead of materializing a whole 1024-batch of Vec<Vec<f32>>.
-        // Byte-identical to the old batch path: encode_one applies the same mean-pool + L2
-        // normalize, and the re-normalize below is idempotent on the already-unit vector.
+        // Per-passage encode (#4). We own the tokenizer + pooling
+        // (crate::latent_cluster::OwnStaticEncoder, no HF `tokenizers`), so we encode passages
+        // in BOUNDED PARALLEL chunks: par_iter encodes + L2-normalizes each passage across all
+        // cores (recovering the throughput the one-at-a-time stream gave up), but we hold at
+        // most ONE chunk of embeddings at a time so peak memory stays bounded. The fold into
+        // doc_sum/corpus_sum is sequential IN PASSAGE ORDER, so the f64 accumulation is
+        // bit-identical to the original sequential path (rayon collect preserves order).
+        use rayon::prelude::*;
+        const ENC_CHUNK: usize = 256;
         for (doc_idx, text) in texts.iter().enumerate() {
             let passages = Self::chunk_text(text, 512, 256);
             let mut doc_sum = vec![0.0f64; embed_dim];
             let n_passages = passages.len();
-            for passage in &passages {
-                let mut emb = encoder.encode_one(passage);
-                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                for v in &mut emb { *v /= norm; }
-                for (i, &v) in emb.iter().enumerate() {
-                    corpus_sum[i] += v as f64;
-                    doc_sum[i] += v as f64;
+            for chunk in passages.chunks(ENC_CHUNK) {
+                let embs: Vec<Vec<f32>> = chunk
+                    .par_iter()
+                    .map(|passage| {
+                        let mut emb = encoder.encode_one(passage);
+                        let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                        for v in &mut emb { *v /= norm; }
+                        emb
+                    })
+                    .collect();
+                for emb in &embs {
+                    for (i, &v) in emb.iter().enumerate() {
+                        corpus_sum[i] += v as f64;
+                        doc_sum[i] += v as f64;
+                    }
                 }
             }
             drop(passages);
