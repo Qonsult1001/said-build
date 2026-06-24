@@ -121,3 +121,55 @@ fn recall_on_real_code_subtree_finds_expected_frames() {
     let _ = std::fs::remove_file(path);
     assert!(failures.is_empty(), "recall regressed:\n{}", failures.join("\n"));
 }
+
+/// Cycle 2 (RED until interning lands): the lexical word-index must stay bounded per doc.
+///
+/// Builds a brain of synthetic code-like docs with realistic identifier vocabulary (the
+/// thing that drives the #4 OOM), then asserts the lexical index holds < BYTES_PER_DOC_CAP
+/// bytes per doc. The String-keyed index stores each word ~9× as a separate String, so it
+/// FAILS this bound; interning words to u32 ids brings it under. Pure in-memory, fast, CI-safe.
+#[test]
+fn lexical_index_memory_is_bounded_per_doc() {
+    let path = "test_lexical_mem_bound.said";
+    let _ = std::fs::remove_file(path);
+    let mut b = SaidFile::create(path);
+    if !b.auto_load_encoder() {
+        eprintln!("skipping — no encoder");
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+
+    // Code-like docs with HIGH UNIQUE vocabulary — every doc introduces many brand-new
+    // identifiers (the real driver: a codebase has thousands of distinct symbol names, each
+    // landing once in vocabulary_fast but ~9× across the per-doc String structures). Each
+    // identifier here is unique across the whole corpus to stress the inverted index.
+    let n = 1500usize;
+    let mut uid = 0usize;
+    for i in 0..n {
+        // 40 unique identifiers per doc → 60k distinct words total (realistic for a repo).
+        let mut idents = Vec::with_capacity(40);
+        for _ in 0..40 { idents.push(format!("symbolIdentifier{uid}HandlerImpl")); uid += 1; }
+        let body = format!(
+            "public class {c0} {{ {decls} public void Run() {{ {calls} }} }}",
+            c0 = idents[0],
+            decls = idents[1..20].iter().map(|s| format!("private {s} field;")).collect::<Vec<_>>().join(" "),
+            calls = idents[20..].iter().map(|s| format!("this.{s}();")).collect::<Vec<_>>().join(" "),
+        );
+        b.remember_with_salience(Some(&format!("Doc{i}.cs")), &body, None,
+            sca_core::frames::Pillar::Episodic, vec![]);
+    }
+    b.build_index().expect("build_index");
+
+    let bytes = b.lexical_mem_bytes();
+    let per_doc = bytes as f64 / n as f64;
+    eprintln!("{}", b.lexical_mem_report());
+    eprintln!("lexical_mem_bytes = {bytes} over {n} docs = {per_doc:.0} B/doc");
+
+    // Bound: high-vocab code stores each unique word ~9× as a String. Measured ~8-70 KB/doc
+    // on real Wonga code. Interning words to u32 ids must bring per-doc bytes well under this.
+    // Set so the current String-keyed index is RED, interned GREEN.
+    const BYTES_PER_DOC_CAP: f64 = 3_000.0;
+    let _ = std::fs::remove_file(path);
+    assert!(per_doc < BYTES_PER_DOC_CAP,
+        "lexical index holds {per_doc:.0} B/doc — expected < {BYTES_PER_DOC_CAP:.0} after word interning");
+}

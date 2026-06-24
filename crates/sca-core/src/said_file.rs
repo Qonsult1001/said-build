@@ -1328,6 +1328,11 @@ impl SaidFile {
         self.engine.core.lexical_mem_report()
     }
 
+    /// Total approximate heap bytes of the lexical `_fast` index (#4 OOM driver).
+    pub fn lexical_mem_bytes(&self) -> usize {
+        self.engine.core.lexical_mem_bytes()
+    }
+
     /// every passage belonging to this doc so the Hamming distance reflects
     /// the doc as a whole, not just its first passage.
     fn get_fingerprint(&self, doc_id: &str) -> Option<Vec<u8>> {

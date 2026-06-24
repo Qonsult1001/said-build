@@ -2317,10 +2317,11 @@ impl CrystallineCore {
         self.doc_texts_fast.get(idx).map(|s| s.as_str())
     }
 
-    /// Diagnostic: approximate heap bytes held by each lexical `_fast` structure.
-    /// Used to find the dominant allocation behind the index-stage OOM (#4).
-    /// Counts String/key bytes + container slot overhead (rough but comparable).
-    pub fn lexical_mem_report(&self) -> String {
+    /// Per-structure approximate heap bytes of the lexical `_fast` index.
+    /// Returns (doc_texts, doc_word_sets, doc_word_tf, word_inverted, phonetic, vocab).
+    /// Counts String/key bytes + container slot overhead (rough but comparable + stable,
+    /// so a memory-bound test can assert on it). This is the #4-OOM measurement surface.
+    fn lexical_mem_parts(&self) -> (usize, usize, usize, usize, usize, usize) {
         fn s_bytes(s: &str) -> usize { s.len() + 24 } // String header ~24B + bytes
         let doc_texts: usize = self.doc_texts_fast.iter().map(|s| s_bytes(s)).sum();
         let doc_word_sets: usize = self.doc_word_sets_fast.iter()
@@ -2332,6 +2333,18 @@ impl CrystallineCore {
         let phonetic: usize = self.phonetic_index_fast.iter()
             .map(|(k, set)| s_bytes(k) + set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
         let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum();
+        (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab)
+    }
+
+    /// Total approximate heap bytes held by the lexical `_fast` index (the #4 OOM driver).
+    pub fn lexical_mem_bytes(&self) -> usize {
+        let (a, b, c, d, e, f) = self.lexical_mem_parts();
+        a + b + c + d + e + f
+    }
+
+    /// Diagnostic: per-structure breakdown of `lexical_mem_bytes`. SAID_MEM_REPORT=1.
+    pub fn lexical_mem_report(&self) -> String {
+        let (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
         let mb = |b: usize| (b as f64) / 1_048_576.0;
         format!(
             "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  | TOTAL={:.0}MB",
