@@ -29,8 +29,11 @@ default = []
 bert = ["dep:tokenizers"]
 # SIMD-accelerated Hamming distance (simsimd)
 simd = ["dep:simsimd"]
-# Model2Vec static embeddings for fast latent space encoding (500x faster than transformer)
-static-embed = ["dep:model2vec-rs"]
+# Model2Vec static embeddings for fast latent space encoding (500x faster than transformer).
+# Pulls in the hand-written WordPiece tokenizer + pooling (issue #4): the default
+# encode path is pure-Rust and never triggers HF `tokenizers`' ~250MB first-encode
+# transient. model2vec-rs stays available as a reference/fallback.
+static-embed = ["dep:model2vec-rs", "dep:unicode_categories", "dep:unicode-normalization-alignments"]
 # Embed said-lam-static model weights into binary (zero external files, +4.8MB binary size)
 embed-model = ["static-embed"]
 # GPU-accelerated Hamming search via wgpu compute shader
@@ -79,6 +82,19 @@ optional = true
 
 [dependencies.simsimd]
 version = "6"
+optional = true
+
+# Hand-written WordPiece tokenizer (issue #4): use the SAME unicode crates that HF
+# `tokenizers` 0.21 uses internally, so normalization is byte-identical.
+#   unicode_categories               → BertNormalizer / BertPreTokenizer (is_other,
+#                                       is_mark_nonspacing, is_punctuation).
+#   unicode-normalization-alignments → NFD for strip_accents (matches tokenizers).
+[dependencies.unicode_categories]
+version = "0.1"
+optional = true
+
+[dependencies.unicode-normalization-alignments]
+version = "0.1"
 optional = true
 
 # model2vec-rs backend is selected per-target (see below):

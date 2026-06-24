@@ -4511,6 +4511,8 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-xml",
  "tree-sitter-yaml",
+ "unicode-normalization-alignments",
+ "unicode_categories",
  "wgpu",
  "zip 0.6.6",
  "zstd",
