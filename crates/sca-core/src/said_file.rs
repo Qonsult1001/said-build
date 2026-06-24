@@ -1483,6 +1483,12 @@ impl SaidFile {
                 }
             }
         }
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let dt: usize = doc_texts.iter().map(|s| s.len()).sum();
+            let di: usize = doc_ids.iter().map(|s| s.len()).sum();
+            eprintln!("  [mem] build_index collected doc_texts: {} docs, {:.1} MB text + {:.1} MB ids resident",
+                doc_texts.len(), dt as f64 / 1_048_576.0, di as f64 / 1_048_576.0);
+        }
 
         // INCREMENTAL vs FULL — one path decides. If the index is already populated
         // (corpus_ids non-empty) and the only change is NEW frames appended (existing
