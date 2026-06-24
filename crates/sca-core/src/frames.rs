@@ -2059,6 +2059,24 @@ impl FrameStore {
             pending_frames: self.pending.len(),
         }
     }
+
+    /// Approximate resident heap bytes of the FrameStore's in-RAM holders (#4 scale).
+    /// `pending` holds every not-yet-flushed frame's COMPRESSED content until save() — on a
+    /// fresh full init that is the entire corpus, the dominant memory floor. Gated diagnostic.
+    pub fn frame_store_mem_report(&self) -> String {
+        let pending_bytes: usize = self.pending.iter()
+            .map(|p| p.compressed_data.len() + std::mem::size_of::<PendingFrame>()).sum();
+        let blocks_bytes: usize = self.blocks.iter().map(|b| b.compressed_len as usize).sum();
+        let cache_bytes: usize = self.block_cache.values().map(|v| v.len()).sum();
+        let frames_meta: usize = self.frames.len() * std::mem::size_of::<FrameMeta>();
+        let mb = |b: usize| (b as f64) / 1_048_576.0;
+        format!(
+            "frame_store_mem: pending={:.0}MB ({} frames) blocks={:.0}MB block_cache={:.0}MB \
+             frames_meta={:.0}MB",
+            mb(pending_bytes), self.pending.len(), mb(blocks_bytes),
+            mb(cache_bytes), mb(frames_meta),
+        )
+    }
 }
 
 /// Frame store statistics.

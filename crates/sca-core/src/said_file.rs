@@ -1331,6 +1331,11 @@ impl SaidFile {
     /// SaidFile-level resident memory dump (the holders NOT in CrystallineCore's lexical
     /// report): the corpus text caches, the trigram index, and the file data handle.
     /// Used to find the full #4 memory picture beyond the lexical index.
+    /// FrameStore resident-memory report (#4 scale) — passthrough for the SAID_MEM_REPORT path.
+    pub fn frame_store_mem_report(&self) -> String {
+        self.frames.frame_store_mem_report()
+    }
+
     pub fn saidfile_mem_report(&self) -> String {
         let mb = |b: usize| (b as f64) / 1_048_576.0;
         let ct: usize = self.corpus_texts.iter().map(|s| s.len()).sum();
