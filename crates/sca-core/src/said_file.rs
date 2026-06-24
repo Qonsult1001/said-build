@@ -1515,10 +1515,6 @@ impl SaidFile {
         let growth_ok = prior > 0 && (new_ids.len() as f32) <= (prior as f32) * RECOMPUTE_GROWTH;
         let can_incremental = existing_still_present && growth_ok && !new_ids.is_empty();
 
-        // Build corpus_texts_lower incrementally so we hold at most ONE chunk of raw text
-        // plus the (smaller) growing lowercase cache — never the full raw corpus twice.
-        let mut corpus_texts_lower: Vec<String> = Vec::with_capacity(doc_ids.len());
-
         if !doc_ids.is_empty() {
             #[cfg(feature = "static-embed")]
             {
@@ -1558,8 +1554,8 @@ impl SaidFile {
                         } else {
                             self.engine.index_batch_incremental(chunk_ids, &texts)?;
                         }
-                        for t in &texts { corpus_texts_lower.push(t.to_lowercase()); }
-                        // texts dropped here before the next chunk is read
+                        // texts dropped here before the next chunk is read. corpus_texts_lower
+                        // is NOT built here (#4) — it's built lazily on first query from frames.
                     }
                 }
             }
@@ -1569,34 +1565,24 @@ impl SaidFile {
                 self.engine.clear();
                 const TEXT_CHUNK: usize = 2000;
                 for chunk_ids in doc_ids.chunks(TEXT_CHUNK) {
-                    let texts = read_texts(chunk_ids, &self.frames, self.data.as_slice());
+                    let texts: Vec<String> = chunk_ids.iter()
+                        .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
+                        .collect();
                     for (id, text) in chunk_ids.iter().zip(texts.iter()) {
                         self.engine.stream_index(id, text, 512);
-                        corpus_texts_lower.push(text.to_lowercase());
                     }
                 }
             }
         }
 
-        // For the incremental path, corpus_texts_lower above is empty (we only read new
-        // texts). Rebuild it for the FULL id set from frames so query-time grep has it.
-        if can_incremental || corpus_texts_lower.len() != doc_ids.len() {
-            corpus_texts_lower.clear();
-            for id in &doc_ids {
-                corpus_texts_lower.push(
-                    self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default().to_lowercase());
-            }
-        }
-
-        // corpus_texts (RAW) is kept as N EMPTY-STRING placeholders — same shape as the
-        // open()/deserialize path (said_file.rs ~573): position-indexed readers (recall
-        // scope-narrowing at recall.rs:1108) need len()==corpus_ids.len(), but the actual
-        // raw text is read from the mmap'd frames on demand. This removes a full second
-        // resident copy of the corpus text. NOTE: rebuild_trigram_index's `texts_from_cache`
-        // guard is hardened (below) to treat all-empty placeholders as "not cached" so it
-        // reads real text from frames — otherwise `sym`/trigram would index empty text.
+        // #4 memory: do NOT build corpus_texts_lower here. It is a full lowercased copy of
+        // the corpus (~159MB on a text-heavy repo) and is the dominant init-time resident
+        // spike. It's only needed by the query-time grep re-rank, so we leave it EMPTY and
+        // let ensure_corpus_cached() build it lazily on the FIRST query, reading raw text
+        // straight from the mmap'd frames (text stays stored ONCE on disk). corpus_texts
+        // (raw) is likewise kept as empty placeholders, read from frames on demand.
         self.corpus_texts = vec![String::new(); doc_ids.len()];
-        self.corpus_texts_lower = corpus_texts_lower;
+        self.corpus_texts_lower = Vec::new();
         self.corpus_ids = doc_ids;
 
         self.engine.release_original_texts();
@@ -1628,7 +1614,12 @@ impl SaidFile {
     /// SCA fingerprints already loaded from SCRM on open() — zero re-encoding.
     /// For 4,627 docs: ~1-2 seconds (just block decompression + text caching).
     fn ensure_corpus_cached(&mut self) {
-        if !self.corpus_ids.is_empty() { return; } // already cached
+        // Already fully cached (ids + the lowercase grep cache). corpus_texts_lower can be
+        // empty even when corpus_ids is set: build_index leaves it empty (#4 — it is a full
+        // lowercased copy of the corpus, ~159MB on a text-heavy repo, and NOT needed during
+        // the streaming init). We build it lazily here on the first query that needs it,
+        // reading raw text straight from the mmap'd frames — text stays stored ONCE on disk.
+        if !self.corpus_ids.is_empty() && !self.corpus_texts_lower.is_empty() { return; }
 
         let all_ids: Vec<String> = self.frames.active_doc_ids()
             .iter().map(|s| s.to_string()).collect();
