@@ -2070,19 +2070,28 @@ fn is_backup_dir(name: &str) -> bool {
     || (!lower.contains('.') && (lower.ends_with("_backup") || lower.ends_with("_old")))
 }
 
-/// Build-artifact / vendored-dependency directories that must NEVER be ingested:
-/// they are not the user's source, they bloat the brain with junk (minified vendor
-/// bundles like node_modules/typescript.js), and at scale their passage count is the
-/// primary driver of the index-stage OOM (#4). Both directory walkers consult this so
-/// the skip list can never drift between them. Matched by exact directory-segment name.
+/// Vendored-dependency / tool-cache directories that must NEVER be ingested: they are
+/// downloaded third-party code, not the user's source, and bloat the brain with junk
+/// (e.g. node_modules/typescript.js). Both directory walkers consult this so the skip
+/// list can never drift between them. Matched by exact directory-segment name.
+///
+/// DELIBERATELY CONSERVATIVE. Only names that are ALWAYS dependency/cache dirs are listed.
+/// Generic names that frequently hold REAL user content are NOT excluded here, because
+/// over-exclusion silently drops a user's code (regression: listing "out" dropped
+/// `_deploy/out/` — real deployment SQL — from 277 memories to 2). Notably EXCLUDED from
+/// this list and therefore INGESTED: `out`, `bin`, `obj`, `build`, `dist`, `packages`,
+/// `coverage` — any of which can be hand-written source. Build artifacts under those that
+/// the user genuinely wants skipped should be covered by their `.gitignore` (which the
+/// walker already honors), not by a hardcoded guess. The doc contract (init.md "What gets
+/// skipped") sanctions "node_modules, target, .venv, build artifacts" — kept tight to that.
 fn is_junk_dir(name: &str) -> bool {
     matches!(name,
-        "node_modules" | "target" | "dist" | "build" | "out"
-        | "__pycache__" | ".venv" | "venv" | "site-packages"
-        | ".next" | ".nuxt" | ".svelte-kit" | ".turbo" | ".parcel-cache"
-        | ".gradle" | ".tox" | ".mypy_cache" | ".pytest_cache"
-        | "bin" | "obj" | "packages" | "vendor" | "bower_components"
-        | "coverage" | ".cache" | ".vite"
+        "node_modules" | "bower_components" | "vendor"
+        | "site-packages" | ".venv" | "venv"
+        | "target"
+        | "__pycache__" | ".mypy_cache" | ".pytest_cache" | ".tox"
+        | ".gradle" | ".turbo" | ".parcel-cache" | ".cache" | ".vite"
+        | ".next" | ".nuxt" | ".svelte-kit"
     )
 }
 
