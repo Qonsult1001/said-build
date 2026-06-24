@@ -146,7 +146,38 @@ like `out`/`packages` that frequently hold real content.
    the encode transient is already bounded; the floor is the FrameStore, not the chunk.
 
    Diagnostics (gated by `SAID_MEM_REPORT=1`): `lexical_mem_report()`,
-   `saidfile_mem_report()`, `TrigramIndex::approx_bytes()`, phase-A `[mem]` line.
+   `saidfile_mem_report()`, `frame_store_mem_report()`, `TrigramIndex::approx_bytes()`,
+   phase-A `[mem]` line. Measured the FrameStore floor on Amortization:
+   `frame_store_mem: pending=159MB (919 frames) blocks=0MB` — `pending` holds the WHOLE
+   corpus' (RAW, uncompressed — `put` stores `Plain`, compresses lazily at `compact`) content
+   until `save()`. This is the dominant floor once the corpus-text caches are gone.
+
+4. **Constant-memory ingest spill** (the FrameStore floor) — SPIMI / streaming-index pattern.
+   `SaidFile::set_stream_spill_budget(bytes)`: during phase-1 ingest, when
+   `frames.pending_bytes()` exceeds the budget, spill those frames to a `<path>.spill` scratch
+   file (append bytes, set each `meta.offset` to its absolute file offset via `flush_pending`,
+   move pending→committed, re-mmap `self.data` to the spill file so committed frames page from
+   the OS cache, not process RAM). At `save()` the spill bytes are copied into the real `.said`
+   and the scratch removed. CLI sets a default budget before the ingest loop
+   (`SAID_SPILL_BUDGET` bytes; `0` disables). PROVEN: spill ON keeps all frames
+   (`Memories added` identical, recall matches spill-OFF — no documents dropped); test
+   `test_stream_spill` (pending bounded ≤2×budget + round-trip); 15/15 regression green.
+
+   **Measured cost/benefit (this is the important nuance):** the spill bounds `pending` but
+   has real overhead (mmap of the spill file + the save-time `compact_block_dict` re-pack page
+   the data back in). On Amortization (918 frames):
+
+   | config | pending | peak RSS |
+   |--------|---------|----------|
+   | spill off (budget=0) | 159 MB | 533 MB |
+   | budget=256MB (no spill) | 159 MB | 554 MB |
+   | budget=32MB (spills) | 28 MB | **657 MB** ← spill RAISED the peak |
+
+   On small/medium repos the peak is the **encode + save-repack transient, NOT `pending`** —
+   so spilling there hurts. The spill only pays off on pathological corpora (full Wonga, 35K
+   frames, where `pending` heads to GBs and is the actual OOM). Hence the CLI default is a
+   HIGH 512MB budget: normal repos never spill (zero overhead), only the huge case engages.
+   Lower `SAID_SPILL_BUDGET` on memory-tight hosts.
 
 Note: the passage-count "explosion" in the SCA encode (char-chunked 512/256 → ~700 passages
 on a 400KB SQL chunk) is EXPECTED and tuned (see memory `said-index-memory-oom`) — NOT a bug,
