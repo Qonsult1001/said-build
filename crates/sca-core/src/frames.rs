@@ -397,6 +397,17 @@ impl FrameStore {
         self.encryption_key = Some(key);
     }
 
+    /// Bytes currently held in the in-RAM `pending` buffer (sum of each
+    /// pending frame's stored payload length). This is THE memory floor during
+    /// ingest: every not-yet-saved frame keeps its RAW content here until
+    /// save() compacts it. The streaming-spill path (#4) watches this against a
+    /// byte budget and flushes pending → disk (mmap) when it grows too large,
+    /// keeping `said init` at constant memory instead of holding the whole
+    /// corpus in RAM until save().
+    pub fn pending_bytes(&self) -> usize {
+        self.pending.iter().map(|p| p.compressed_data.len()).sum()
+    }
+
     /// Number of active (non-deleted) frames.
     pub fn active_count(&self) -> usize {
         self.frames.iter().filter(|f| f.status == FrameStatus::Active).count()
