@@ -84,10 +84,30 @@ dropped from 277 memories to 2. Must narrow the junk list to the doc-sanctioned 
 (node_modules, target, .venv, .git-style + true build-artifact dirs) and NOT generic names
 like `out`/`packages` that frequently hold real content.
 
-## Fix directions (NOT yet applied — for a focused session)
+## Fixes applied (TDD, one structure per commit, recall gate green after each)
 
-1. Narrow `is_junk_dir` to safe entries only (fixes the _deploy regression).
-2. Word interning: store each word once in a `Vec<String>` vocab, key all per-doc
-   sets/maps + the inverted index on `u32`. ~80% lexical-memory cut (2.3GB→~0.5GB).
-   Touches ~103 String-keyed sites in crystalline.rs (prefilter + BM25 scoring + phonetic).
-   Both build sites (add_docs_quantized + rebuild_word_index_from_texts) must match exactly.
+1. **`is_junk_dir` narrowed** (89c7333) — removed generic names (`out`/`bin`/`obj`/`build`/
+   `dist`/`packages`/`coverage`) that hold real content; kept only always-dependency/cache
+   dirs (`node_modules`/`vendor`/`target`/tool-caches). Fixed the `_deploy/out/` regression
+   (277 memories restored). `.gitignore` still honored for everything else.
+
+2. **Word interning** (fe5e08b, 6555e83, 8448c5b, ee07095) — DONE. A single shared vocab
+   (`word_vocab: Vec<String>` + `word_to_id: HashMap<String,u32>`, `intern_word()`) now backs
+   all four word-keyed lexical structures, each migrated to `u32` keys/values one commit at a
+   time with the recall gate (`test_lexical_interning` + `scripts/regression-check.sh`) green
+   each step:
+   - `phonetic_index_fast` (soundex→word-ids), `word_inverted_fast` (word-id→docset),
+     `doc_word_sets_fast` (per-doc word-ids), `doc_word_tf_fast` (word-id→tf).
+   - `vocabulary_fast` removed entirely (its words live in `word_to_id`).
+   - Each unique word stored ONCE instead of ~9× as a String. Readers resolve query words
+     via `word_to_id` / new `doc_has_word()` + `doc_words_joined()` helpers.
+   - **Subtle bug fixed:** the clear sites (`clear`/`clear_word_index`/`rebuild_*`) must ALSO
+     clear `word_vocab`+`word_to_id`, else recompute-on-growth re-interns words into an
+     ever-growing vocab.
+   - Verified: `lexical_word_index_bytes` (word-keyed only) 1,865 B/doc on a realistic
+     vocab-reuse corpus; recall + lexical + sym + wikilinks + multi-hop all preserved.
+
+Note: `doc_texts_fast` (raw per-doc normalized text) is NOT word-keyed and is unchanged — it
+scales with content (big SQL chunks), not vocabulary. The passage-count explosion in the
+SCA encode (char-chunked 512/256 → ~700 passages on a 400KB SQL chunk) is a SEPARATE concern
+from the lexical index, tracked independently.
