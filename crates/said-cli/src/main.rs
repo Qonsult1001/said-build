@@ -2358,13 +2358,22 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
 
     // Streaming-ingest spill (#4): cap the in-RAM `pending` frame buffer so a
     // large `said init` ingests at constant memory instead of holding the whole
-    // corpus until save(). Default 128 MB; override with SAID_SPILL_BUDGET
-    // (bytes). Setting it to 0 disables the spill (legacy hold-in-RAM). Must be
-    // set BEFORE the phase-1 ingest loop so every remember_as honours it.
+    // corpus until save(). Override with SAID_SPILL_BUDGET (bytes); 0 disables
+    // (legacy hold-in-RAM). Must be set BEFORE the phase-1 ingest loop so every
+    // remember_as honours it.
+    //
+    // Default 512 MB — deliberately HIGH. Measured: spilling has real overhead
+    // (mmap of the spill file + save-time re-pack page it back), so on small/medium
+    // repos where `pending` is only a few hundred MB it RAISES peak RSS without
+    // helping (Amortization 918 frames: spill-off 533MB vs 32MB-budget 657MB — the
+    // peak there is the encode/save transient, NOT pending). The spill only pays off
+    // on genuinely huge corpora (full Wonga, 35K frames, pending → GBs → the OOM).
+    // A high budget means normal repos never spill (zero overhead) while the
+    // pathological case still stays bounded. Lower it via env for memory-tight hosts.
     let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
-        .unwrap_or(128 * 1024 * 1024);
+        .unwrap_or(512 * 1024 * 1024);
     if spill_budget > 0 {
         brain.set_stream_spill_budget(spill_budget);
     }
