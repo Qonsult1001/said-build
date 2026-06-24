@@ -978,6 +978,11 @@ impl CrystallineCore {
     /// Maps similar-sounding words to same code (e.g., "anderton" → "A536", "anderson" → "A536").
     /// Empty word returns "0000" to match sca_dropin; first letter's code used as prev to collapse duplicates.
     fn get_soundex(&self, word: &str) -> String {
+        Self::get_soundex_static(word)
+    }
+
+    /// Soundex (no `&self` — usable from parallel doc preprocessing, #4).
+    fn get_soundex_static(word: &str) -> String {
         if word.is_empty() {
             return "0000".to_string();
         }
@@ -2909,53 +2914,64 @@ impl CrystallineCore {
             current_offset += passage_count;
         }
         
-        // Word-Level Indexing (sca_dropin style) — tokenize each doc's text on demand,
-        // process, and drop, so the full corpus word list is never resident at once (#4).
-        for (i, text) in doc_texts.iter().enumerate() {
-            let words = self.simple_tokenize(text);
+        // Word-Level Indexing (sca_dropin style). The pure per-doc work — tokenize, lowercase,
+        // punctuation-strip, soundex — is independent across docs and was ~60% of phase-2 time
+        // when serial (#4 throughput). We do it in PARALLEL (par_iter over docs, no shared
+        // state), producing for each doc the ordered list of (normalized_word, soundex) plus a
+        // tf map; then we MERGE into the shared interned structures SEQUENTIALLY in doc order,
+        // so the vocab ids and every index are bit-identical to the old serial build. The merge
+        // is cheap (HashMap inserts); the CPU-heavy tokenize/lowercase/soundex is parallel.
+        struct DocWords {
+            /// (normalized_word, soundex) in first-seen order; only words with len>=3.
+            indexed: Vec<(String, String)>,
+            tf: AHashMap<String, u32>,
+        }
+        let stemmer = &self.stemmer; // Porter2 stemmer is Send+Sync; share across threads.
+        let prepared: Vec<DocWords> = doc_texts
+            .par_iter()
+            .map(|text| {
+                // Inline of simple_tokenize (it needs &self.stemmer, captured above).
+                let re = Regex::new(r"\w+").unwrap();
+                let lower = text.to_lowercase();
+                let words: Vec<String> = re.find_iter(&lower)
+                    .map(|m| stemmer.stem(m.as_str()).to_string())
+                    .collect();
+                let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());
+                let mut tf: AHashMap<String, u32> = AHashMap::new();
+                for w in &words {
+                    let w_lower = w.to_lowercase();
+                    let w_normalized: String = w_lower
+                        .trim_end_matches(|c: char| c.is_ascii_punctuation())
+                        .to_string();
+                    if w_normalized.len() < 3 {
+                        continue;
+                    }
+                    *tf.entry(w_normalized.clone()).or_insert(0) += 1;
+                    let sx = Self::get_soundex_static(&w_normalized);
+                    indexed.push((w_normalized, sx));
+                }
+                DocWords { indexed, tf }
+            })
+            .collect();
+
+        // Sequential merge — identical vocab-id assignment + index population as the old loop.
+        for (i, dw) in prepared.into_iter().enumerate() {
             let doc_idx = start_idx + i;
             let mut word_set = AHashSet::new();
-            let mut word_tf: AHashMap<String, u32> = AHashMap::new();
-            let mut doc_text = String::new();
-
-            for w in &words {
-                let w_lower = w.to_lowercase();
-
-                // Normalize: strip trailing punctuation
-                let w_normalized: String = w_lower
-                    .trim_end_matches(|c: char| c.is_ascii_punctuation())
-                    .to_string();
-
-                // Build doc_text from normalized words so phrase match
-                // is consistent with word_set (e.g. "munoz's" → "munoz")
-                if !doc_text.is_empty() {
-                    doc_text.push(' ');
-                }
-                doc_text.push_str(&w_normalized);
-                
-                if w_normalized.len() < 3 {
-                    continue;
-                }
-                
-                let wid = self.intern_word(&w_normalized);
+            for (w_normalized, sx) in &dw.indexed {
+                let wid = self.intern_word(w_normalized);
                 word_set.insert(wid);
-                *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
-
                 self.word_inverted_fast
                     .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
-
-                let sx = self.get_soundex(&w_normalized);
                 self.phonetic_index_fast
-                    .entry(sx)
+                    .entry(sx.clone())
                     .or_insert_with(AHashSet::new)
                     .insert(wid);
-
             }
-
             self.doc_word_sets_fast.push(word_set);
-            let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
+            let tf_ids = self.intern_tf(dw.tf); self.doc_word_tf_fast.push(tf_ids);
             self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
         }
         
