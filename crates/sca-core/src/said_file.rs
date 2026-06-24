@@ -259,6 +259,19 @@ pub struct SaidFile {
     /// brain files; Some for said-vault files after first access.
     /// Per said-vault Track B spec (Task 3 of the plan).
     vault_tombstones: Option<crate::vault_tombstone::VaultTombstoneStore>,
+    /// Streaming-ingest spill budget (#4). When `Some(b)`, the remember/put
+    /// path spills the FrameStore's in-RAM `pending` buffer to a scratch file
+    /// on disk (then mmaps it) whenever `frames.pending_bytes() > b`, so `said
+    /// init` ingests at CONSTANT memory instead of holding the whole corpus in
+    /// RAM until save(). `None` = legacy behaviour (hold everything in RAM).
+    /// Set via `set_stream_spill_budget`. See `spill_pending_to_disk`.
+    stream_spill_budget: Option<usize>,
+    /// Absolute byte offset of the current end of the spill scratch file, i.e.
+    /// the base offset the NEXT spill batch will be written at. Starts at
+    /// HEADER_SIZE_V7_1 (a placeholder header is laid down on the first spill so
+    /// committed frame offsets are always > 0, matching save()'s `offset > 0`
+    /// filter). Only meaningful while `stream_spill_budget` is Some.
+    spill_offset: u64,
 }
 
 impl SaidFile {
@@ -289,6 +302,8 @@ impl SaidFile {
             pending_symbols: Vec::new(),
             passage_engine: crate::recall::PassageEngine::new(),
             vault_tombstones: None,
+            stream_spill_budget: None,
+            spill_offset: HEADER_SIZE_V7_1 as u64,
         }
     }
 
@@ -649,6 +664,8 @@ impl SaidFile {
             pending_symbols: Vec::new(),
             passage_engine: crate::recall::PassageEngine::new(),
             vault_tombstones,
+            stream_spill_budget: None,
+            spill_offset: HEADER_SIZE_V7_1 as u64,
         })
     }
 
@@ -795,7 +812,113 @@ impl SaidFile {
         };
         let frame_id = self.frames.put_with_pillar(&opts, pillar);
         self.dirty = true;
+        // Streaming-ingest spill (#4): once the in-RAM `pending` buffer crosses
+        // the budget, flush it to a scratch file on disk and mmap it so reads
+        // come from the OS page cache, not process RAM. This is the single
+        // choke-point through which every remember_* path funnels, so it's the
+        // one place the budget needs to be checked.
+        self.maybe_spill_pending();
         frame_id
+    }
+
+    /// Set a streaming-ingest spill budget in bytes (#4). After this is set,
+    /// the remember/put path keeps the in-RAM `pending` buffer near `bytes` by
+    /// spilling to disk, so `said init` over a large corpus runs at constant
+    /// memory instead of holding every frame in RAM until save().
+    pub fn set_stream_spill_budget(&mut self, bytes: usize) {
+        self.stream_spill_budget = Some(bytes);
+    }
+
+    /// Bytes currently held in the in-RAM `pending` frame buffer. Diagnostic /
+    /// test hook for the streaming-spill path — should stay near the spill
+    /// budget once one is set. Delegates to `FrameStore::pending_bytes`.
+    pub fn pending_bytes(&self) -> usize {
+        self.frames.pending_bytes()
+    }
+
+    /// Spill the pending buffer to disk if a budget is set and exceeded (#4).
+    fn maybe_spill_pending(&mut self) {
+        if let Some(budget) = self.stream_spill_budget {
+            if self.frames.pending_bytes() > budget {
+                if let Err(e) = self.spill_pending_to_disk() {
+                    // Spill is an optimization, never a correctness requirement:
+                    // the frames remain in `pending` and will be written by
+                    // save() regardless. Warn and keep going (RAM may climb).
+                    eprintln!("[SAID] pending spill failed (continuing in RAM): {}", e);
+                }
+            }
+        }
+    }
+
+    /// Append the current pending frames' bytes to a scratch spill file and
+    /// mmap it, moving those frames pending → committed (#4 streaming index).
+    ///
+    /// Invariants this relies on:
+    ///   - `FrameStore::flush_pending(base)` writes each pending frame's bytes
+    ///     contiguously from `base`, sets `meta.offset` to its ABSOLUTE file
+    ///     offset, moves pending → committed, and rebuilds doc_id_map.
+    ///   - `read_frame` resolves a committed frame by slicing `file_data`
+    ///     (== `self.data`) at `[meta.offset .. meta.offset + compressed_len]`.
+    ///     So as long as `self.data` mmaps the spill file and the frame bytes
+    ///     live at `meta.offset` in it, spilled frames read back correctly —
+    ///     from the OS page cache, NOT owned process RAM.
+    ///   - save()'s uncompacted path and `compact_block_dict` both re-read
+    ///     committed frame bytes from `self.data` at `meta.offset`; spilled
+    ///     frames satisfy both, so the final save round-trips unchanged.
+    ///
+    /// A HEADER_SIZE_V7_1 placeholder is laid down before the first batch so
+    /// every committed offset is > 0 (save()'s uncompacted path filters frames
+    /// with `offset > 0`). The scratch file is NOT a valid .said — it is only a
+    /// byte container for offset resolution and is overwritten by save()'s
+    /// tmp+rename, then removed.
+    fn spill_pending_to_disk(&mut self) -> Result<(), String> {
+        use std::io::Write;
+
+        let spill_path = self.spill_scratch_path();
+
+        // Lay down the placeholder header on the very first spill so committed
+        // offsets are non-zero. We track end-of-file in `self.spill_offset`
+        // rather than stat-ing the file each time.
+        let first_spill = !std::path::Path::new(&spill_path).exists();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&spill_path)
+            .map_err(|e| format!("open spill file: {}", e))?;
+        if first_spill {
+            // Zero placeholder header — never parsed, only reserves offset space.
+            let header = vec![0u8; HEADER_SIZE_V7_1];
+            file.write_all(&header).map_err(|e| format!("write spill header: {}", e))?;
+            self.spill_offset = HEADER_SIZE_V7_1 as u64;
+        }
+
+        // Commit pending → bytes at the current absolute end-of-file offset.
+        let base = self.spill_offset;
+        let bytes = self.frames.flush_pending(base);
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        file.write_all(&bytes).map_err(|e| format!("append spill bytes: {}", e))?;
+        file.flush().map_err(|e| format!("flush spill file: {}", e))?;
+        self.spill_offset = base + bytes.len() as u64;
+        drop(file);
+        drop(bytes); // release the owned pending copy — this is the whole point
+
+        // Re-mmap the now-larger scratch file so committed reads page in from
+        // disk. Replaces any previous owned/mmap `data` view; the previous
+        // mmap (if any) is dropped here.
+        let f = std::fs::File::open(&spill_path)
+            .map_err(|e| format!("reopen spill file: {}", e))?;
+        let mmap = unsafe { memmap2::Mmap::map(&f) }
+            .map_err(|e| format!("mmap spill file: {}", e))?;
+        self.data = FileData::Mmap(mmap);
+        Ok(())
+    }
+
+    /// Path of the scratch spill file used during streaming ingest (#4).
+    /// Sits next to the target .said as `<path>.spill`.
+    fn spill_scratch_path(&self) -> String {
+        format!("{}.spill", self.path.display())
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -2259,6 +2382,15 @@ impl SaidFile {
                 }
             }
         };
+        // Streaming-spill cleanup (#4): the scratch file's bytes have now been
+        // copied into the real .said by the save above, and `self.data` mmaps
+        // the new file — the orphaned `.spill` is no longer referenced. Remove
+        // it and reset the spill offset so a subsequent ingest starts fresh.
+        let spill_path = self.spill_scratch_path();
+        if std::path::Path::new(&spill_path).exists() {
+            let _ = std::fs::remove_file(&spill_path);
+        }
+        self.spill_offset = HEADER_SIZE_V7_1 as u64;
         self.dirty = false;
         Ok(())
     }
