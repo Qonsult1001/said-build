@@ -370,27 +370,24 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
-        // Bulk-batch passage streaming, per doc (mirrors stream_index's constant-memory
-        // design + model2vec's 1024 batch). A single large doc (e.g. a 400 KB SQL chunk →
-        // ~1,560 passages) used to materialize ALL its passages AND all their embeddings at
-        // once — the encode-phase memory spike (#4). Now we generate the doc's passages,
-        // encode them in batches of PASSAGE_BATCH, fold each batch's embeddings into the
-        // running doc-sum, then DROP the batch. Peak per-doc memory = PASSAGE_BATCH passages
-        // + their embeddings, regardless of doc size. Bulk batch → encoder stays amortized.
-        const PASSAGE_BATCH: usize = 1024;
+        // Per-passage STREAMING encode (#4). Now that we own the tokenizer + pooling
+        // (crate::latent_cluster::OwnStaticEncoder, no HF `tokenizers`), we encode ONE passage
+        // at a time via encode_one and fold its embedding straight into the running doc-/corpus
+        // sums, then drop it. Peak per-doc memory = ONE passage's embedding (embed_dim f32),
+        // regardless of doc size — instead of materializing a whole 1024-batch of Vec<Vec<f32>>.
+        // Byte-identical to the old batch path: encode_one applies the same mean-pool + L2
+        // normalize, and the re-normalize below is idempotent on the already-unit vector.
         for (doc_idx, text) in texts.iter().enumerate() {
             let passages = Self::chunk_text(text, 512, 256);
             let mut doc_sum = vec![0.0f64; embed_dim];
             let n_passages = passages.len();
-            for batch in passages.chunks(PASSAGE_BATCH) {
-                let embs = encoder.encode_batch(batch);
-                for mut emb in embs {
-                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                    for v in &mut emb { *v /= norm; }
-                    for (i, &v) in emb.iter().enumerate() {
-                        corpus_sum[i] += v as f64;
-                        doc_sum[i] += v as f64;
-                    }
+            for passage in &passages {
+                let mut emb = encoder.encode_one(passage);
+                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                for v in &mut emb { *v /= norm; }
+                for (i, &v) in emb.iter().enumerate() {
+                    corpus_sum[i] += v as f64;
+                    doc_sum[i] += v as f64;
                 }
             }
             drop(passages);
