@@ -999,6 +999,13 @@ impl StaticEncoder {
         self.own.encode_batch(texts)
     }
 
+    /// Raw token IDs from the OWN WordPiece tokenizer (post add-special=false, BEFORE the
+    /// unk-filter/512-truncate that pooling applies). For the accuracy/identity test only —
+    /// lets it compare our token IDs directly against HF `tokenizers` on the same text.
+    pub fn own_token_ids(&self, text: &str) -> Vec<u32> {
+        self.own.token_ids(text)
+    }
+
     // -------------------------------------------------------------------------
     // model2vec reference path — used ONLY by the byte-identity test (#4).
     // This is the ONLY path that touches HF `tokenizers` (and its first-encode
@@ -1081,6 +1088,15 @@ impl OwnStaticEncoder {
             .into_iter()
             .next()
             .unwrap_or_default()
+    }
+
+    /// Raw token IDs for `text` (add_special_tokens=false), matching what `encode_batch`
+    /// feeds to pooling BEFORE the unk-filter + 512-cap. Used by the accuracy test to compare
+    /// our WordPiece IDs against HF `tokenizers` directly.
+    pub fn token_ids(&self, text: &str) -> Vec<u32> {
+        let median = self.tokenizer.median_token_length();
+        let truncated = truncate_chars(text, Self::MAX_LENGTH.saturating_mul(median));
+        self.tokenizer.encode(truncated)
     }
 
     /// Encode a batch of texts → one embedding each. Mirrors model2vec

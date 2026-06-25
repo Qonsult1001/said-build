@@ -67,6 +67,22 @@ fn battery() -> Vec<String> {
         "https://example.com/path?query=value&other=123#fragment".to_string(),
         "emoji test 🚀 🔥 ✅ and zero-width\u{200b}joiner".to_string(),
         "x".to_string(),
+        // --- multilingual scripts (the bge-base-en vocab + BERT multilingual normalizer:
+        //     handle_chinese_chars=true, lowercase=true, NFD strip-accents). Whatever the
+        //     vocab doesn't cover becomes [UNK] — our tokenizer MUST agree with HF on that too.
+        "Россия Москва привет мир".to_string(),                 // Cyrillic
+        "مرحبا بالعالم اللغة العربية".to_string(),               // Arabic (RTL)
+        "Ελληνικά γλώσσα Αθήνα".to_string(),                     // Greek
+        "안녕하세요 한국어 테스트".to_string(),                    // Korean Hangul
+        "สวัสดีชาวโลก ภาษาไทย".to_string(),                      // Thai (no spaces)
+        "नमस्ते दुनिया हिन्दी".to_string(),                        // Devanagari/Hindi
+        "שלום עולם עברית".to_string(),                           // Hebrew (RTL)
+        "Việt Nam tiếng Việt xin chào".to_string(),             // Vietnamese (heavy diacritics)
+        "Ｆｕｌｌｗｉｄｔｈ ＡＢＣ１２３".to_string(),                  // fullwidth forms
+        "ﬁ ﬂ ﬀ ligatures \u{FB01}\u{FB02}".to_string(),          // ligatures (NFKD edge)
+        "español português français Deutsch".to_string(),       // Latin-1 diacritics
+        "①②③ ½ ¾ № ™ © ®".to_string(),                          // symbols/numerals
+        "Ｃ＃ and 中文code mixed_scriptلغة".to_string(),          // mixed-script in one token-run
     ]
 }
 
