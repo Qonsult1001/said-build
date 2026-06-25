@@ -166,13 +166,17 @@ pub fn ask_extract_keywords(query: &str) -> (Vec<String>, Vec<String>) {
     let mut lower: Vec<String> = Vec::new();
     let mut original: Vec<String> = Vec::new();
     for word in query.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-        // Drop short words EXCEPT digit-bearing tokens. A short token with a digit
-        // ("7", "v2", "B3") is a high-IDF discriminator — the needle/lexical case the
-        // docs guarantee retrieval for. Dropping it made `ask` unable to tell "office 7"
-        // from "office 9" (all scored on the shared template only). Pure short alpha
-        // tokens are still skipped — stopwords cover "is"/"at"/"of".
+        // Drop short words EXCEPT discriminators. A short token with a digit ("7","v2","B3")
+        // is a high-IDF needle the docs guarantee. ALSO keep a short token that is CAPITALIZED
+        // in the original ("Building C", "Plan A", "Type B") — a single capital letter/label is
+        // a discriminator exactly like a number ("Building C" vs "Building D"), and dropping it
+        // made `ask` unable to tell the twins apart (the exact note got buried under its tied
+        // boilerplate cousins and dropped from top-K). Lowercase short alpha noise ("is","at",
+        // "of") is still skipped — stopwords cover the function words.
         let has_digit = word.chars().any(|c| c.is_ascii_digit());
-        if word.len() < 3 && !has_digit { continue; }
+        let is_short_label = word.len() < 3
+            && word.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+        if word.len() < 3 && !has_digit && !is_short_label { continue; }
         let w_lower = word.to_lowercase();
         if stop.contains(w_lower.as_str()) { continue; }
         if seen_lower.insert(w_lower.clone()) {
@@ -316,10 +320,16 @@ pub fn ask(
     // Corpus size for IDF: use the indexed doc count (what's actually searchable), which
     // is the right denominator and is reliable regardless of frame-stat bookkeeping.
     let corpus_docs = (brain.engine.core.get_doc_ids().len() as f32).max(1.0);
-    for kw in &keywords {
-        // Same rule as extraction: search short tokens too if they carry a digit
-        // (the discriminator), else skip short alpha noise.
-        if kw.len() < 3 && !kw.chars().any(|c| c.is_ascii_digit()) { continue; }
+    for (kw_i, kw) in keywords.iter().enumerate() {
+        // Same rule as extraction (ask_extract_keywords): grep short tokens too when they're a
+        // discriminator — a digit-bearer ("7") OR a short capitalized label ("C" in "Building C").
+        // Without mirroring extraction here, "C" was extracted but never grep'd, so the exact
+        // "Building C" note got no discriminator signal and was dropped under its tied cousins.
+        let kw_has_digit = kw.chars().any(|c| c.is_ascii_digit());
+        let kw_is_label = kw.len() < 3 && keywords_orig.get(kw_i)
+            .and_then(|o| o.chars().next())
+            .map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+        if kw.len() < 3 && !kw_has_digit && !kw_is_label { continue; }
         let hits = brain.grep(kw, 30);
         // Rarity (IDF-ish) of THIS keyword: a token that appears in very few docs is a
         // strong discriminator (a unique id like "vorlex97", a code, a proper noun); one
@@ -354,7 +364,13 @@ pub fn ask(
             // in the WRONG doc and the boost would out-rank the correct semantic match
             // (measured: that regressed recall@10 0.95→0.80). Identifier tokens don't have
             // that failure mode — they only match the doc that literally shares the id.
-            let is_identifier = kw.chars().any(|c| c.is_ascii_digit());
+            // An identifier-class discriminator: carries a digit ("7","REF-0019") OR is a short
+            // capitalized LABEL ("C","B" in "Building C"). Both only match the doc that literally
+            // shares the token, so boosting them can't mis-fire on paraphrase (a rare *common* word
+            // is neither). We pass the ORIGINAL-cased query token so capitalization is visible.
+            let kw_orig = keywords_orig.iter().find(|o| o.to_lowercase() == *kw).map(|s| s.as_str()).unwrap_or(kw.as_str());
+            let is_identifier = kw.chars().any(|c| c.is_ascii_digit())
+                || (kw.len() <= 2 && kw_orig.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false));
             let rare_discriminator = is_identifier && rarity >= 0.85
                 && contains_token(&content_lower, kw.as_str());
             if terms_present < min_terms && !rare_discriminator { continue; }
@@ -368,9 +384,21 @@ pub fn ask(
             // boundary. grep is substring, so a rare token like "7" also returns
             // "office17"/"office27"; those must NOT get the discriminator boost (it would
             // tie them with the true "office 7" at the 0.95 cap and scramble the order).
-            let rare_boost = if rare_discriminator { 0.45 * rarity } else { 0.0 };
-            let confidence = (0.40 + 0.15 * (terms_present as f32 - 1.0) + rare_boost)
-                .min(0.95).max(0.40);
+            // Shared common words saturate the 0.95 grep ceiling for EVERY near-template twin (100
+            // "Invoice reference REF-XXXX covers the March charge" notes all hit 0.95 on the shared
+            // words). If the discriminator boost is added UNDER .min(0.95) it's swallowed by the cap,
+            // so the exact "REF-0019" note ties its 100 cousins at 0.95 and arbitrary ordering DROPS
+            // it from top-K (measured: gold-in-top10 collapsed to 0.19). Fix: a matched rare IDENTIFIER
+            // discriminator lifts the doc into a reserved 0.95–0.99 band ABOVE the shared-word ceiling,
+            // so the exact-id note leads its boilerplate twins. Identifier-gated (carries a digit) +
+            // word-boundary-verified, so it only lifts the doc that LITERALLY shares the id — it can't
+            // mis-fire on paraphrase (a rare common word is not an identifier, never enters this band).
+            let shared = (0.40 + 0.15 * (terms_present as f32 - 1.0)).min(0.95).max(0.40);
+            let confidence = if rare_discriminator {
+                (0.95 + 0.04 * rarity).min(0.99)
+            } else {
+                shared
+            };
             upsert(&mut candidates, AskCandidate {
                 doc_id: h.doc_id.clone(),
                 confidence,
