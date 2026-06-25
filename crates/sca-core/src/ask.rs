@@ -160,12 +160,37 @@ fn contains_token(haystack: &str, needle: &str) -> bool {
 /// Lowercased keywords are used by grep and SCA (both case-insensitive).
 /// Original-case keywords are used by the symbol candidate generator so
 /// queries like "what is FrameStore" correctly hit the PascalCase symbol.
+/// A CJK / spaceless-script character (Han, Hiragana, Katakana, Hangul). These scripts don't separate
+/// words with spaces, so the ASCII word-splitter sees the whole run as ONE non-ASCII blob and drops
+/// it — leaving a Chinese/Japanese/Korean query with ZERO keywords (measured: `ask` returned nothing
+/// for a Chinese query even though the content was indexed). We emit overlapping CHARACTER BIGRAMS for
+/// such runs, which the trigram index already matches — the documented approach for spaceless scripts.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x4E00..=0x9FFF |  // CJK Unified Ideographs
+        0x3400..=0x4DBF |  // CJK Extension A
+        0x3040..=0x309F |  // Hiragana
+        0x30A0..=0x30FF |  // Katakana
+        0xAC00..=0xD7AF)   // Hangul syllables
+}
+
 pub fn ask_extract_keywords(query: &str) -> (Vec<String>, Vec<String>) {
     let stop: HashSet<&str> = ASK_STOPWORDS.iter().copied().collect();
     let mut seen_lower: HashSet<String> = HashSet::new();
     let mut lower: Vec<String> = Vec::new();
     let mut original: Vec<String> = Vec::new();
-    for word in query.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+    // CJK character-bigram keywords (spaceless scripts have no word boundaries to split on).
+    let cjk_chars: Vec<char> = query.chars().filter(|c| is_cjk(*c)).collect();
+    for win in cjk_chars.windows(2) {
+        let bigram: String = win.iter().collect();
+        if seen_lower.insert(bigram.clone()) { lower.push(bigram.clone()); original.push(bigram); }
+    }
+    if cjk_chars.len() == 1 { // single CJK char query — keep the char itself
+        let s: String = cjk_chars.iter().collect();
+        if seen_lower.insert(s.clone()) { lower.push(s.clone()); original.push(s); }
+    }
+    // Split keeps UNICODE alphanumerics together; CJK is handled above, so exclude it from runs here.
+    for word in query.split(|c: char| !(c.is_alphanumeric() || c == '_') || is_cjk(c)) {
         // Drop short words EXCEPT discriminators. A short token with a digit ("7","v2","B3")
         // is a high-IDF needle the docs guarantee. ALSO keep a short token that is CAPITALIZED
         // in the original ("Building C", "Plan A", "Type B") — a single capital letter/label is

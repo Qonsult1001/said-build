@@ -179,8 +179,11 @@ impl Brain {
                 let age_secs = now.saturating_sub(state.last_recalled) as f32;
                 let recency = (-age_secs / 86400.0).exp(); // e^(-t/24h)
                 // Recency bonus: adds up to 20% on top of recall_weight for recent recalls
-                // Never reduces below base recall_weight
-                state.recall_weight * (1.0 + 0.2 * recency)
+                // Never reduces below base recall_weight. Clamp to the documented [1.0, 2.0] range:
+                // the base weight is already capped at 2.0, but the recency multiplier (×1.2) could
+                // push the effective value to 2.4 — the docs (3.3-brain, public-overview) promise a
+                // 1.0–2.0 weight, and downstream Layer-9 scaling assumes that ceiling.
+                (state.recall_weight * (1.0 + 0.2 * recency)).min(2.0)
             }
             None => 1.0,
         }

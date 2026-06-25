@@ -83,12 +83,13 @@ impl Cat {
             Cat::Distractor => (0.45, 0.70, 0.82),
             // MultiHop here is a PURE bridge: the gold memory B holds the answer but shares no query
             // surface — it's reachable ONLY by following a [[concept]] from the near memory A (which
-            // DOES match the query). Measured: the wikilink fan-out (Engine D + build_concept_links)
-            // pulls B into top-5/top-10 ~75% of the time, but B essentially never outranks its own
-            // entry-point A at rank 1 — correct behaviour for a bridge walk. So r@1 floor is 0.20
-            // (NOT the research 0.35, which assumes the gold has some direct overlap); r@5/r@10 keep
-            // the research 0.60/0.72. A drop in r@5/r@10 = bridge fan-out regressed (a real finding).
-            Cat::MultiHop => (0.20, 0.60, 0.72),
+            // DOES match the query). The wikilink fan-out (Engine D + build_concept_links) reliably
+            // pulls B into top-5/top-10 (gated 0.60/0.72), but B by DESIGN ranks just BELOW its own
+            // entry-point A — so its rank-1 share is legitimately ~0 and FLICKERS run-to-run (0.0–0.5)
+            // depending on tie ordering. Gating r@1 at 0.20 made the suite flaky for no signal: a
+            // bridge answer outranking its entry point is NOT the guarantee. r@1 floor is therefore
+            // 0.0 (reported, not gated); the real signal is r@5/r@10, which a fan-out regression drops.
+            Cat::MultiHop => (0.0, 0.60, 0.72),
             // Preference @10 floor 0.83 (research 0.88 is a 7B-embedder number; lower for the 1-bit
             // static encoder per the research guidance). Measured stable at 0.83 over ~440 frames —
             // the 2 residual misses are pure-sentiment queries with zero topic overlap ("what part
