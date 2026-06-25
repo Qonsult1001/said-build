@@ -2746,58 +2746,147 @@ impl SaidFile {
     /// - Titles shorter than 3 chars or that are pure stop-words are skipped to avoid noise.
     ///
     /// Returns the number of new edges added.
+    ///
+    /// PIECE/SECTION-level (the real OKF granularity): a concept is not a whole document — it's
+    /// the entities/key phrases that a PIECE (paragraph/chunk frame) is about. We link frames
+    /// that SHARE a content entity, so a query for that entity reaches every section discussing
+    /// it (the "walk and reverse" graph, built deterministically, no LLM). Two complementary
+    /// signals, both emitted as `link:<concept>` tags (shared namespace with [[wikilinks]] +
+    /// the 3.9 graph layer + the ask bridge):
+    ///   (a) shared CONTENT ENTITY — a capitalised multi-word phrase / ref-number that appears
+    ///       in ≥2 frames (party names, "Notice of Sale", case refs). The cross-document map.
+    ///   (b) literal TITLE mention — a frame body naming another frame's title (wiki/concept
+    ///       corpora where notes reference each other by name).
+    /// SPACE-SAFE: tags are tiny strings in the already-serialized tag list (no new index, no
+    /// content duplication). Entities are capped per frame, and only entities shared by 2..=N
+    /// frames are linked (ubiquitous boilerplate and singletons are dropped) so the graph stays
+    /// sparse. Code-pillar frames are excluded (identifier noise).
     pub fn build_concept_links(&mut self) -> usize {
         use crate::frames::{FrameStatus, Pillar};
-        // 1. Registry of {lowercased title → concept name} for linkable (non-Code) frames.
-        //    The concept is the title lowercased (matches parse_wikilinks' lowercasing so the
-        //    edge namespace is shared with explicit [[wikilinks]]).
-        let mut concepts: Vec<(String, String, String)> = Vec::new(); // (concept_lc, title_lc, doc_id)
-        for m in self.frames.get_all_frames_with_pending() {
-            if m.status != FrameStatus::Active || m.pillar == Pillar::Code { continue; }
-            let Some(title) = m.title.as_deref() else { continue };
-            // Concept = title with any file extension stripped (the .md/.txt ingest path sets
-            // title = filename, but bodies reference the bare concept name). Lowercased to
-            // share the [[wikilink]] namespace.
-            let base = std::path::Path::new(title.trim())
-                .file_stem().map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| title.trim().to_string());
-            let t = base.trim().to_lowercase();
-            if t.len() < 3 { continue; }
-            concepts.push((t.clone(), t, m.doc_id.clone()));
-        }
-        if concepts.is_empty() { return 0; }
+        const MAX_ENTITIES_PER_FRAME: usize = 12;   // cap → bounded tag growth
+        const MAX_FRAMES_PER_ENTITY: usize = 40;     // skip ubiquitous boilerplate entities
 
-        // 2. For each linkable frame body, find whole-word mentions of OTHER frames' titles.
-        //    Collect (doc_id, concept) edges first (immutable borrow), then apply via add_tag.
-        let mut edges: Vec<(String, String)> = Vec::new();
-        let linkable: Vec<(String, Option<crate::frames::Pillar>, Vec<String>)> = self.frames
+        // Snapshot linkable frames (non-Code, Active) + their bodies once.
+        let data = self.data.as_slice().to_vec();
+        let metas: Vec<(String, Option<String>, Vec<String>)> = self.frames
             .get_all_frames_with_pending().iter()
             .filter(|m| m.status == FrameStatus::Active && m.pillar != Pillar::Code)
-            .map(|m| (m.doc_id.clone(), Some(m.pillar), m.tags.clone()))
+            .map(|m| (m.doc_id.clone(), m.title.clone(), m.tags.clone()))
             .collect();
-        let data = self.data.as_slice().to_vec(); // snapshot for read_frame_text borrow
-        for (doc_id, _pillar, tags) in &linkable {
-            let Some(body) = self.frames.read_frame_text(doc_id, &data) else { continue };
-            let body_lc = body.to_lowercase();
-            for (concept_lc, title_lc, target_id) in &concepts {
-                if target_id == doc_id { continue; }                       // no self-link
-                let want = format!("link:{}", concept_lc);
-                if tags.iter().any(|t| t == &want) { continue; }            // already linked (idempotent)
+        if metas.is_empty() { return 0; }
+
+        // (a) Per-frame content entities + (b) title registry, in one pass.
+        let mut frame_entities: Vec<(String, Vec<String>)> = Vec::new();      // (doc_id, entities_lc)
+        let mut entity_frames: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut titles: Vec<(String, String)> = Vec::new();                    // (title_concept_lc, doc_id)
+        for (doc_id, title, _tags) in &metas {
+            if let Some(t) = title {
+                let base = std::path::Path::new(t.trim()).file_stem()
+                    .map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| t.trim().to_string());
+                let tl = base.trim().to_lowercase();
+                if tl.len() >= 4 { titles.push((tl, doc_id.clone())); }
+            }
+            let body = self.frames.read_frame_text(doc_id, &data).unwrap_or_default();
+            let ents = Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME);
+            let idx = frame_entities.len();
+            for e in &ents { entity_frames.entry(e.clone()).or_default().push(idx); }
+            frame_entities.push((doc_id.clone(), ents));
+        }
+
+        // Build edges: (a) entity shared by 2..=MAX frames → link each of those frames to it.
+        let mut edges: Vec<(String, String)> = Vec::new();
+        for (entity, idxs) in &entity_frames {
+            if idxs.len() < 2 || idxs.len() > MAX_FRAMES_PER_ENTITY { continue; }
+            for &i in idxs {
+                edges.push((frame_entities[i].0.clone(), entity.clone()));
+            }
+        }
+        // (b) title mentions across bodies (wiki corpora).
+        for (doc_id, _ents) in &frame_entities {
+            let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
+            for (title_lc, target_id) in &titles {
+                if target_id == doc_id { continue; }
                 if Self::contains_whole_word(&body_lc, title_lc) {
-                    edges.push((doc_id.clone(), concept_lc.clone()));
+                    edges.push((doc_id.clone(), title_lc.clone()));
                 }
             }
         }
 
-        // 3. Apply edges (dedup) via add_tag.
+        // Apply edges (dedup, idempotent: skip if the frame already carries the link tag).
+        let existing: std::collections::HashMap<&str, &Vec<String>> =
+            metas.iter().map(|(d, _, tags)| (d.as_str(), tags)).collect();
         let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
         let mut added = 0usize;
         for (doc_id, concept) in edges {
+            let want = format!("link:{}", concept);
+            if existing.get(doc_id.as_str()).map(|t| t.iter().any(|x| x == &want)).unwrap_or(false) { continue; }
             if !seen.insert((doc_id.clone(), concept.clone())) { continue; }
-            self.add_tag(&doc_id, &format!("link:{}", concept));
+            self.add_tag(&doc_id, &want);
             added += 1;
         }
         added
+    }
+
+    /// Deterministically extract concept entities from a piece of text (NO LLM): capitalised
+    /// multi-word phrases (party names, "Notice of Sale", "Centurion East") + ref/case tokens
+    /// (alphanumeric with a digit, e.g. JHB207). Lowercased, deduped, capped. These are the
+    /// per-section concepts the OKF graph links pieces by.
+    fn extract_entities(text: &str, cap: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let stop = ["The", "This", "That", "These", "Those", "His", "Her", "She", "He", "They",
+            "Their", "After", "Before", "However", "Although", "During", "Between", "And", "But",
+            "For", "Notice", "In", "On", "At", "To", "Of", "It", "I", "We", "A", "An"];
+        let particles = ["of", "the", "for", "and", "&", "to"];
+        let mut push = |e: String, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            let el = e.to_lowercase();
+            if el.len() >= 4 && seen.insert(el.clone()) { out.push(el); }
+        };
+        // Ref/case tokens: alphanumeric containing a digit (JHB207, AST00008, RULE38).
+        for raw in text.split(|c: char| !(c.is_ascii_alphanumeric())) {
+            if raw.len() >= 4 && raw.chars().any(|c| c.is_ascii_digit())
+                && raw.chars().any(|c| c.is_ascii_alphabetic()) {
+                push(raw.to_string(), &mut out, &mut seen);
+                if out.len() >= cap { return out; }
+            }
+        }
+        // Capitalised multi-word phrases (≥2 words, allowing lowercase particles between).
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let mut k = 0;
+        while k < words.len() {
+            let w = words[k].trim_matches(|c: char| !c.is_alphanumeric());
+            let cap_start = w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            if cap_start && !stop.contains(&w) {
+                let start = k;
+                k += 1;
+                while k < words.len() {
+                    let nw = words[k].trim_matches(|c: char| !c.is_alphanumeric());
+                    let is_cap = nw.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    let is_particle = particles.contains(&words[k].to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()));
+                    if (is_cap && !stop.contains(&nw)) || is_particle { k += 1; } else { break; }
+                }
+                // Trim trailing (and leading) lowercase particles — an entity must not begin or
+                // end with "and"/"of"/"the" etc., else "...Pty Ltd and its" and "...Pty Ltd"
+                // extract as DIFFERENT strings and never share an edge.
+                let mut toks: Vec<&str> = words[start..k].iter()
+                    .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                while toks.last().map(|t| particles.contains(&t.to_lowercase().as_str())).unwrap_or(false) {
+                    toks.pop();
+                }
+                while toks.first().map(|t| particles.contains(&t.to_lowercase().as_str())).unwrap_or(false) {
+                    toks.remove(0);
+                }
+                if toks.len() >= 2 {                                  // multi-word entity only
+                    push(toks.join(" "), &mut out, &mut seen);
+                    if out.len() >= cap { return out; }
+                }
+            } else {
+                k += 1;
+            }
+        }
+        out
     }
 
     /// Whole-word (ASCII word-boundary) case-insensitive substring check. `needle` may contain

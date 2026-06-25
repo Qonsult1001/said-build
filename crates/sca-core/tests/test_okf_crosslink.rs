@@ -80,3 +80,34 @@ fn deterministic_title_mention_crosslinks() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn section_level_shared_entity_links() {
+    // The REAL OKF granularity: pieces (frames) that SHARE a content ENTITY get linked, so a
+    // query for that entity reaches every section about it — across documents. No titles needed.
+    let path = tmp("entity");
+    let _ = std::fs::remove_file(&path);
+    let mut b = SaidFile::create(&path);
+    assert!(b.auto_load_encoder());
+
+    // Three SEPARATE document sections (no title cross-references) that all mention the same
+    // party "Angol Management Services" and the case ref "JHB207" — different documents.
+    b.remember_as("doc1::para_0", "The applicant Angol Management Services Pty Ltd filed the founding affidavit in case JHB207.", Some("affidavit"));
+    b.remember_as("doc2::para_0", "A letter was sent to the Municipal Manager regarding Angol Management Services Pty Ltd standing.", Some("letter"));
+    b.remember_as("doc3::para_0", "The court order in JHB207 directed the sheriff to attach the bank account.", Some("order"));
+    b.build_index().expect("index");
+
+    let added = b.build_concept_links();
+    assert!(added >= 2, "expected shared-entity edges (Angol Management Services across doc1+doc2, JHB207 across doc1+doc3), got {added}");
+
+    // The entity "angol management services" links the two sections that mention it.
+    let angol = b.frames_linking_concept("angol management services pty ltd");
+    assert!(angol.contains(&"doc1::para_0".to_string()) && angol.contains(&"doc2::para_0".to_string()),
+        "the party entity must link both sections that discuss it; got {angol:?}");
+
+    // The case ref "jhb207" links sections across documents.
+    let case = b.frames_linking_concept("jhb207");
+    assert!(case.len() >= 2, "the case ref must link >=2 sections; got {case:?}");
+
+    let _ = std::fs::remove_file(&path);
+}
