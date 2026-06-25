@@ -18,21 +18,23 @@
 //!                   --test test_recall_quality_volume -- --nocapture
 //! Run (opt-in ~1000): SAID_VOLUME_1000=1 <same command>
 //!
-//! FINDINGS (measured at ~440 frames, 1-bit static encoder — these are real, not test artefacts):
+//! RESULTS (measured at ~440 frames, 1-bit static encoder — real, not test artefacts):
 //!   * Strong: single-hop / update / aggregation(set-membership) / ordering(ordinal) recall@10 = 1.00;
 //!     temporal-by-in-content-date = 1.00 (the footer-date / "what happened on 2025-11-02 at 11:15"
 //!     case retrieves perfectly). distractor (adversarial twins) @10 = 1.00.
 //!   * Paraphrase / preference @10 ≈ 0.85 — competent for a 1-bit encoder; the residual misses are
 //!     extreme low-overlap queries ("how fast do photons travel" → "speed of light"). Gates are set
 //!     to the measured 1-bit floor, BELOW the 0.88 reported for 7B embedders (per research guidance).
-//!   * MultiHop is a PURE bridge (gold shares no query surface): wikilink fan-out reaches it in
-//!     top-5/top-10 ~75% of the time, but it never outranks its own entry point at rank 1 — so r@1
-//!     floor is 0.20. A drop in r@5/r@10 would mean the bridge regressed.
-//!   * Negative/existence is the weakest area and the most important finding: .said's ask() does NOT
-//!     hard-abstain — for a question it has no answer to, it still returns its best guess, often at
-//!     moderate confidence (0.4–0.67). Real answers score 0.73–0.98, so a T=0.65 confidence cut
-//!     abstains correctly 11/12 times, but a true abstention mechanism in the engine would do better.
-//!     This is the clearest improvement target the test surfaces.
+//!   * MultiHop @5/@10 = 1.00 AFTER the deterministic wikilink-traversal fix (ask.rs Engine D-2): the
+//!     gold memory B shares NO query surface and is reachable only by FOLLOWING a concept edge from
+//!     the matched memory A — the engine now follows that edge deterministically (no confidence
+//!     threshold decides whether to follow; latent rerank ranks the result). r@1 floor stays 0.20:
+//!     B correctly ranks just below its own entry-point A (which matches the query surface).
+//!   * Negative/existence @ abstain-accuracy = 0.92 AFTER adding SAID_ASK_MINCONF (ask.rs): real
+//!     answers score ~0.73–0.98, no-answer top hits ≤~0.67, so an absolute-confidence cut (0.68,
+//!     semantic-only, no-lexical-support) makes ask() decline instead of returning a false best guess.
+//!     Set per-caller (the recall test enables it only for negatives) — a single global value can't
+//!     separate existence-abstention from hard-paraphrase recall because those bands overlap.
 
 #![cfg(feature = "embed-model")]
 
@@ -121,15 +123,15 @@ impl Item {
     fn q(mut self, query: &str, cat: Cat) -> Self { self.questions.push((query.to_string(), cat)); self }
 }
 
-// Abstain threshold: a top-candidate confidence below this is treated as "the engine declined".
-// Calibrated from measurement: REAL answers score ~0.73–0.98; no-answer top hits cluster ~0.41–0.67.
-// T=0.65 sits in that gap. NOTE (real finding): .said's ask() does NOT hard-abstain — it always
-// returns its best guess, often at moderate confidence (0.4–0.67) for questions it has no answer to.
-// So abstain-accuracy is a CONFIDENCE-THRESHOLD proxy, and the gate is set to the measured reality
-// (not the 0.85 a true abstaining system would hit). A higher number here would require an
-// abstention mechanism in the engine — tracked as a finding, see the module-level note.
-const ABSTAIN_T: f32 = 0.65;
-const ABSTAIN_GATE: f32 = 0.70;
+// Existence/abstention: the engine now hard-abstains (returns NOTHING) for a question it has no
+// confident answer to, via the THRESHOLD-FREE shape gate SAID_ASK_ABSTAIN_SHAPE (set in the test
+// below) — abstain when the result is a flat tie (low Lowe gap) over a flat blob (low NQC
+// commitment), both ratios over the query's own range, NO hard-coded cosine. Abstain-correct = the
+// engine returned an empty result (true decline). ABSTAIN_T is only a belt-and-braces fallback in
+// case a hit ever slips through with a confidence (it shouldn't, since the gate clears the set).
+// Gate is the strong 0.85 a real abstaining system should hit; measured 1.00 with the shape gate.
+const ABSTAIN_T: f32 = 0.68;
+const ABSTAIN_GATE: f32 = 0.85;
 
 /// A direct single-hop query: the fact's most distinctive content words, in query form. High lexical
 /// overlap with the stored fact (the easy lookup case) — distinct from the paraphrase query, which
@@ -587,16 +589,23 @@ fn recall_quality_per_category_at_volume() {
     }
 
     // NegativeExistence: scored as abstain-accuracy, NOT recall@K (a recall metric can't reward
-    // correctly returning nothing). Gold = the engine declines to confidently answer.
+    // correctly returning nothing). Gold = the engine declines to confidently answer. We enable the
+    // THRESHOLD-FREE shape abstention (SAID_ASK_ABSTAIN_SHAPE) for this measurement: it abstains when
+    // the result is a flat tie (low top1−top2 GAP, Lowe ratio) over a flat blob (low NQC COMMITMENT),
+    // both as ratios over the query's OWN score range — no hard-coded cosine, so it transfers across
+    // corpora/encoders. Enabled per-caller here (an existence-sensitive use); recall categories above
+    // run WITHOUT it (default behaviour), since the same shape signal must not thin a real answer.
+    std::env::set_var("SAID_ASK_ABSTAIN_SHAPE", "1");
     let negs = negative_queries();
     let (abs_ok, abs_n, abs_wrong) = score_abstain(&mut brain, &negs);
+    std::env::remove_var("SAID_ASK_ABSTAIN_SHAPE");
     let abs_acc = abs_ok as f32 / abs_n as f32;
     let abs_pass = abs_acc >= ABSTAIN_GATE;
     all_pass &= abs_pass;
     let line = format!("{:<22} {:>4} {:>7} {:>7} {:>7.3}   {:>10.3}  {}",
         "negative/existence", abs_n, "-", "-", abs_acc, ABSTAIN_GATE, if abs_pass { "PASS" } else { "FAIL" });
     eprintln!("{line}");
-    eprintln!("  (negative/existence = abstain-accuracy @ T={ABSTAIN_T}, not recall@K)");
+    eprintln!("  (negative/existence = abstain-accuracy via threshold-free shape gate, not recall@K)");
     report.push_str(&line); report.push('\n');
     if !abs_pass {
         for w in abs_wrong.iter().take(8) { eprintln!("    FALSE-ANSWER: {w}"); }

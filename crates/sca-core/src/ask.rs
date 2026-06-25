@@ -448,6 +448,76 @@ pub fn ask(
         }
     }
 
+    // Engine D-2: ENTITY-BRIDGE second hop (the true multi-hop walk). The loop above only follows a
+    // concept whose word is in the QUERY. But a 2-hop question — "what is Dr. Lee's team handling?"
+    // — matches memory A ("Dr. Lee … [[cardiology]] team") whose ANSWER lives in a SIBLING memory B
+    // ("[[cardiology]] team is handling the bypass") that shares A's concept but NOT the query's
+    // words. So: take the strongest current seeds, read THEIR OWN concept edges (link: tags, from
+    // both [[wikilinks]] AND auto build_concept_links entities), and pull in every sibling that
+    // shares one. This makes the bridge DETERMINISTIC — if the edge exists, B is reached; it cannot
+    // depend on B happening to rank high by similarity. Additive (never demotes) and scoped-aware;
+    // bounded so a hub concept can't flood the result set.
+    //
+    // NO hard-coded confidence thresholds decide WHETHER to follow: a `link:` edge is binary truth —
+    // if a matched candidate carries one, its siblings are reachable, full stop. We pull them in as
+    // `semantic`-kind candidates so the LATENT-SPACE float rerank below (line ~552, full 64-dim cosine
+    // on the re-encoded query) is what RANKS them — the encoder decides how good the bridge answer is,
+    // not a magic number. The only bounds are anti-flood caps (a hub concept linking hundreds of
+    // frames must not swamp the result set); those are size limits, not signal thresholds.
+    {
+        const MAX_SEED_FOLLOW: usize = 4;     // follow the few best current candidates' edges
+        const MAX_BRIDGE_PER_CONCEPT: usize = 8; // a single concept can't contribute more than this
+        // The candidates that matched the query so far — follow the edges of the strongest few (by
+        // current coarse score) purely to bound work; we do NOT threshold on the score value.
+        let mut seeds: Vec<(String, f32)> = candidates.values()
+            .map(|c| (c.doc_id.clone(), c.confidence)).collect();
+        seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        seeds.truncate(MAX_SEED_FOLLOW);
+        // Coarse score of the strongest seed — used ONLY to stamp bridged siblings at a value in the
+        // same band so they survive the relative cutoff and ENTER the rerank pool; the rerank then
+        // reorders everything by true latent similarity. (If rerank doesn't fire — e.g. an all-text
+        // result — this keeps the bridge just under the seed so it never displaces a direct answer.)
+        let seed_top = seeds.first().map(|(_, c)| *c).unwrap_or(0.0);
+        let bridge_stamp = (seed_top - 0.001).max(0.0);
+        for (seed_id, _) in seeds {
+            // Read the seed's own concept edges (`link:` tags — from [[wikilinks]] AND auto entities).
+            // Collected first so the immutable meta borrow is released before get()/linking calls.
+            let concepts: Vec<String> = brain.frames.get_meta(&seed_id)
+                .map(|m| m.tags.iter()
+                    .filter_map(|t| t.strip_prefix("link:").map(|c| c.to_string()))
+                    .collect())
+                .unwrap_or_default();
+            for concept in concepts {
+                let mut added = 0usize;
+                for sib in brain.frames_linking_concept(&concept) {
+                    if sib == seed_id { continue; }
+                    if added >= MAX_BRIDGE_PER_CONCEPT { break; }
+                    if let Some(scope) = scope_doc_ids {
+                        if !scope.contains(&sib) { continue; }
+                    }
+                    // A followed `link:` edge is a DETERMINISTIC fact. If the sibling is already a
+                    // candidate (e.g. a weak semantic hit the rerank/gap would later drop), UPGRADE it
+                    // to the deterministic bridge edge rather than skipping — otherwise the edge truth
+                    // is lost to the low fuzzy score. If new, add it. Either way it becomes a keyword-
+                    // class ("text") hit at bridge_stamp: never floored/gap-dropped, NOT rescored by
+                    // query-cosine (a true bridge answer has LOW direct similarity by definition), and
+                    // pinned just below the direct hits so it can't displace a real answer.
+                    let existing_conf = candidates.get(&sib).map(|c| c.confidence).unwrap_or(0.0);
+                    if existing_conf >= bridge_stamp { continue; } // already stronger — leave it
+                    let content = brain.get(&sib).unwrap_or_default();
+                    candidates.insert(sib.clone(), AskCandidate {
+                        doc_id: sib,
+                        confidence: bridge_stamp,
+                        kind: "text",
+                        content,
+                        location: None,
+                    });
+                    added += 1;
+                }
+            }
+        }
+    }
+
     // ── Merge + relative cutoff + truncate ───────────────────────────────
     let mut results: Vec<AskCandidate> = candidates.into_values().collect();
     results.sort_by(|a, b| {
@@ -658,6 +728,48 @@ pub fn ask(
                         if top.kind == "semantic" {
                             let z = (top.confidence - bg_mean) / bg_std;
                             if z < z_min { kept.clear(); }
+                        }
+                    }
+                }
+
+                // Existence abstention ("do I have any memory about X?") — THRESHOLD-FREE.
+                // The z-score above is RELATIVE and, by design (ZMUV forgives a lone outlier), it
+                // PASSES the exact failure we must reject: in a small/flat brain an off-topic query
+                // can have one frame stand >1σ above the mean at a LOW absolute score. A constant
+                // cosine floor (the old SAID_ASK_MINCONF=0.6x) catches it but is a hard-coded magic
+                // number that won't transfer across corpora/encoders. The literature's fix (QPP: NQC,
+                // Shtok&Kurland TOIS'12; Lowe's ratio test, IJCV'04) is two SCALE-FREE shape signals,
+                // each a ratio over THIS query's own score range so nothing absolute is baked in:
+                //   gap        = (top1 − top2) / (top1 − min)   — leadership (Lowe ratio): a real
+                //                answer has a clear leader; a no-answer query is a flat tie (gap→0).
+                //   commitment = σ / (top1 − min)               — NQC: a committed list is peaked;
+                //                an off-topic blob is flat (commitment→0).
+                // Abstain only when BOTH are weak (OOD work — KNN-OOD ICML'22, NNGuide ICCV'23 — shows
+                // neither leadership nor spread alone suffices). Same guard as z (semantic leader, no
+                // strong lexical), so keyword/symbol answers and high-confidence multi-answer sets are
+                // never touched. The two shape parameters are unit-free "how clear must the leader be"
+                // knobs (≈ Lowe's 1−0.8), NOT cosine thresholds; off unless SAID_ASK_ABSTAIN_SHAPE=1
+                // so existing callers stay byte-identical, while the gap/commitment MATH is corpus-
+                // independent — no per-corpus retuning. Tunable via SAID_ASK_GAPMIN / SAID_ASK_COMMITMIN.
+                let shape_on = std::env::var("SAID_ASK_ABSTAIN_SHAPE").map(|v| v == "1").unwrap_or(false);
+                if shape_on && !has_strong_lexical {
+                    // semantic scores in rank order (kept is already sorted; confidences are the
+                    // reranked cosines for semantic hits).
+                    let sem: Vec<f32> = kept.iter()
+                        .filter(|c| c.kind == "semantic").map(|c| c.confidence).collect();
+                    if sem.len() >= 3 && kept.first().map(|c| c.kind == "semantic").unwrap_or(false) {
+                        let top1 = sem[0];
+                        let top2 = sem[1];
+                        let smin = sem.iter().cloned().fold(f32::INFINITY, f32::min);
+                        let range = (top1 - smin).max(1e-6);
+                        let gap = (top1 - top2) / range;             // Lowe leadership
+                        let commitment = bg_std / range;             // NQC commitment (σ over range)
+                        let gap_min: f32 = std::env::var("SAID_ASK_GAPMIN").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(0.30);
+                        let commit_min: f32 = std::env::var("SAID_ASK_COMMITMIN").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(0.30);
+                        if gap < gap_min && commitment < commit_min {
+                            kept.clear(); // flat tie over a flat blob → no confident answer
                         }
                     }
                 }
