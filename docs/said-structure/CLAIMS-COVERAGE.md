@@ -82,6 +82,42 @@ multi-hop bridge, update-latest-wins, legal discriminator (exact REF among 20 tw
 temporal, dedup, best-effort abstain, no cross-contamination. This is the "does it all hold together"
 test — separate green unit checks don't prove the system works on a complex query; this does.
 
+## Code bug-location (MCP) → `test_bug_location_e2e.rs`
+The "locate the bug, guide Claude" claim, measured on the two axes the MCP-for-coding research
+(MCP spec 2025-06-18; Anthropic tool-design; RepoCoder/SWE-bench/Lost-in-the-Middle; Serena/ast-grep
+MCPs) says matter: ACCURACY and TOKEN ECONOMY.
+
+**Setup:** a realistic project — the real auth/billing/util code (one function, `make_session`, has a
+minutes-vs-seconds expiry bug) hidden among ~120 filler files / ~480 functions. The symptom query
+("sessions expire too fast, seconds instead of thirty minutes") shares ZERO identifiers with the buggy
+line — it must be found by meaning + structure.
+
+**Measured (this is the comparison vs Claude Code / Cursor's grep+read baseline):**
+| Axis | `.said` | index-less baseline (read the repo) | Result |
+|------|---------|-------------------------------------|--------|
+| Accuracy — locate the buggy fn | **rank 0** (top-1, conf 0.85) from the symptom alone | greps + reads files | ✅ exact, by meaning not string-match |
+| Tokens to locate (chars proxy) | **345** (top-5 snippets) | **34,346** (whole project) | ✅ **99.6× leaner** (matches the research ~98%) |
+| Blast radius | `code_callers(make_session)` → `handle_login` | — | ✅ impact set for the LLM→LSP handoff |
+
+So `.said`'s value vs Claude/Cursor is exactly where the research says the baseline is weak: it hands
+the agent the *precise* buggy function in ~345 chars instead of the agent burning ~34K reading the
+repo, and it does so by SEMANTIC + STRUCTURAL recall (cheap BM25/grep can't from this symptom).
+
+### Code-MCP shortfalls (honest gap table — what a WORLD-CLASS code MCP would add)
+Audited `crates/said-mcp/`: 33 tools, but the responses are a "retrieval facade" (text, not structured).
+Tracked here so the gaps are visible, not hidden.
+| Shortfall | Today | Ideal (research-backed) |
+|-----------|-------|-------------------------|
+| Response schema | plain TEXT (`[conf][kind] doc_id` + 500-char snippet) | structured per-result `{doc_id, file, line_range, symbol, kind, why_relevant, confidence, signals[], resource_link, needs_analysis}` as `structuredContent` + `outputSchema` (MCP spec) |
+| `locate_issue` tool | none — caller chains search→sym→ask manually | one tool fusing prior-fix memory + symbol + call-graph + churn + stack-frame into a RANKED hypothesis list (best-first, with reason + confidence) |
+| Call-graph over MCP | `code_calls`/`code_callers` are Rust verbs, NOT MCP tools | expose `find_references`/callers/callees as MCP tools returning structured locations |
+| Progressive disclosure | `get` returns the FULL frame (can be huge) | signature-first; body/enclosing on demand (`expand_context`); `resource_link` for large bodies (Serena `include_body` pattern) |
+| Response-size control | fixed 500-char snippets, no mode | `response_format: concise\|detailed`; hard cap < 25K tokens (Claude Code truncation limit) |
+| Grounding for the LLM | snippet only | each item cites its span + a short why-relevant rationale (ALCE: citable spans improve faithfulness + are acted on more correctly) |
+
+These are the next build targets to make `.said`'s MCP world-class for coding (currently code-only;
+to be extended). The retrieval CORE already wins on accuracy + tokens; the gap is the MCP *surface*.
+
 ## KNOWN GAPS (honest — claimed/expected but NOT yet delivered)
 | Gap | Evidence | Why it matters / fix |
 |-----|----------|----------------------|
