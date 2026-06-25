@@ -821,12 +821,49 @@ pub fn ask(
                             .and_then(|v| v.parse().ok()).unwrap_or(0.30);
                         let commit_min: f32 = std::env::var("SAID_ASK_COMMITMIN").ok()
                             .and_then(|v| v.parse().ok()).unwrap_or(0.30);
-                        if gap < gap_min && commitment < commit_min {
-                            kept.clear(); // flat tie over a flat blob → no confident answer
+                        let shape_flat = gap < gap_min && commitment < commit_min;
+                        // LEXICAL GROUNDING veto (the orthogonal signal score-shape is blind to). In a
+                        // NOISY mixed corpus an off-topic query ("wifi password at the lodge", no answer)
+                        // can still have ONE weak semantic hit standing slightly proud of the blob, so
+                        // the shape isn't flat enough and the gate misses — and the brain returns a
+                        // proximity ARTIFACT (e.g. a Penicillin note) that shares NONE of the query's
+                        // words. The fix (COIL/Clarity; "exact lexical match carries relevance dense
+                        // similarity discards") is a BINARY, corpus-derived grounding test: does the top
+                        // hit share ≥1 query content-term? It's a set-intersection — NO magnitude
+                        // threshold, transfers across corpora/encoders. Abstain only when shape is flat
+                        // AND the top hit is UNGROUNDED (the proximity artifact). A real weak answer
+                        // shares a term (grounded → kept); a peaked paraphrase passes the shape test.
+                        let top_grounded = kept.first().map(|c| {
+                            let lc = c.content.to_lowercase();
+                            keywords.iter().any(|k| contains_token(&lc, k.as_str()))
+                        }).unwrap_or(false);
+                        if shape_flat && !top_grounded {
+                            kept.clear(); // flat blob AND no lexical anchor → embedding-proximity artifact
                         }
                     }
                 }
             }
+        }
+    }
+
+    // Final LEXICAL-GROUNDING veto (existence abstention, threshold-free). The per-query shape gate
+    // above only governs the SEMANTIC engine's tail; in a noisy mixed corpus a no-answer query can
+    // still surface a weak hit from ANY engine (e.g. a near-duplicate that spiked). After the full
+    // result is assembled, if NOTHING in the kept set shares a query content-term (zero lexical
+    // grounding across the whole answer) AND nothing is a strong exact lexical/symbol hit, the result
+    // is an embedding-proximity artifact — there is no real answer, so abstain. Binary set-overlap,
+    // no magnitude threshold (COIL/Clarity). Opt-in via SAID_ASK_ABSTAIN_SHAPE so default callers are
+    // byte-identical; a genuine paraphrase answer that shares no surface term is preserved by the
+    // "strong lexical/symbol hit" carve-out and by the fact that this only fires when the shape gate
+    // is requested (the same callers that already accept shape-based abstention).
+    if std::env::var("SAID_ASK_ABSTAIN_SHAPE").map(|v| v == "1").unwrap_or(false) && !kept.is_empty() {
+        let any_grounded = kept.iter().any(|c| {
+            let lc = c.content.to_lowercase();
+            keywords.iter().any(|k| contains_token(&lc, k.as_str()))
+        });
+        let any_strong_lexical = kept.iter().any(|c| c.kind != "semantic" && c.confidence >= 0.55);
+        if !any_grounded && !any_strong_lexical {
+            kept.clear();
         }
     }
 
