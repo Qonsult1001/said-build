@@ -2005,6 +2005,17 @@ fn text_extension(ext: &str) -> bool {
     PLAIN_TEXT_EXTENSIONS.contains(&ext)
 }
 
+/// Binary document formats that `init` can ingest when the `docs` feature is built —
+/// extracted to text via `document_ingest` (DOCX/PDF) rather than decoded as raw text.
+/// Enables `said init <dir-of-docx>` to build a queryable brain from a document corpus
+/// (e.g. the legal bench-corpus), with the OKF cross-link pass on top.
+fn doc_extension(ext: &str) -> bool {
+    #[cfg(feature = "docs")]
+    { matches!(ext, "docx" | "pdf") }
+    #[cfg(not(feature = "docs"))]
+    { let _ = ext; false }
+}
+
 /// AST-aware (chunker is invoked) â€” same as `code_extension` since the
 /// registry only contains entries we can chunk. SQL is included via the
 /// dedicated SQL chunker.
@@ -2142,7 +2153,7 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     let files: Vec<PathBuf> = files.into_iter().filter(|p| {
         if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower)
+            code_extension(&ext_lower) || text_extension(&ext_lower) || doc_extension(&ext_lower)
         } else {
             false
         }
@@ -2323,7 +2334,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     let files: Vec<PathBuf> = files.into_iter().filter(|p| {
         if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower)
+            code_extension(&ext_lower) || text_extension(&ext_lower) || doc_extension(&ext_lower)
         } else {
             false
         }
@@ -2456,15 +2467,31 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
             continue;
         }
 
-        let content = match decode_text(&file_bytes) {
-            Some(s) => s,
-            None => { skipped += 1; continue; }
-        };
-
         let ext = file_path.extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
+        // DOCX/PDF: route through the ONE in-core entry `document_ingest::ingest_document`
+        // (sca_core — per docs/said-structure/06-ingestion-plugins/docs.md: a single public
+        // ingest_document() that detects format, routes, and runs the OCR fallback for scanned
+        // PDFs). It extracts + stores the frame(s) + the blake3 tag directly, so we move on —
+        // the file is a binary zip/pdf that decode_text would reject as binary.
+        #[cfg(feature = "docs")]
+        if doc_extension(&ext) {
+            match sca_core::document_ingest::ingest_document(
+                &mut brain, &file_path.to_string_lossy(), |_, _, _| {},
+            ) {
+                Ok(_) => { brain.add_tag(&rel_path, &hash_tag); added += 1; }
+                Err(_) => { skipped += 1; }
+            }
+            continue;
+        }
+
+        let content = match decode_text(&file_bytes) {
+            Some(s) => s,
+            None => { skipped += 1; continue; }
+        };
 
         let filename = file_path.file_name()
             .map(|n| n.to_string_lossy().to_string())
