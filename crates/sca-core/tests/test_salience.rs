@@ -10,8 +10,9 @@ use sca_core::said_file::SaidFile;
 use sca_core::salience::{score_turn, Salience, SalienceAccumulator, SalienceBand};
 
 fn tmp_path(label: &str) -> String {
+    // System temp dir so test brains don't pile up in the repo (#4 cleanup).
     let pid = std::process::id();
-    format!("tmp_decision4_{}_{}.said", label, pid)
+    std::env::temp_dir().join(format!("said_decision4_{}_{}.said", label, pid)).to_string_lossy().into_owned()
 }
 
 fn cleanup(path: &str) {

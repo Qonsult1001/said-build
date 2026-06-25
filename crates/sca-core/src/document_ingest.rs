@@ -482,66 +482,53 @@ where
     extract_docx_bytes(&bytes, on_segment)
 }
 
-/// DOCX (filesystem-free): same `<w:p>`/`<w:t>` walk as [`extract_docx`], but
-/// the archive is opened from an in-memory byte slice via `Cursor` rather than
-/// a file path. This is the WASM-safe core; `extract_docx` reads the file then
-/// delegates here. Behaviour is identical.
-pub fn extract_docx_bytes<F>(bytes: &[u8], mut on_segment: F) -> Result<usize, String>
+/// Walk one OOXML part (document.xml / headerN.xml / footerN.xml — all share the
+/// `<w:p>`/`<w:t>` grammar), emitting one DocSegment per non-empty paragraph. `idx` is the
+/// running paragraph counter (continued across parts so segment indices stay unique); `label`
+/// distinguishes where the text came from (header/footer text is searchable but tagged). Note:
+/// table cells are `<w:p>` paragraphs too, so table TEXT is captured here (cell-level), which is
+/// all search needs — table STRUCTURE (rows/cols) is intentionally flattened (the vault keeps
+/// raw bytes for 1:1 restore; search only needs the text to be present + recallable).
+fn walk_docx_paragraphs<F>(xml: &str, label_prefix: &str, idx: &mut usize, on_segment: &mut F) -> Result<usize, String>
 where
     F: FnMut(DocSegment),
 {
     use quick_xml::events::Event;
     use quick_xml::reader::Reader;
-
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| format!("unzip docx: {}", e))?;
-    let mut doc_xml_file = zip.by_name("word/document.xml")
-        .map_err(|e| format!("docx missing word/document.xml: {}", e))?;
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut doc_xml_file, &mut xml)
-        .map_err(|e| format!("read document.xml: {}", e))?;
-
-    let mut reader = Reader::from_str(&xml);
+    let mut reader = Reader::from_str(xml);
     reader.trim_text(true);
     let mut buf = Vec::new();
-
     let mut in_paragraph = false;
     let mut in_text_run = false;
     let mut current = String::new();
-    let mut paragraph_idx = 0usize;
     let mut emitted = 0usize;
-
     loop {
         match reader.read_event_into(&mut buf) {
             Err(e) => return Err(format!("docx parse at {}: {}", reader.buffer_position(), e)),
             Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => {
-                match e.name().as_ref() {
-                    b"w:p" => { in_paragraph = true; current.clear(); }
-                    b"w:t" if in_paragraph => { in_text_run = true; }
-                    _ => {}
-                }
-            }
-            Ok(Event::End(e)) => {
-                match e.name().as_ref() {
-                    b"w:p" => {
-                        in_paragraph = false;
-                        let trimmed = current.trim();
-                        if !trimmed.is_empty() {
-                            paragraph_idx += 1;
-                            on_segment(DocSegment {
-                                index: paragraph_idx,
-                                text: trimmed.to_string(),
-                                label: format!("paragraph {}", paragraph_idx),
-                            });
-                            emitted += 1;
-                        }
-                        current.clear();
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"w:p" => { in_paragraph = true; current.clear(); }
+                b"w:t" if in_paragraph => { in_text_run = true; }
+                _ => {}
+            },
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"w:p" => {
+                    in_paragraph = false;
+                    let trimmed = current.trim();
+                    if !trimmed.is_empty() {
+                        *idx += 1;
+                        on_segment(DocSegment {
+                            index: *idx,
+                            text: trimmed.to_string(),
+                            label: format!("{} {}", label_prefix, *idx),
+                        });
+                        emitted += 1;
                     }
-                    b"w:t" => { in_text_run = false; }
-                    _ => {}
+                    current.clear();
                 }
-            }
+                b"w:t" => { in_text_run = false; }
+                _ => {}
+            },
             Ok(Event::Text(t)) if in_text_run => {
                 if let Ok(s) = t.unescape() {
                     current.push_str(s.as_ref());
@@ -551,6 +538,59 @@ where
             _ => {}
         }
         buf.clear();
+    }
+    Ok(emitted)
+}
+
+/// DOCX (filesystem-free): unzip and walk the body PLUS every header/footer part. The archive
+/// is opened from an in-memory byte slice via `Cursor`. WASM-safe core; `extract_docx` reads
+/// the file then delegates here.
+///
+/// Reads `word/document.xml` AND every `word/headerN.xml` / `word/footerN.xml` so header/footer
+/// text (case numbers, dates, "RE:" lines, references — often the most discriminating tokens in
+/// legal/business docs) is SEARCHABLE, not silently dropped. (#4: previously only document.xml
+/// was read.) Table cell text is captured via the paragraph walk. Does NOT touch the vault's
+/// 1:1-restore parser — this is the search-extraction plugin only.
+pub fn extract_docx_bytes<F>(bytes: &[u8], mut on_segment: F) -> Result<usize, String>
+where
+    F: FnMut(DocSegment),
+{
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("unzip docx: {}", e))?;
+
+    // Collect the names first (immutable), then read each part — body first (so its paragraphs
+    // index before headers/footers), then headers, then footers, in numeric-name order.
+    let names: Vec<String> = zip.file_names().map(String::from).collect();
+    let mut header_parts: Vec<String> = names.iter()
+        .filter(|n| n.starts_with("word/header") && n.ends_with(".xml")).cloned().collect();
+    let mut footer_parts: Vec<String> = names.iter()
+        .filter(|n| n.starts_with("word/footer") && n.ends_with(".xml")).cloned().collect();
+    header_parts.sort();
+    footer_parts.sort();
+
+    let read_part = |zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, name: &str| -> Option<String> {
+        let mut f = zip.by_name(name).ok()?;
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut f, &mut s).ok()?;
+        Some(s)
+    };
+
+    let mut idx = 0usize;
+    let mut emitted = 0usize;
+    // Body (required).
+    let body = read_part(&mut zip, "word/document.xml")
+        .ok_or_else(|| "docx missing word/document.xml".to_string())?;
+    emitted += walk_docx_paragraphs(&body, "paragraph", &mut idx, &mut on_segment)?;
+    // Headers + footers (optional — text is searchable, tagged by source).
+    for h in &header_parts {
+        if let Some(xml) = read_part(&mut zip, h) {
+            emitted += walk_docx_paragraphs(&xml, "header", &mut idx, &mut on_segment)?;
+        }
+    }
+    for f in &footer_parts {
+        if let Some(xml) = read_part(&mut zip, f) {
+            emitted += walk_docx_paragraphs(&xml, "footer", &mut idx, &mut on_segment)?;
+        }
     }
     Ok(emitted)
 }
