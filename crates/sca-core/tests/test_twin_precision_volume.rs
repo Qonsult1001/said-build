@@ -176,3 +176,83 @@ fn adversarial_twin_precision_at_volume() {
     // report it but gate on the guarantee that matters: the exact answer is never lost.
     assert!(cover >= 0.95, "gold-in-top{K} {cover:.4} below 0.95 — the correct memory was DROPPED, the LLM can't recover it");
 }
+
+/// The OTHER half of the twin guarantee (the "return options, let the LLM resolve" path that
+/// Mem0/Zep/Letta provide): when the query is AMBIGUOUS — it does NOT name a discriminator — the
+/// engine must surface MULTIPLE near-identical candidates together, so the agent (with full
+/// conversation context) can pick the one the user meant, rather than the engine silently committing
+/// to one arbitrary guess. This is the complement to the discriminating case above (where naming the
+/// token correctly returns just that one). Here naming nothing should return the whole near-tie set.
+#[test]
+fn ambiguous_query_surfaces_multiple_candidates_for_llm() {
+    let path = "test_twin_ambiguous.said";
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{path}.spill"));
+
+    let mut brain = SaidFile::create(path);
+    assert!(brain.auto_load_encoder(), "embedded encoder must load");
+
+    // Several families of near-identical memories, each member distinguished only by one token.
+    // We will query each family WITHOUT the distinguishing token (the ambiguous case).
+    struct Family { ids: Vec<String>, ambiguous_query: String }
+    let mut families: Vec<Family> = Vec::new();
+
+    // Family 1: room notes (members differ by room number).
+    {
+        let mut ids = Vec::new();
+        for n in 0..6 {
+            let num = 2000 + n;
+            let id = format!("amb_room_{num}");
+            brain.remember_with_salience(Some(&id),
+                &format!("The onsite spare server is stored in room {num} on the east corridor."),
+                None, Pillar::Episodic, vec![]);
+            ids.push(id);
+        }
+        // Ambiguous: asks about the rooms WITHOUT naming a number.
+        families.push(Family { ids, ambiguous_query:
+            "where is the onsite spare server stored on the east corridor".into() });
+    }
+    // Family 2: invoice notes (members differ by REF code).
+    {
+        let mut ids = Vec::new();
+        for n in 0..6 {
+            let code = format!("REF-{:05}", 8000 + n);
+            let id = format!("amb_ref_{code}");
+            brain.remember_with_salience(Some(&id),
+                &format!("Invoice reference {code} covers the March managed-services charge."),
+                None, Pillar::Episodic, vec![]);
+            ids.push(id);
+        }
+        families.push(Family { ids, ambiguous_query:
+            "which invoices cover the March managed-services charge".into() });
+    }
+    // Some unrelated filler so the families aren't the entire corpus.
+    for i in 0..60 {
+        brain.remember_with_salience(Some(&format!("amb_f{i}")),
+            &format!("Unrelated note {i} about logistics, scheduling, and the recycling depot."),
+            None, Pillar::Episodic, vec![]);
+    }
+    brain.build_index().expect("build_index");
+
+    // For each ambiguous query, count how many family members are surfaced in the top-K. The engine
+    // should return SEVERAL (not commit to one), so the LLM can resolve which the user meant.
+    const K: usize = 10;
+    let mut all_ok = true;
+    for fam in &families {
+        let (cands, _) = sca_core::ask::ask(&mut brain, &fam.ambiguous_query, K, false, None);
+        let surfaced = fam.ids.iter()
+            .filter(|id| cands.iter().any(|c| &c.doc_id == *id))
+            .count();
+        eprintln!("ambiguous '{}': surfaced {}/{} family members in top-{K}",
+            fam.ambiguous_query, surfaced, fam.ids.len());
+        // The "options" guarantee: at least 2 near-identical candidates come back together so the
+        // LLM has a real choice (a single guess on an ambiguous query is the wrong behaviour).
+        if surfaced < 2 { all_ok = false; }
+    }
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{path}.spill"));
+
+    assert!(all_ok, "an ambiguous query returned fewer than 2 near-identical candidates — the engine \
+        committed to a single guess instead of surfacing options for the LLM to resolve");
+}
