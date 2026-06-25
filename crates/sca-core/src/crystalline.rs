@@ -2926,15 +2926,19 @@ impl CrystallineCore {
             indexed: Vec<(String, String)>,
             tf: AHashMap<String, u32>,
         }
-        let stemmer = &self.stemmer; // Porter2 stemmer is Send+Sync; share across threads.
+        // CRITICAL: the original add_docs_quantized received `doc_words` that were produced by
+        // ScaEngine::simple_tokenize (split_whitespace + lowercase + len>=3, NO regex, NO
+        // Porter2 stem). When #4 made this fn tokenize internally, an earlier revision wrongly
+        // used the STEMMED crystalline::simple_tokenize here — which silently rebuilt the whole
+        // BM25 word index from different tokens and dropped recall@10 0.95→0.90. We MUST match
+        // the engine's whitespace tokenizer exactly to keep the lexical index identical.
         let prepared: Vec<DocWords> = doc_texts
             .par_iter()
             .map(|text| {
-                // Inline of simple_tokenize (it needs &self.stemmer, captured above).
-                let re = Regex::new(r"\w+").unwrap();
-                let lower = text.to_lowercase();
-                let words: Vec<String> = re.find_iter(&lower)
-                    .map(|m| stemmer.stem(m.as_str()).to_string())
+                let words: Vec<String> = text
+                    .split_whitespace()
+                    .map(|w| w.to_lowercase())
+                    .filter(|w| w.len() >= 3)
                     .collect();
                 let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());
                 let mut tf: AHashMap<String, u32> = AHashMap::new();

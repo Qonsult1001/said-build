@@ -388,32 +388,43 @@ impl ScaEngine {
         // passages are still encoded one-at-a-time + folded, so per-thread memory = one passage
         // embedding. corpus_sum is then folded sequentially IN DOC ORDER for bit-identity, and
         // scratch is written at each doc's disjoint offset. Same float ops as the serial path.
+        // Each doc encodes in parallel and returns its per-doc mean PLUS the list of its
+        // normalized passage embeddings (each a Vec<f32>). The doc_mean is computed exactly as
+        // the serial path (sum passages → /n → L2). corpus_sum is then accumulated in the
+        // SERIAL fold by re-adding each passage value in the SAME doc-then-passage order as the
+        // original serial loop — so corpus_sum is BIT-IDENTICAL (f64 addition is not
+        // associative, so order matters: pre-summing per-doc shifted the corpus mean's low bits
+        // and flipped a few fingerprints → measured recall@10 0.95→0.90; this restores it).
         use rayon::prelude::*;
-        struct DocEnc { doc_mean: Vec<f32>, passage_sum: Vec<f64>, n_passages: usize }
+        struct DocEnc { doc_mean: Vec<f32>, passages: Vec<Vec<f32>>, n_passages: usize }
         let per_doc: Vec<DocEnc> = texts
             .par_iter()
             .map(|text| {
-                let passages = Self::chunk_text(text, 512, 256);
-                let n_passages = passages.len();
-                let mut psum = vec![0.0f64; embed_dim];
-                for passage in &passages {
+                let passages_text = Self::chunk_text(text, 512, 256);
+                let n_passages = passages_text.len();
+                let mut doc_sum = vec![0.0f64; embed_dim];
+                let mut passages: Vec<Vec<f32>> = Vec::with_capacity(n_passages);
+                for passage in &passages_text {
                     let mut emb = encoder.encode_one(passage);
                     let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
                     for v in &mut emb { *v /= norm; }
-                    for (i, &v) in emb.iter().enumerate() { psum[i] += v as f64; }
+                    for (i, &v) in emb.iter().enumerate() { doc_sum[i] += v as f64; }
+                    passages.push(emb);
                 }
-                let mut doc_mean: Vec<f32> = psum.iter()
+                let mut doc_mean: Vec<f32> = doc_sum.iter()
                     .map(|&s| (s / n_passages.max(1) as f64) as f32)
                     .collect();
                 let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
                 for v in &mut doc_mean { *v /= norm; }
-                DocEnc { doc_mean, passage_sum: psum, n_passages }
+                DocEnc { doc_mean, passages, n_passages }
             })
             .collect();
 
-        // Sequential fold (in doc order) — bit-identical accumulation; disjoint scratch writes.
+        // Serial fold IN DOC-THEN-PASSAGE ORDER → corpus_sum bit-identical to the serial path.
         for (doc_idx, d) in per_doc.iter().enumerate() {
-            for (i, &v) in d.passage_sum.iter().enumerate() { corpus_sum[i] += v; }
+            for emb in &d.passages {
+                for (i, &v) in emb.iter().enumerate() { corpus_sum[i] += v as f64; }
+            }
             total_passages += d.n_passages;
             let offset = doc_idx * bytes_per_mean;
             let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
