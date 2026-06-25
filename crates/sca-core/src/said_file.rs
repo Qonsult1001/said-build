@@ -800,15 +800,26 @@ impl SaidFile {
         pillar: crate::frames::Pillar,
         tags: Vec<String>,
     ) -> u64 {
+        // Auto-id carries the pillar prefix (ep_/sem_/proc_/ext_…) so the pillar is visible in
+        // the doc_id, and the memory_type is DERIVED from the pillar (Semantic→Factual decay
+        // 0.85, Procedural→Procedural, …) instead of hardcoded Episodic — otherwise every
+        // pillar decayed like an episodic turn and the doc_id lost its pillar marker.
         let resolved_id: String = match doc_id {
             Some(id) => id.to_string(),
-            None => format!("mem_{}", self.frames.total_count()),
+            None => format!("{}{}", pillar.doc_id_prefix(), self.frames.total_count()),
         };
+        // Auto-add a `pillar:<name>` tag so the pillar is queryable/scopeable via tags, in
+        // addition to the typed field. Idempotent — don't duplicate if the caller passed it.
+        let pillar_tag = format!("pillar:{}", pillar.name());
+        let mut tags = tags;
+        if !tags.iter().any(|t| t == &pillar_tag) {
+            tags.push(pillar_tag);
+        }
         let opts = crate::frames::PutOptions {
             doc_id: &resolved_id,
             content,
             title,
-            memory_type: crate::frames::MemoryType::Episodic,
+            memory_type: pillar.to_memory_type(),
             memory_kind: crate::frames::MemoryKind::Fact,
             subject: crate::frames::MemorySubject::User,
             scope: crate::frames::MemoryScope::Personal,

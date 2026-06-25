@@ -168,6 +168,52 @@ impl Pillar {
             MemoryType::Meta => Self::Semantic,
         }
     }
+
+    /// Inverse of `from_memory_type`: the MemoryType a frame should carry when stored under
+    /// this pillar (so decay/lifecycle behave correctly + the pillar round-trips through the
+    /// legacy memory_type field). Consistent with the documented forward map
+    /// (docs/said-structure/04-four-pillars/memory.md):
+    ///   Episodic→Episodic, Semantic→Factual (decay 0.85), Procedural→Procedural,
+    ///   Memory→Relational (the doc's Relational/Meta→Memory safety net inverts to Relational).
+    /// External/Code/Document have no dedicated legacy MemoryType → Factual (distilled
+    /// knowledge, decay like facts). Used by `remember_with_pillar`.
+    pub fn to_memory_type(self) -> MemoryType {
+        match self {
+            Self::Episodic => MemoryType::Episodic,
+            Self::Semantic => MemoryType::Factual,
+            Self::Procedural => MemoryType::Procedural,
+            Self::Memory => MemoryType::Relational,
+            Self::External => MemoryType::Factual,
+            Self::Code => MemoryType::Factual,
+            Self::Document => MemoryType::Factual,
+        }
+    }
+
+    /// Lowercase pillar name (for the auto-added `pillar:<name>` tag).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Episodic => "episodic",
+            Self::Semantic => "semantic",
+            Self::Procedural => "procedural",
+            Self::External => "external",
+            Self::Code => "code",
+            Self::Memory => "memory",
+            Self::Document => "document",
+        }
+    }
+
+    /// Short prefix for auto-generated doc_ids under this pillar (e.g. `ep_`, `sem_`).
+    pub fn doc_id_prefix(self) -> &'static str {
+        match self {
+            Self::Episodic => "ep_",
+            Self::Semantic => "sem_",
+            Self::Procedural => "proc_",
+            Self::External => "ext_",
+            Self::Code => "code_",
+            Self::Memory => "mem_",
+            Self::Document => "doc_",
+        }
+    }
 }
 
 /// Options for putting a memory into the .said file.
