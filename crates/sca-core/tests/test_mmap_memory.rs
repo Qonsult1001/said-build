@@ -93,9 +93,11 @@ fn test_mmap_memory_usage() {
     }
 
     let mem_after_store = process_memory_kb();
-    println!("  After storing {} docs:   {} KB ({:.1} MB)  [+{:.1} MB]",
+    // Signed delta — #4 memory work can make storing docs ADD LESS than the encoder baseline
+    // (lazy corpus caches + spill), so this can be negative; u64 subtraction would underflow.
+    println!("  After storing {} docs:   {} KB ({:.1} MB)  [{:+.1} MB]",
         doc_count, mem_after_store, mem_after_store as f64 / 1024.0,
-        (mem_after_store - mem_after_encoder) as f64 / 1024.0);
+        (mem_after_store as i64 - mem_after_encoder as i64) as f64 / 1024.0);
 
     brain.build_index().expect("index");
     brain.compact();
