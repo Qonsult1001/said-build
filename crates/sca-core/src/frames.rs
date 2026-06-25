@@ -699,69 +699,80 @@ impl FrameStore {
         let dict_size = dict.len();
         drop(flat_samples);
 
-        // Step 3: Group frames into blocks and compress each block
-        let mut blocks_created = 0usize;
-        let mut total_compressed: u64 = 0;
+        // Step 3: Group frames into blocks and compress each block.
+        //
+        // #4 throughput: block compression (zstd level-15) was ~99% of the save phase and fully
+        // SERIAL (measured 18.6s on Amortization). Each block compresses INDEPENDENTLY with the
+        // same shared dictionary, so we compress all blocks in PARALLEL (par_iter; each task
+        // builds its own Compressor with the shared dict — Compressor isn't Sync), collecting
+        // results IN BLOCK ORDER, then do the cheap serial merge into self.blocks/block_map/
+        // pending. The output bytes are byte-identical to the serial version (same dict, same
+        // level, same block grouping) — only the wall-clock changes. zstd is deterministic.
+        use rayon::prelude::*;
         self.blocks.clear();
         self.block_map.clear();
 
-        let mut compressor = match zstd::bulk::Compressor::with_dictionary(level, &dict) {
-            Ok(c) => c,
-            Err(_) => return (0, 0, 0),
-        };
+        // Per-block compression (parallel). Each entry: (frame_offsets, uncompressed_len,
+        // compressed_bytes) or None if this block's compressor failed (skipped, as before).
+        struct BlockOut {
+            frame_offsets: Vec<(u32, u32)>,
+            uncompressed_len: u32,
+            compressed: Vec<u8>,
+        }
+        let chunks: Vec<&[(usize, Vec<u8>)]> = raw_frames.chunks(block_size).collect();
+        let dict_ref: &[u8] = &dict;
+        let compressed_blocks: Vec<Option<BlockOut>> = chunks
+            .par_iter()
+            .map(|chunk| {
+                // One compressor per task (with the shared dictionary).
+                let mut compressor = zstd::bulk::Compressor::with_dictionary(level, dict_ref).ok()?;
+                let mut block_raw = Vec::new();
+                let mut frame_offsets: Vec<(u32, u32)> = Vec::new();
+                for (_, data) in chunk.iter() {
+                    let offset = block_raw.len() as u32;
+                    let len = data.len() as u32;
+                    frame_offsets.push((offset, len));
+                    block_raw.extend_from_slice(data);
+                }
+                let uncompressed_len = block_raw.len() as u32;
+                let compressed = compressor.compress(&block_raw).ok()?;
+                Some(BlockOut { frame_offsets, uncompressed_len, compressed })
+            })
+            .collect();
 
-        for chunk in raw_frames.chunks(block_size) {
-            // Build uncompressed block: concat all frame payloads
-            let mut block_raw = Vec::new();
-            let mut frame_offsets: Vec<(u32, u32)> = Vec::new();
-
-            for (_, data) in chunk {
-                let offset = block_raw.len() as u32;
-                let len = data.len() as u32;
-                frame_offsets.push((offset, len));
-                block_raw.extend_from_slice(data);
-            }
-
-            let uncompressed_len = block_raw.len() as u32;
-
-            // Compress the whole block with dictionary
-            let compressed = match compressor.compress(&block_raw) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+        // Serial merge (in block order) — identical state to the old serial loop.
+        let mut blocks_created = 0usize;
+        let mut total_compressed: u64 = 0;
+        for (chunk, out) in chunks.iter().zip(compressed_blocks.into_iter()) {
+            let Some(out) = out else { continue }; // compressor failed → skip (as before)
 
             let block_id = blocks_created as u32;
             let block_idx = self.blocks.len();
 
-            let block = CompressedBlock {
+            self.blocks.push(CompressedBlock {
                 id: block_id,
                 offset: 0, // set during flush
-                compressed_len: compressed.len() as u32,
-                uncompressed_len,
+                compressed_len: out.compressed.len() as u32,
+                uncompressed_len: out.uncompressed_len,
                 frame_count: chunk.len() as u16,
-                frame_offsets: frame_offsets.clone(),
-            };
-            self.blocks.push(block);
+                frame_offsets: out.frame_offsets,
+            });
 
             // Update each frame's metadata to point to this block
             for (intra_idx, (pending_idx, _)) in chunk.iter().enumerate() {
                 let pending = &mut self.pending[*pending_idx];
                 pending.meta.encoding = FrameEncoding::ZstdDictBlock;
-                // Store block_id in a way we can recover: use offset field for block offset (set later)
-                // and compressed_len for block compressed_len (set later)
-                // The actual intra-block mapping is in self.block_map
                 self.block_map.insert(pending.meta.id, (block_idx, intra_idx));
             }
 
-            // Replace the first frame in the chunk with the compressed block data,
-            // clear the rest (they'll be skipped during flush)
+            // First frame in the chunk carries the compressed block bytes; the rest are
+            // cleared (skipped during flush).
             let first_pending_idx = chunk[0].0;
-            self.pending[first_pending_idx].compressed_data = compressed.clone();
+            total_compressed += out.compressed.len() as u64;
+            self.pending[first_pending_idx].compressed_data = out.compressed;
             for (pending_idx, _) in chunk.iter().skip(1) {
-                self.pending[*pending_idx].compressed_data = Vec::new(); // will be skipped
+                self.pending[*pending_idx].compressed_data = Vec::new();
             }
-
-            total_compressed += compressed.len() as u64;
             blocks_created += 1;
         }
 
