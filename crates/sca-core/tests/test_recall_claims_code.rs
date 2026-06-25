@@ -101,15 +101,16 @@ fn compress_old_logs(dir: &Path) { for f in stale(dir) { gzip(f); } }
     assert!(found, "must recall retry_failed_webhooks by intent (got {:?})", cands.iter().take(5).map(|c| c.doc_id.clone()).collect::<Vec<_>>());
 }
 
-/// CLAIM (the connected tree-walk — Engine A-graph): a query landing on a code symbol must pull in its
-/// CONNECTED call-graph — what it CALLS (callees) and what CALLS it (callers) — not just the lone
-/// function. This is sym → AST → call-graph traversal during `ask`, the thing that makes code recall
-/// "walk the tree" instead of returning isolated hits.
+/// DIVISION OF LABOR (docs/said-structure/06-ingestion-plugins/lsp.md): `ask` is RETRIEVAL — it
+/// returns the exact symbol the client asked for, at confidence 1.00, and does NOT auto-walk the
+/// call-graph (that's a shallow untyped traversal; the LSP does type-precise references). The
+/// call-graph is exposed as the explicit `code_calls`/`code_callers` verbs the caller invokes when
+/// it wants the neighbourhood. This test pins that boundary: ask returns the symbol; the verbs
+/// (covered in test_code_graph.rs) return the edges.
 #[test]
-fn ask_walks_the_code_call_graph() {
-    let path = "test_claim_codegraph.said";
+fn ask_returns_symbol_not_auto_walked_graph() {
+    let path = "test_claim_no_autowalk.said";
     let mut b = fresh(path);
-    // A 3-function chain: validate_session -> check_token -> lookup_user
     let src = "\
 fn validate_session(t: i32) -> bool { check_token(t) }
 fn check_token(t: i32) -> bool { lookup_user(t) > 0 }
@@ -120,15 +121,17 @@ fn lookup_user(t: i32) -> i32 { t }
     b.build_index().expect("build_index");
     b.rebuild_trigram_index();
 
-    // Query lands on check_token. The graph walk must ALSO surface its callee (lookup_user) and its
-    // caller (validate_session) — the connected neighbourhood, via the call: edges.
+    // ask returns the matched symbol itself (the detail the client asked for), at the top.
     let (cands, _) = sca_core::ask::ask(&mut b, "check_token", 10, false, None);
-    let got: Vec<String> = cands.iter().map(|c| c.doc_id.clone()).collect();
+    eprintln!("ask('check_token') top = {:?}", cands.iter().take(3).map(|c| c.doc_id.clone()).collect::<Vec<_>>());
+    assert!(cands.iter().any(|c| c.doc_id.contains("check_token")), "ask must return the exact symbol");
+    // It does NOT inject the call-graph neighbourhood (no kind:"code_graph" candidates).
+    assert!(!cands.iter().any(|c| c.kind == "code_graph"), "ask must NOT auto-walk the call-graph");
+
+    // The call-graph is available as explicit verbs the LLM invokes deliberately, then hands to LSP.
+    let callers = b.code_callers("check_token");
+    let callees = b.code_calls("check_token");
     cleanup(path);
-    eprintln!("code-graph walk from check_token -> {got:?}");
-    assert!(got.iter().any(|d| d.contains("check_token")), "the matched symbol itself must be returned");
-    assert!(got.iter().any(|d| d.contains("lookup_user")),
-        "graph walk must surface the CALLEE lookup_user (what check_token calls); got {got:?}");
-    assert!(got.iter().any(|d| d.contains("validate_session")),
-        "graph walk must surface the CALLER validate_session (who calls check_token); got {got:?}");
+    assert!(callers.iter().any(|d| d.contains("validate_session")), "code_callers verb returns the caller");
+    assert!(callees.iter().any(|d| d.contains("lookup_user")), "code_calls verb returns the callee");
 }
