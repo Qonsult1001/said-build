@@ -929,7 +929,12 @@ impl StaticEncoder {
     pub fn from_pretrained(model_name: &str) -> Result<Self, String> {
         if std::path::Path::new(model_name).is_dir() {
             let own = OwnStaticEncoder::from_pretrained(model_name)?;
-            return Ok(Self { own, model: None });
+            // #4 A/B: also load the model2vec (HF) model so SAID_USE_HF_TOKENIZER can route
+            // through it. Only when the env is set (the HF first-encode transient is heavy).
+            let model = if std::env::var("SAID_USE_HF_TOKENIZER").is_ok() {
+                model2vec_rs::model::StaticModel::from_pretrained(model_name, None, None, None).ok()
+            } else { None };
+            return Ok(Self { own, model });
         }
         // Hub id (or non-dir): let model2vec resolve the files, then build the own
         // encoder from the resolved local snapshot dir. model2vec caches the repo
@@ -989,13 +994,27 @@ impl StaticEncoder {
         Ok(Self { own, model: None })
     }
 
+    /// A/B toggle (#4): when SAID_USE_HF_TOKENIZER=1 and the model2vec model is loaded, route
+    /// encoding through the HF `tokenizers` reference path instead of the own WordPiece path.
+    /// For measuring whether the two produce different recall. Default off (own path).
+    fn use_hf(&self) -> bool {
+        self.model.is_some() && std::env::var("SAID_USE_HF_TOKENIZER").is_ok()
+    }
+
     /// Encode a single text. Returns embedding vector.
     pub fn encode_one(&self, text: &str) -> Vec<f32> {
+        if self.use_hf() {
+            return self.encode_batch_model2vec(std::slice::from_ref(&text.to_string()))
+                .into_iter().next().unwrap_or_default();
+        }
         self.own.encode_one(text)
     }
 
     /// Encode a batch of texts. Returns one embedding per text.
     pub fn encode_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        if self.use_hf() {
+            return self.encode_batch_model2vec(texts);
+        }
         self.own.encode_batch(texts)
     }
 
