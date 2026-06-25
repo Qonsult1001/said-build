@@ -2631,6 +2631,16 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     }
 
     // PHASE 3: Compact blocks + save to disk
+    // OKF deterministic cross-link pass (opt-in via SAID_OKF_LINKS=1). Builds the wiki graph by
+    // literal-title matching across doc/note frames (no LLM, hash-safe link: tags), so
+    // link/tree traversal can deterministically reach all connected data. Opt-in because it
+    // scans every body and is most useful for document/wiki corpora, not pure code repos
+    // (code frames are excluded internally regardless).
+    if std::env::var("SAID_OKF_LINKS").is_ok() {
+        let edges = brain.build_concept_links();
+        if !json { eprintln!("  [okf] cross-link pass: {edges} title-mention edges"); }
+    }
+
     let t_phase3 = std::time::Instant::now();
     if !json {
         eprint!("  [3/3] Compacting + saving...");

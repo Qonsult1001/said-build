@@ -2755,7 +2755,13 @@ impl SaidFile {
         for m in self.frames.get_all_frames_with_pending() {
             if m.status != FrameStatus::Active || m.pillar == Pillar::Code { continue; }
             let Some(title) = m.title.as_deref() else { continue };
-            let t = title.trim().to_lowercase();
+            // Concept = title with any file extension stripped (the .md/.txt ingest path sets
+            // title = filename, but bodies reference the bare concept name). Lowercased to
+            // share the [[wikilink]] namespace.
+            let base = std::path::Path::new(title.trim())
+                .file_stem().map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| title.trim().to_string());
+            let t = base.trim().to_lowercase();
             if t.len() < 3 { continue; }
             concepts.push((t.clone(), t, m.doc_id.clone()));
         }
