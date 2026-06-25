@@ -815,6 +815,11 @@ impl SaidFile {
         if !tags.iter().any(|t| t == &pillar_tag) {
             tags.push(pillar_tag);
         }
+        // NOTE: wikilink ([[concept]]) parsing is deliberately NOT done here — this fn is on
+        // the CODE-ingest hot path (every AST chunk), and code bodies legitimately contain
+        // `[[` (array/index syntax) which would coin junk concepts (global-test guards this).
+        // The doc/note paths (remember_as, remember_with_salience) parse wikilinks BEFORE
+        // calling this and pass the resulting `link:` tags in.
         let opts = crate::frames::PutOptions {
             doc_id: &resolved_id,
             content,
