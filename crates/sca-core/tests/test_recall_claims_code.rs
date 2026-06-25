@@ -100,3 +100,35 @@ fn compress_old_logs(dir: &Path) { for f in stale(dir) { gzip(f); } }
     eprintln!("semantic-intent code recall: top = {:?}", cands.iter().take(3).map(|c| c.doc_id.clone()).collect::<Vec<_>>());
     assert!(found, "must recall retry_failed_webhooks by intent (got {:?})", cands.iter().take(5).map(|c| c.doc_id.clone()).collect::<Vec<_>>());
 }
+
+/// CLAIM (the connected tree-walk — Engine A-graph): a query landing on a code symbol must pull in its
+/// CONNECTED call-graph — what it CALLS (callees) and what CALLS it (callers) — not just the lone
+/// function. This is sym → AST → call-graph traversal during `ask`, the thing that makes code recall
+/// "walk the tree" instead of returning isolated hits.
+#[test]
+fn ask_walks_the_code_call_graph() {
+    let path = "test_claim_codegraph.said";
+    let mut b = fresh(path);
+    // A 3-function chain: validate_session -> check_token -> lookup_user
+    let src = "\
+fn validate_session(t: i32) -> bool { check_token(t) }
+fn check_token(t: i32) -> bool { lookup_user(t) > 0 }
+fn lookup_user(t: i32) -> i32 { t }
+";
+    ingest(&mut b, "auth.rs", src, "rs");
+    for i in 0..30 { b.remember_as(&format!("f{i}"), &format!("Unrelated note {i} about budgets."), None); }
+    b.build_index().expect("build_index");
+    b.rebuild_trigram_index();
+
+    // Query lands on check_token. The graph walk must ALSO surface its callee (lookup_user) and its
+    // caller (validate_session) — the connected neighbourhood, via the call: edges.
+    let (cands, _) = sca_core::ask::ask(&mut b, "check_token", 10, false, None);
+    let got: Vec<String> = cands.iter().map(|c| c.doc_id.clone()).collect();
+    cleanup(path);
+    eprintln!("code-graph walk from check_token -> {got:?}");
+    assert!(got.iter().any(|d| d.contains("check_token")), "the matched symbol itself must be returned");
+    assert!(got.iter().any(|d| d.contains("lookup_user")),
+        "graph walk must surface the CALLEE lookup_user (what check_token calls); got {got:?}");
+    assert!(got.iter().any(|d| d.contains("validate_session")),
+        "graph walk must surface the CALLER validate_session (who calls check_token); got {got:?}");
+}

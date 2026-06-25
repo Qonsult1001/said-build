@@ -321,6 +321,8 @@ pub fn ask(
     };
 
     // ── Engine A — Sym (exact symbol lookup, confidence 1.00) ─────────────
+    // Collect the exact symbol names that matched, so Engine A-graph can walk their call edges.
+    let mut matched_symbols: Vec<String> = Vec::new();
     for cand_name in ask_symbol_candidates(&keywords, &keywords_orig) {
         for sym_hit in brain.sym(&cand_name, 5) {
             if sym_hit.name != cand_name { continue; }
@@ -338,6 +340,44 @@ pub fn ask(
                     sym_hit.kind, sym_hit.start_line, sym_hit.end_line
                 )),
             });
+            if !matched_symbols.contains(&sym_hit.name) { matched_symbols.push(sym_hit.name.clone()); }
+        }
+    }
+
+    // ── Engine A-graph — CODE GRAPH WALK (the connected tree, not isolated hits) ──
+    // When the query lands on a code symbol, the ANSWER is often the connected subgraph — what that
+    // function CALLS (its dependencies) and what CALLS it (its callers). Code frames carry `call:<sym>`
+    // edges extracted from the AST at ingest, but until now `ask` never traversed them, so a code query
+    // returned a lone function instead of its neighbourhood. Here we follow those edges from each
+    // matched symbol: callees + callers become connected candidates. This is the sym → AST → call-graph
+    // walk — deterministic (the edges are AST facts, no LLM), additive (never demotes a direct hit),
+    // scoped-aware, and bounded so a hub function can't flood the result. Callees/callers are scored
+    // just below a direct symbol hit but above generic semantic noise (a real graph neighbour is a
+    // strong, intentional edge). Off-by-nothing: only fires when a symbol actually matched.
+    if !matched_symbols.is_empty() {
+        const MAX_NEIGHBORS: usize = 12; // bound the fan-out from one query's matched symbols
+        let mut added = 0usize;
+        for sym_name in &matched_symbols {
+            // callees (what this symbol depends on) and callers (who depends on it).
+            let neighbors: Vec<(String, &'static str)> = brain.code_calls(sym_name).into_iter().map(|d| (d, "callee"))
+                .chain(brain.code_callers(sym_name).into_iter().map(|d| (d, "caller")))
+                .collect();
+            for (did, edge) in neighbors {
+                if added >= MAX_NEIGHBORS { break; }
+                if let Some(scope) = scope_doc_ids {
+                    if !scope.contains(&did) { continue; }
+                }
+                if candidates.contains_key(&did) { continue; } // already a stronger direct hit
+                let content = brain.get(&did).unwrap_or_default();
+                upsert(&mut candidates, AskCandidate {
+                    doc_id: did,
+                    confidence: 0.92, // a followed call-graph edge: strong, just below a direct symbol hit
+                    kind: "code_graph",
+                    content,
+                    location: Some(format!("{} of {}", edge, sym_name)),
+                });
+                added += 1;
+            }
         }
     }
 
