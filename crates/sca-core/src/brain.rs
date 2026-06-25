@@ -238,6 +238,14 @@ impl Brain {
     /// Called on every remember() with the document's 64-dim embedding.
     /// The embedding serves as both K (key) and U (value).
     pub fn s_slow_write(&mut self, embedding: &[f32]) {
+        // Adapt S_slow to the ACTUAL encoder dim on first/changed write. Brain::new defaults to
+        // 64×64 (said-lam-static 2M), but the 4M model emits 128-dim embeddings — without this
+        // the dim guard below rejected EVERY write and s_slow stayed all-zeros (dream
+        // consolidation silently dead with the 4M encoder). Re-init to dim×dim when needed.
+        if !embedding.is_empty() && self.s_slow_dim != embedding.len() {
+            self.s_slow_dim = embedding.len();
+            self.s_slow = vec![0.0f32; embedding.len() * embedding.len()];
+        }
         let dim = self.s_slow_dim;
         if embedding.len() != dim || self.s_slow.len() != dim * dim { return; }
 
