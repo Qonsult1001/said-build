@@ -2185,11 +2185,16 @@ impl SaidFile {
     /// ~400KB decompression units at 1500 MB/s — on-the-fly random access.
     /// Returns (blocks_created, bytes_saved).
     pub fn compact(&mut self) -> (usize, u64) {
+        let dbg = std::env::var("SAID_PHASE_DBG").is_ok();
+        let t = std::time::Instant::now();
         let result = self.frames.compact(self.data.as_slice());
+        if dbg { eprintln!("    [phase3] block-compress (zstd): {:.2}s", t.elapsed().as_secs_f64()); }
         if result.0 > 0 { self.dirty = true; }
+        let t = std::time::Instant::now();
         // Rebuild trigram index after compact — we now know the final frame set.
         // This is where grep gets its 10,000x speedup from.
         self.rebuild_trigram_index();
+        if dbg { eprintln!("    [phase3] trigram rebuild: {:.2}s", t.elapsed().as_secs_f64()); }
         result
     }
 
