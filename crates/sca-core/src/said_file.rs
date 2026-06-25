@@ -2824,12 +2824,26 @@ impl SaidFile {
     /// `ask` to traverse explicit concept links so a query reaches a linked note even
     /// when the bridge word isn't in its body. Returns doc_ids.
     pub fn frames_linking_concept(&self, concept: &str) -> Vec<String> {
-        let want = format!("link:{}", concept.to_lowercase());
+        let cl = concept.to_lowercase();
+        let want = format!("link:{}", cl);
+        // STEM-AWARE bridge: a query keyword and a stored concept that share a Porter2 stem are
+        // the same concept ("ingestion" query ↔ `link:ingest` edge, "deployment" ↔ "deploy").
+        // Without this, exact-token matching silently missed every morphological variant — a
+        // real "wrong answer" gap for the OKF wiki graph. Deterministic (no LLM); the stem is
+        // the same one the lexical word index uses. Fast path: exact match first.
+        let stemmer = rust_stemmers::Stemmer::create(rust_stemmers::Algorithm::English);
+        let cl_stem = stemmer.stem(&cl).to_string();
         // INCLUDING pending: freshly-added frames live in the pre-flush buffer until
         // save, and recall must see them (a memory you just added is queryable now).
         self.frames.get_all_frames_with_pending().iter()
             .filter(|m| m.status == crate::frames::FrameStatus::Active)
-            .filter(|m| m.tags.iter().any(|t| t == &want))
+            .filter(|m| m.tags.iter().any(|t| {
+                if t == &want { return true; }                       // exact (cheap, common)
+                if let Some(c) = t.strip_prefix("link:") {           // stem-equality fallback
+                    return stemmer.stem(c).as_ref() == cl_stem.as_str();
+                }
+                false
+            }))
             .map(|m| m.doc_id.clone())
             .collect()
     }
