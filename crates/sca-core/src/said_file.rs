@@ -2731,6 +2731,88 @@ impl SaidFile {
             + self.engine.resident_text_bytes()
     }
 
+    /// OKF deterministic cross-link pass (option-2, NO LLM). After ingest, builds the wiki
+    /// GRAPH by literal-TITLE matching: every doc/note frame's title is a concept name; we scan
+    /// every OTHER doc/note frame's body for a whole-word, case-insensitive mention of that
+    /// title and record a `link:<concept>` edge — the same envelope tag a [[wikilink]] yields.
+    ///
+    /// This makes the directory a navigable graph (richer than the parent/child tree) so
+    /// `frames_linking_concept` / the ask bridge can deterministically reach all connected data
+    /// — building the closure as you walk, no precompute, no model. Properties:
+    /// - **Hash-safe**: edges are `link:` TAGS (envelope), never frame content — identity never moves.
+    /// - **Deterministic + idempotent**: same corpus → same edges; re-running adds nothing new.
+    /// - **Code-safe**: Code-pillar frames are EXCLUDED as both source and target (identifier
+    ///   noise + `[[` array syntax would coin junk concepts; global-test guards this).
+    /// - Titles shorter than 3 chars or that are pure stop-words are skipped to avoid noise.
+    ///
+    /// Returns the number of new edges added.
+    pub fn build_concept_links(&mut self) -> usize {
+        use crate::frames::{FrameStatus, Pillar};
+        // 1. Registry of {lowercased title → concept name} for linkable (non-Code) frames.
+        //    The concept is the title lowercased (matches parse_wikilinks' lowercasing so the
+        //    edge namespace is shared with explicit [[wikilinks]]).
+        let mut concepts: Vec<(String, String, String)> = Vec::new(); // (concept_lc, title_lc, doc_id)
+        for m in self.frames.get_all_frames_with_pending() {
+            if m.status != FrameStatus::Active || m.pillar == Pillar::Code { continue; }
+            let Some(title) = m.title.as_deref() else { continue };
+            let t = title.trim().to_lowercase();
+            if t.len() < 3 { continue; }
+            concepts.push((t.clone(), t, m.doc_id.clone()));
+        }
+        if concepts.is_empty() { return 0; }
+
+        // 2. For each linkable frame body, find whole-word mentions of OTHER frames' titles.
+        //    Collect (doc_id, concept) edges first (immutable borrow), then apply via add_tag.
+        let mut edges: Vec<(String, String)> = Vec::new();
+        let linkable: Vec<(String, Option<crate::frames::Pillar>, Vec<String>)> = self.frames
+            .get_all_frames_with_pending().iter()
+            .filter(|m| m.status == FrameStatus::Active && m.pillar != Pillar::Code)
+            .map(|m| (m.doc_id.clone(), Some(m.pillar), m.tags.clone()))
+            .collect();
+        let data = self.data.as_slice().to_vec(); // snapshot for read_frame_text borrow
+        for (doc_id, _pillar, tags) in &linkable {
+            let Some(body) = self.frames.read_frame_text(doc_id, &data) else { continue };
+            let body_lc = body.to_lowercase();
+            for (concept_lc, title_lc, target_id) in &concepts {
+                if target_id == doc_id { continue; }                       // no self-link
+                let want = format!("link:{}", concept_lc);
+                if tags.iter().any(|t| t == &want) { continue; }            // already linked (idempotent)
+                if Self::contains_whole_word(&body_lc, title_lc) {
+                    edges.push((doc_id.clone(), concept_lc.clone()));
+                }
+            }
+        }
+
+        // 3. Apply edges (dedup) via add_tag.
+        let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        let mut added = 0usize;
+        for (doc_id, concept) in edges {
+            if !seen.insert((doc_id.clone(), concept.clone())) { continue; }
+            self.add_tag(&doc_id, &format!("link:{}", concept));
+            added += 1;
+        }
+        added
+    }
+
+    /// Whole-word (ASCII word-boundary) case-insensitive substring check. `needle` may contain
+    /// spaces (multi-word title); boundaries are non-alphanumeric/underscore on each side.
+    fn contains_whole_word(haystack_lc: &str, needle_lc: &str) -> bool {
+        if needle_lc.is_empty() { return false; }
+        let hb = haystack_lc.as_bytes();
+        let nb = needle_lc.as_bytes();
+        let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        let mut start = 0;
+        while let Some(pos) = haystack_lc[start..].find(needle_lc) {
+            let i = start + pos;
+            let before_ok = i == 0 || !is_word(hb[i - 1]);
+            let after = i + nb.len();
+            let after_ok = after >= hb.len() || !is_word(hb[after]);
+            if before_ok && after_ok { return true; }
+            start = i + 1;
+        }
+        false
+    }
+
     /// Active frames that carry a `link:<concept>` wikilink edge for `concept`
     /// (lowercased). The recall-time half of the build-graph path (3.9): used by
     /// `ask` to traverse explicit concept links so a query reaches a linked note even
