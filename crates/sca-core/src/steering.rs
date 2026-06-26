@@ -61,6 +61,10 @@ pub enum ToolAction {
     /// The user's PROMPT (UserPromptSubmit) — `prompt` is what they asked. We recall against it and
     /// inject the result as trusted, factual context alongside the prompt.
     UserPrompt { prompt: String },
+    /// SESSION END — the work is wrapping up. Carries the transcript path so the backstop can read the
+    /// last context and write a journal IF the agent didn't already (the safety net in the hybrid
+    /// agent-judged + backstop write model; see `backstop_session_end`).
+    SessionEnd { transcript_path: Option<String>, session_id: Option<String> },
     /// Anything else (Write/Edit/Read/...). We pass these through untouched.
     Other,
 }
@@ -80,7 +84,7 @@ pub enum ToolAction {
 /// imperative ("use this instead of grep") — imperative framing trips the injection defense even on a
 /// trusted channel (Anthropic hooks doc). See `decide`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookPhase { UserPromptSubmit, SessionStart, PreToolUse, PostToolUse }
+pub enum HookPhase { UserPromptSubmit, SessionStart, PreToolUse, PostToolUse, SessionEnd }
 
 /// A normalized hook event — what every agent adapter parses its stdin JSON INTO.
 #[derive(Debug, Clone)]
@@ -215,6 +219,9 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
                 SteerMode::Block => HookDecision::Deny { reason: ctx },
             }
         }
+        // SessionEnd never reaches decide() (run_hook routes it to the backstop write path before the
+        // recall), but the match must be total. Passthrough is the safe no-op.
+        HookPhase::SessionEnd => HookDecision::Passthrough,
     }
 }
 
@@ -249,6 +256,16 @@ impl AgentAdapter for ClaudeCodeAdapter {
             "SessionStart" => HookPhase::SessionStart,
             "PreToolUse" => HookPhase::PreToolUse,
             "PostToolUse" => HookPhase::PostToolUse,
+            // SessionEnd (and Stop) wrap up the session — route to the backstop write path. Claude's
+            // SessionEnd JSON carries `transcript_path` + `session_id` (+ `reason`).
+            "SessionEnd" | "Stop" => {
+                let transcript_path = v.get("transcript_path").and_then(|x| x.as_str()).map(String::from);
+                let session_id = v.get("session_id").and_then(|x| x.as_str()).map(String::from);
+                return Some(HookEvent {
+                    phase: HookPhase::SessionEnd,
+                    action: ToolAction::SessionEnd { transcript_path, session_id },
+                });
+            }
             _ => return Some(HookEvent { phase: HookPhase::UserPromptSubmit, action: ToolAction::Other }),
         };
         // UserPromptSubmit carries the user's `prompt`; tool events carry `tool_name` + `tool_input`.
@@ -324,8 +341,108 @@ pub fn run_hook(brain: &mut SaidFile, agent: Agent, stdin_json: &serde_json::Val
 {
     let adapter = adapter_for(agent);
     let event = adapter.parse_event(stdin_json)?;
+    // SessionEnd is a WRITE path, not an inject path: the backstop captures the last context as a
+    // journal IF the agent didn't already (hybrid model). It returns no decision to render.
+    if let ToolAction::SessionEnd { transcript_path, session_id } = &event.action {
+        backstop_session_end(brain, transcript_path.as_deref(), session_id.as_deref());
+        return None;
+    }
     let decision = decide(brain, &event, mode);
     adapter.render_decision(&decision)
+}
+
+/// SessionEnd BACKSTOP (the safety net in the agent-judged + backstop write model). The PRIMARY path is
+/// the agent itself calling `journal`/`remember`/`learn_fix` when it concludes something durable (the
+/// model decides what's worth keeping — see said-prompts::steering RECORD-WHAT-YOU-CONCLUDE). This
+/// backstop only fires when that did NOT happen this session, so we never double-write a session the
+/// agent already summarized — quality-first, capture-guaranteed (mirrors claude-mem's Stop hook as a
+/// net under Claude Code's model-judged writes).
+///
+/// "Did the agent journal this session?" is detected by a `session:<id>` tag on any frame written this
+/// session. If absent, we distil a compact last-context summary from the transcript tail and store it as
+/// a journal frame, tagged `kind:journal`, `source:backstop`, and `session:<id>` (so a later end-event
+/// for the same session is idempotent). Best-effort: any read/parse failure is a silent no-op — a
+/// backstop must never break session teardown.
+fn backstop_session_end(brain: &mut SaidFile, transcript_path: Option<&str>, session_id: Option<&str>) {
+    let sid = session_id.unwrap_or("unknown");
+    let session_tag = format!("session:{}", sid);
+
+    // Idempotence + "did the agent already write this session?" — if ANY frame carries this session's
+    // tag (a journal/remember/learn_fix the agent made, OR a prior backstop for the same session), do
+    // nothing. The agent's own distilled write is always preferred over a transcript-tail summary.
+    if brain.frames.active_doc_ids().iter().any(|d| {
+        brain.frames.get_meta(d).map(|m| m.tags.iter().any(|t| t == &session_tag)).unwrap_or(false)
+    }) {
+        return;
+    }
+
+    // Distil a compact last-context summary from the transcript tail. We deliberately keep it SMALL
+    // (the research lesson: distil, don't dump — a raw transcript pollutes recall). Take the last few
+    // user/assistant text lines, not the whole file.
+    let summary = match transcript_path.and_then(|p| transcript_tail_summary(p)) {
+        Some(s) if !s.trim().is_empty() => s,
+        // Nothing useful to capture (no transcript / empty) → no-op. Don't write an empty journal.
+        _ => return,
+    };
+
+    let date = civil_date_today();
+    let doc_id = format!("mem/{}/session-{}", date, sid);
+    let title = format!("Session backstop ({})", date);
+    brain.remember_as(&doc_id, &summary, Some(&title));
+    brain.add_tag(&doc_id, "kind:journal");
+    brain.add_tag(&doc_id, "source:backstop");
+    brain.add_tag(&doc_id, &session_tag);
+    brain.add_tag(&doc_id, &format!("date:{}", date));
+    let _ = brain.build_index();
+    let _ = brain.save();
+}
+
+/// Machine-local civil date `YYYY-MM-DD` (matches the MCP `journal` tool's doc_id convention).
+fn civil_date_today() -> String {
+    let secs = crate::time_compat::unix_secs() as i64;
+    let days = secs.div_euclid(86_400);
+    // Civil-from-days (Howard Hinnant's algorithm) — no chrono dependency.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+/// Read the transcript JSONL tail and distil a compact last-context summary. Best-effort: returns None
+/// on any read/parse failure. Keeps only the last few human-readable text lines — small by design.
+fn transcript_tail_summary(path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    // Collect the last ~12 text snippets from assistant/user messages, newest last.
+    let mut texts: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+        // Claude Code transcript lines vary; pull any string `text` fields from message content.
+        let role = v.get("type").and_then(|x| x.as_str())
+            .or_else(|| v.get("role").and_then(|x| x.as_str())).unwrap_or("");
+        if role != "user" && role != "assistant" { continue; }
+        let msg = v.get("message").unwrap_or(&v);
+        if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+            for block in arr {
+                if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
+                    let t = t.trim();
+                    if t.len() >= 8 { texts.push(format!("{}: {}", role, t.chars().take(280).collect::<String>())); }
+                }
+            }
+        } else if let Some(t) = msg.get("content").and_then(|x| x.as_str()) {
+            let t = t.trim();
+            if t.len() >= 8 { texts.push(format!("{}: {}", role, t.chars().take(280).collect::<String>())); }
+        }
+    }
+    if texts.is_empty() { return None; }
+    let tail: Vec<String> = texts.iter().rev().take(8).rev().cloned().collect();
+    Some(format!("LAST SESSION CONTEXT (backstop — agent did not journal):\n{}", tail.join("\n")))
 }
 
 #[cfg(test)]

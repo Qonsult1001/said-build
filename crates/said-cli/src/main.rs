@@ -3246,18 +3246,27 @@ fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str
         Some(b) => format!("{} --path {} hook --agent claude", shell_quote(exe), shell_quote(b)),
         None => format!("{} hook --agent claude", shell_quote(exe)),
     };
-    // UserPromptSubmit entries have NO matcher (they fire on every prompt).
-    let entry = serde_json::json!({
+    // The SAME command serves every phase — the hook auto-detects the phase from its stdin JSON
+    // (UserPromptSubmit → inject recall; SessionEnd → backstop write). One binary, two jobs.
+    let make_entry = || serde_json::json!({
         "hooks": [ { "type": "command", "command": command, "__said": true } ]
     });
     let hooks = settings.as_object_mut().unwrap()
         .entry("hooks").or_insert_with(|| serde_json::json!({}));
-    let ups = hooks.as_object_mut().unwrap()
-        .entry("UserPromptSubmit").or_insert_with(|| serde_json::json!([]));
+    let hooks_obj = hooks.as_object_mut().unwrap();
+
+    // 1) UserPromptSubmit — the READ side (inject recall before the prompt). NO matcher (every prompt).
+    let ups = hooks_obj.entry("UserPromptSubmit").or_insert_with(|| serde_json::json!([]));
     let arr = ups.as_array_mut().unwrap();
-    // drop any existing said entry first (idempotent)
-    arr.retain(|e| !hook_entry_is_said(e));
-    arr.push(entry);
+    arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+    arr.push(make_entry());
+
+    // 2) SessionEnd — the WRITE backstop (captures the last context as a journal IF the agent didn't
+    // already, the safety net under the agent's own model-judged journal/remember/learn_fix writes).
+    let se = hooks_obj.entry("SessionEnd").or_insert_with(|| serde_json::json!([]));
+    let se_arr = se.as_array_mut().unwrap();
+    se_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+    se_arr.push(make_entry());
 }
 
 /// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.
@@ -3266,7 +3275,7 @@ fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str
 fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
     let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false; };
     let mut changed = false;
-    for key in ["UserPromptSubmit", "SessionStart", "PostToolUse", "PreToolUse"] {
+    for key in ["UserPromptSubmit", "SessionStart", "SessionEnd", "PostToolUse", "PreToolUse"] {
         if let Some(arr) = hooks.get_mut(key).and_then(|p| p.as_array_mut()) {
             let before = arr.len();
             arr.retain(|e| !hook_entry_is_said(e));

@@ -114,6 +114,9 @@ fn setup_install_then_remove_is_clean() {
     let s = std::fs::read_to_string(&settings).unwrap();
     assert!(s.contains("__said"), "hook entry must carry the __said marker");
     assert!(s.contains("hook"), "hook command invokes `said ... hook`");
+    // BOTH surfaces registered: UserPromptSubmit (read/inject) AND SessionEnd (write backstop).
+    assert!(s.contains("UserPromptSubmit"), "registers the read-side UserPromptSubmit hook");
+    assert!(s.contains("SessionEnd"), "registers the write backstop on SessionEnd");
     // the bundled skill body is the said-prompts SKILL_BODY (frontmatter present)
     let body = std::fs::read_to_string(&skill).unwrap();
     assert!(body.starts_with("---\nname: said\n"), "skill is the SKILL.md from said-prompts");
