@@ -89,3 +89,46 @@ did not prove that writing-as-you-work beats a good static index** — it produc
 −52%), two broken tasks, and one unfair comparison. The honest next step is a *distilled, verified,
 deduped* write-back tested over clean tasks with a pass-rate, after the descriptive-ranking gap is
 closed — not a premature "memory makes it cheaper" claim.
+
+---
+
+## Re-run with the CORRECTED agent-judged write-model (clean oracles, distilled writes)
+
+After building the proper write-model — agent-judged writes (the model calls learn_fix/remember/journal
+when it concludes something) + the SessionEnd backstop, distilled-not-dumped — the benchmark was re-run
+with clean top-N oracles and a chain where later tasks reuse earlier conclusions.
+
+| Arm | Cost (5 tasks) | Turns | Correct |
+|---|---|---|---|
+| **cold** (static `.said`, no write-back) | **$0.525** | 23 | 4/5 |
+| learning (agent-judged distilled write-back) | $0.613 (+17%) | 29 | 4/5 |
+| native (no `.said`) | $0.684 | 28 | 4/5 |
+
+On the reuse tasks (C3–C5) the learning arm was +1% / +36% / +14% vs cold — slightly WORSE, not better.
+
+### Honest verdict: accumulation does NOT beat a static index ON AN ALREADY-INDEXED CODEBASE — and the reason is precise
+
+The cold static index won again. But this is an **inconclusive disproof with an identifiable cause**, not
+evidence the write-model is worthless:
+
+**Root cause.** The benchmark brain was built by `said init` over the whole codebase (4,380 frames).
+The learning arm stored a hand-distilled one-liner after each task ("Learned C2: `save` is the answer…").
+For that stored fact to help the NEXT task (a separate `claude --print` with no chat memory), the hook
+must RANK it high enough to inject — but a one-line note has to out-rank thousands of real code frames at
+recall time, and mostly it didn't. So the learning arm ≈ the cold arm **plus the cost of the writes** —
+which is exactly the +14–36% overhead with no recall payoff.
+
+**What this actually tells us (the real, defensible conclusion):**
+
+> Write-back pays off only when the stored learning is the BEST available answer at recall time. On a
+> codebase `init` already indexed, a distilled note rarely out-ranks the real source it summarizes, so
+> accumulation adds cost without benefit. Write-back should win where the answer is NOT already in the
+> index: **cross-session decisions, past fixes (learn_fix), non-obvious invariants, and things the agent
+> discovered that live in no file** — the cases the static index cannot contain. That is the scenario a
+> fair accumulation benchmark must use (a multi-SESSION task where session N needs what session N−1
+> concluded and never wrote to a file), not a single-session chain over already-indexed code.
+
+**Status of the write-model.** BUILT, tested, and capability-proven (the agent CAN write; the backstop
+captures; recall surfaces stored facts — all green in unit/e2e tests). What remains UNPROVEN is the
+cost/quality WIN on an already-indexed codebase — and we now know why, and what scenario would actually
+test it. We do not claim "memory makes it cheaper" until that scenario shows it.
