@@ -58,13 +58,34 @@ pub enum ToolAction {
     CodeSearch { query: String },
     /// A shell command — `command` is the raw line (may or may not be a grep/rg).
     Shell { command: String },
+    /// The user's PROMPT (UserPromptSubmit) — `prompt` is what they asked. We recall against it and
+    /// inject the result as trusted, factual context alongside the prompt.
+    UserPrompt { prompt: String },
     /// Anything else (Write/Edit/Read/...). We pass these through untouched.
     Other,
 }
 
-/// A normalized PreToolUse event — what every agent adapter parses its stdin JSON INTO.
+/// Which hook surface fired. THE CHANNEL determines whether the model TRUSTS the injected recall —
+/// proven by live A/B testing + Anthropic's own docs:
+///   * `UserPromptSubmit` → context injected ALONGSIDE the user's prompt (the high-trust user-message
+///     slot). The model USES it. This is the channel that WORKS (nudge's "Continue" outcome; also how
+///     claude-mem injects). `.said`'s DEFAULT for recall.
+///   * `SessionStart` → injected before the first prompt (durable project memory). Also trusted.
+///   * `PreToolUse` / `PostToolUse` → context lands "next to the tool result" — the LOWEST-TRUST
+///     channel Anthropic explicitly TRAINS the model to be skeptical of. Live test: the model flagged
+///     it as a prompt-injection attempt and REFUSED to act on it (and PostToolUse context is often
+///     dropped entirely, Claude Code #18427). We keep PreToolUse only for deterministic BLOCK/redirect
+///     (nudge's actual PreToolUse use), NOT for trusted context injection.
+/// CRUCIAL companion to the channel: the injected text must be FACTUAL LABELED DATA, never an
+/// imperative ("use this instead of grep") — imperative framing trips the injection defense even on a
+/// trusted channel (Anthropic hooks doc). See `decide`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookPhase { UserPromptSubmit, SessionStart, PreToolUse, PostToolUse }
+
+/// A normalized hook event — what every agent adapter parses its stdin JSON INTO.
 #[derive(Debug, Clone)]
 pub struct HookEvent {
+    pub phase: HookPhase,
     pub action: ToolAction,
 }
 
@@ -73,8 +94,14 @@ pub struct HookEvent {
 pub enum HookDecision {
     /// Let the tool call proceed, unchanged (no context to add).
     Passthrough,
-    /// Let the tool call proceed, but inject `context` for the model to read first (fail-open default).
+    /// (PreToolUse) Let the tool call proceed, but inject `context` for the model to read first.
+    /// NOTE: distrusted in practice (see HookPhase) — Post/Redirect is the trusted default.
     AllowWithContext { context: String },
+    /// (UserPromptSubmit / SessionStart) Provide `context` as factual project data alongside the
+    /// prompt — the TRUSTED channel the model actually uses. This is `.said`'s DEFAULT.
+    Provide { context: String },
+    /// (PostToolUse) Inject `context` next to the tool result. DISTRUSTED in practice — legacy only.
+    Redirect { context: String },
     /// DENY the tool call and tell the agent to use `.said` first; `reason` carries the recall +
     /// instruction. The agent must act on `.said` instead of grepping (block-redirect mode).
     Deny { reason: String },
@@ -118,57 +145,89 @@ fn is_grep_command(cmd: &str) -> bool {
         || c.starts_with("git grep")
 }
 
-/// Extract a search-intent string from the event, if it IS a code search. Returns None for non-search.
+/// Extract the recall-intent string from the event. For a code search it's the pattern; for a
+/// UserPromptSubmit it's the user's prompt. None = nothing to recall against (passthrough).
 fn search_intent(event: &HookEvent) -> Option<String> {
     match &event.action {
         ToolAction::CodeSearch { query } => Some(query.clone()),
-        ToolAction::Shell { command } if is_grep_command(command) => {
-            // Use the raw command as the recall query — the pattern inside it carries the intent.
-            Some(command.clone())
-        }
+        ToolAction::Shell { command } if is_grep_command(command) => Some(command.clone()),
+        ToolAction::UserPrompt { prompt } if prompt.trim().len() >= 3 => Some(prompt.clone()),
         _ => None,
     }
 }
 
-/// THE DECISION — agent-agnostic, pure, testable. When the agent is about to search code, query
-/// `.said`. In `Inject` mode return the recall as context and let the search proceed; in `Block` mode
-/// DENY the search and redirect the agent to act on `.said` first. Non-search calls pass through.
-/// Fail-open in BOTH modes: if `.said` has nothing relevant, passthrough (never block on no-answer).
+/// THE DECISION — agent-agnostic, pure, testable. Query `.said` against the event's intent and return
+/// its recall on the right channel, in the right FRAMING. The combination is what makes the model
+/// actually USE the recall (proven by live A/B + Anthropic's docs):
+///   * UserPromptSubmit / SessionStart → `Provide`: inject the recall as FACTUAL LABELED DATA (a
+///     `<project_index>` block of `symbol — file:line — fact`) alongside the prompt. The model trusts
+///     it and answers from it — NO grep, NO injection-flag. THE DEFAULT (the channel that works).
+///   * PostToolUse → `Redirect` (legacy; the model DISTRUSTS tool-result-adjacent context — kept only
+///     for completeness, do not rely on it).
+///   * PreToolUse → `mode` Inject/Block (Block = deterministic deny+redirect, nudge's real PreToolUse
+///     use; Inject is distrusted).
+/// CRITICAL: the UserPromptSubmit/SessionStart text is PURE FACTS — no "use this instead of grep", no
+/// "this is trusted memory" meta-claim. Imperative/meta framing trips the injection defense even on a
+/// trusted channel (Anthropic hooks doc; measured). Fail-open: nothing GROUNDED → passthrough.
 pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookDecision {
     let Some(intent) = search_intent(event) else { return HookDecision::Passthrough; };
-    // Query .said via the documented retrieval verb. Top-5 is enough to orient the agent cheaply.
     let (cands, keywords) = crate::ask::ask(brain, &intent, 5, false, None);
     if cands.is_empty() { return HookDecision::Passthrough; }
-    // FAIL-OPEN guard — LEXICAL GROUNDING (COIL/Clarity, same principle as ask's existence-abstention,
-    // applied inline here so the hook is thread-safe and self-contained, no global env toggle): an
-    // off-topic search ("kubernetes TLS" against a Rust auth brain) returns the closest-but-irrelevant
-    // note that shares NO query term. If NOTHING in the top results shares a query content-term, there
-    // is no real answer — pass through and inject nothing (the agent greps normally). A binary
-    // set-intersection, no magnitude threshold; a genuine hit shares at least one term.
-    let grounded = cands.iter().any(|c| {
-        let lc = c.content.to_lowercase();
-        keywords.iter().any(|k| k.len() >= 3 && lc.contains(k.as_str()))
-    });
+    // FAIL-OPEN guard. For a literal GREP pattern (tool channels) we require LEXICAL GROUNDING (the
+    // pattern is exact, so a relevant hit shares a term — COIL/Clarity, kills off-topic proximity
+    // artifacts). For a natural-language USER PROMPT we do NOT require lexical overlap — the user
+    // paraphrases ("where is session EXPIRY handled" vs code that says `expires_at`), so `.said`'s own
+    // semantic ranking + abstention is the right gate; over-filtering here silently dropped real
+    // recall in the live A/B. We only require that the top hit isn't trivially weak.
+    let is_prompt = matches!(event.action, ToolAction::UserPrompt { .. });
+    let grounded = if is_prompt {
+        cands.first().map(|c| c.confidence >= 0.20).unwrap_or(false)
+    } else {
+        cands.iter().any(|c| {
+            let lc = c.content.to_lowercase();
+            keywords.iter().any(|k| k.len() >= 3 && lc.contains(k.as_str()))
+        })
+    };
     if !grounded { return HookDecision::Passthrough; }
-    // Build a COMPACT context block (token discipline: locations + short snippets, not whole files).
-    let mut ctx = String::from(".said memory — relevant before searching the codebase:\n");
-    for (i, c) in cands.iter().take(5).enumerate() {
+
+    match event.phase {
+        // The TRUSTED, PROVEN channel: factual labeled-data, no imperative, no meta-claim.
+        HookPhase::UserPromptSubmit | HookPhase::SessionStart => {
+            let mut ctx = String::from("<project_index source=\".said\">\n");
+            for c in cands.iter().take(5) {
+                let loc = c.location.as_deref().unwrap_or("");
+                let snippet: String = c.content.chars().take(160).collect();
+                let sym = c.doc_id.rsplit("::").nth(1).unwrap_or(&c.doc_id);
+                ctx.push_str(&format!("{} — {} {} — {}\n", sym, c.doc_id, loc, snippet.replace('\n', " ").trim()));
+            }
+            ctx.push_str("</project_index>");
+            HookDecision::Provide { context: ctx }
+        }
+        // Legacy tool-result-adjacent channels (distrusted — see HookPhase). Kept, not recommended.
+        HookPhase::PostToolUse => {
+            let ctx = format!("<project_index source=\".said\">\n{}\n</project_index>", index_lines(&cands));
+            HookDecision::Redirect { context: ctx }
+        }
+        HookPhase::PreToolUse => {
+            let ctx = format!("<project_index source=\".said\">\n{}\n</project_index>", index_lines(&cands));
+            match mode {
+                SteerMode::Inject => HookDecision::AllowWithContext { context: ctx },
+                SteerMode::Block => HookDecision::Deny { reason: ctx },
+            }
+        }
+    }
+}
+
+/// Compact factual lines for the legacy (tool-adjacent) channels.
+fn index_lines(cands: &[crate::ask::AskCandidate]) -> String {
+    let mut s = String::new();
+    for c in cands.iter().take(5) {
         let loc = c.location.as_deref().unwrap_or("");
-        let snippet: String = c.content.chars().take(200).collect();
-        ctx.push_str(&format!("{}. [{:.2}][{}] {} {}\n   {}\n",
-            i + 1, c.confidence, c.kind, c.doc_id, loc, snippet.replace('\n', " ")));
+        let snippet: String = c.content.chars().take(160).collect();
+        let sym = c.doc_id.rsplit("::").nth(1).unwrap_or(&c.doc_id);
+        s.push_str(&format!("{} — {} {} — {}\n", sym, c.doc_id, loc, snippet.replace('\n', " ").trim()));
     }
-    match mode {
-        SteerMode::Inject => {
-            ctx.push_str("(If this answers your need, you can skip the grep.)");
-            HookDecision::AllowWithContext { context: ctx }
-        }
-        SteerMode::Block => {
-            ctx.push_str("Use the above from .said instead of grepping. If it doesn't cover what you \
-                          need, re-run the search.");
-            HookDecision::Deny { reason: ctx }
-        }
-    }
+    s
 }
 
 // ── Claude Code adapter ─────────────────────────────────────────────────────────────────────────
@@ -184,9 +243,19 @@ impl AgentAdapter for ClaudeCodeAdapter {
     fn agent(&self) -> Agent { Agent::ClaudeCode }
 
     fn parse_event(&self, v: &serde_json::Value) -> Option<HookEvent> {
-        // Only act on PreToolUse.
         let ev = v.get("hook_event_name").and_then(|x| x.as_str()).unwrap_or("");
-        if ev != "PreToolUse" { return Some(HookEvent { action: ToolAction::Other }); }
+        let phase = match ev {
+            "UserPromptSubmit" => HookPhase::UserPromptSubmit,
+            "SessionStart" => HookPhase::SessionStart,
+            "PreToolUse" => HookPhase::PreToolUse,
+            "PostToolUse" => HookPhase::PostToolUse,
+            _ => return Some(HookEvent { phase: HookPhase::UserPromptSubmit, action: ToolAction::Other }),
+        };
+        // UserPromptSubmit carries the user's `prompt`; tool events carry `tool_name` + `tool_input`.
+        if phase == HookPhase::UserPromptSubmit {
+            let prompt = v.get("prompt").and_then(|x| x.as_str()).unwrap_or("");
+            return Some(HookEvent { phase, action: ToolAction::UserPrompt { prompt: prompt.to_string() } });
+        }
         let tool = v.get("tool_name").and_then(|x| x.as_str()).unwrap_or("");
         let input = v.get("tool_input");
         let action = match tool {
@@ -200,16 +269,31 @@ impl AgentAdapter for ClaudeCodeAdapter {
             }
             _ => ToolAction::Other,
         };
-        Some(HookEvent { action })
+        Some(HookEvent { phase, action })
     }
 
     fn render_decision(&self, d: &HookDecision) -> Option<serde_json::Value> {
         match d {
             HookDecision::Passthrough => None, // emit nothing → agent proceeds unchanged
+            // TRUSTED channel — factual project data alongside the prompt (UserPromptSubmit). The model
+            // uses it; no permissionDecision (this event doesn't gate a tool).
+            HookDecision::Provide { context } => Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context,
+                }
+            })),
             HookDecision::AllowWithContext { context } => Some(serde_json::json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
+                    "additionalContext": context,
+                }
+            })),
+            // PostToolUse "allow then redirect" — additionalContext injected as FEEDBACK on the result.
+            HookDecision::Redirect { context } => Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
                     "additionalContext": context,
                 }
             })),

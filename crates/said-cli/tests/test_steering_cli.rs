@@ -44,18 +44,21 @@ fn make_brain() -> (std::path::PathBuf, String) {
 }
 
 #[test]
-fn hook_injects_recall_on_grep_clean_stdout() {
+fn hook_provides_recall_on_user_prompt_clean_stdout() {
     let (dir, brain) = make_brain();
-    let json = r#"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"session expiry minutes"}}"#;
+    // UserPromptSubmit — the TRUSTED channel (the registered default). The hook recalls .said against
+    // the user's prompt and PROVIDES the result as factual project_index alongside the prompt.
+    let json = r#"{"hook_event_name":"UserPromptSubmit","prompt":"where is make_session and how is session expiry handled?"}"#;
     let (stdout, _stderr) = run_hook(&brain, json, &["--agent", "claude"]);
     let _ = std::fs::remove_dir_all(&dir);
 
     // STDOUT must be CLEAN JSON only (the SCA load message is on stderr, must not leak here).
     let v: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("hook stdout must be valid JSON only, got:\n{stdout}\nerr: {e}"));
-    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
     let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or("");
-    assert!(ctx.contains("make_session"), "injected context must point at make_session; got:\n{ctx}");
+    assert!(ctx.contains("make_session"), "provided context must point at make_session; got:\n{ctx}");
+    assert!(ctx.contains("<project_index"), "must be a factual <project_index> block (not imperative)");
 }
 
 #[test]
@@ -90,7 +93,7 @@ fn setup_dry_run_shows_removal_safe_registration() {
     assert!(out.status.success(), "setup --dry-run must succeed: {}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("would write .claude/skills/said/SKILL.md"), "dry-run announces the skill; got:\n{stdout}");
     assert!(stdout.contains(".claude/settings.local.json"), "registers into gitignored local settings; got:\n{stdout}");
-    assert!(stdout.contains("PreToolUse"), "registers a PreToolUse hook");
+    assert!(stdout.contains("UserPromptSubmit"), "registers a UserPromptSubmit hook (the trusted channel)");
     assert!(!wrote_settings && !wrote_skill, "dry-run must NOT write any files");
 }
 

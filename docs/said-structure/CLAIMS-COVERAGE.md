@@ -118,16 +118,29 @@ Tracked here so the gaps are visible, not hidden.
 These are the next build targets to make `.said`'s MCP world-class for coding (currently code-only;
 to be extended). The retrieval CORE already wins on accuracy + tokens; the gap is the MCP *surface*.
 
-## Agent steering (Claude Code) → BUILT, see `16-agent-steering.md`
-`said hook` (stdin PreToolUse JSON → stdout decision; injects `.said` recall when the agent is about
-to grep, fail-open) + `said setup`/`--remove`/`--dry-run` (registers the hook in gitignored
-`.claude/settings.local.json`, *.bak backup, `__said` marker; bundles `.claude/skills/said/SKILL.md`
-from `said-prompts::steering::SKILL_BODY`; NEVER CLAUDE.md). Decision core: `sca-core::steering`.
-Tested: core 3 unit + 4 e2e, prompts 3, CLI 5 e2e (`test_steering_cli`: inject / passthrough /
-fail-open / dry-run / install→remove-clean). Removal leaves no git trace. **EXPERIMENT RESOLVED**
-(test_steering_experiment.rs): default = INJECT (fail-safe — never blocks a legitimate grep; when
-recall is good the agent skips grep anyway; downside is a missed saving, never a wrong answer). BLOCK
-is an opt-in power mode (`said hook --mode block`) that deterministically avoids the whole-project
+## Agent steering (Claude Code) → BUILT + PROVEN LIVE, see `16-agent-steering.md`
+**THE solution to "make the agent actually USE injected memory" — proven against live Claude Code
+2.1.81.** `said hook` recalls `.said` against the user's prompt and injects it via **UserPromptSubmit**
+(the TRUSTED channel) framed as factual `<project_index>` data; `said setup`/`--remove`/`--dry-run`
+registers it in gitignored `.claude/settings.local.json` (*.bak backup, `__said` marker, embeds the
+brain --path), bundles the `said` skill, NEVER CLAUDE.md. Decision core `sca-core::steering`.
+
+LIVE A/B (the channel/framing finding — recall quality was never the issue):
+- PreToolUse hook inject → model FLAGS as prompt-injection, refuses.
+- PostToolUse hook inject → same (also frequently dropped, Claude Code #18427).
+- `.said` as MCP tool → model doesn't call it, greps anyway.
+- **UserPromptSubmit + factual `<project_index>` → model answers FROM `.said` in 1 turn, ZERO tool
+  calls, ~$0.036 vs grep baseline 4 turns ~$0.090.** `.said`-first BEATS grep.
+Root cause (Anthropic docs): Pre/PostToolUse `additionalContext` lands "next to the tool result" = the
+lowest-trust slot (instruction hierarchy system>user>tool-output); UserPromptSubmit rides the user
+slot. The text must be FACTS not imperatives — imperative/meta framing trips the injection defense even
+on the trusted channel. Same pattern Mem0/Zep/Letta (system-data) + claude-mem (SessionStart) use.
+Tested: core 3 unit + 5 e2e (incl. UserPromptSubmit), prompts 3, CLI 5 e2e; canary 0.95; regression
+15/15. Removal leaves no git trace.
+
+**(legacy experiment)** PreToolUse INJECT/BLOCK (`said hook --mode`) — kept in code, distrusted live.
+The earlier inject-vs-block experiment (test_steering_experiment.rs) is now moot for the default, since
+the whole PreToolUse channel is distrusted; BLOCK
 read but accepts an occasional extra round-trip; the grounding gate keeps both modes fail-open on
 off-topic searches. Original DESIGNED note:
 

@@ -37,31 +37,64 @@ fn validate_session(s: &Session) -> bool { now() < s.expires_at }
     b
 }
 
-/// The agent is about to GREP for the session-expiry bug. The hook should ALLOW + inject `.said`
-/// recall that points at make_session (so the agent can skip the grep). nudge's inject-and-proceed.
+/// THE TRUSTED CHANNEL (default): UserPromptSubmit. On the user's prompt the hook recalls `.said` and
+/// PROVIDES the result as FACTUAL labeled data alongside the prompt — the channel the model actually
+/// USES (proven live; PreToolUse/PostToolUse injection is distrusted as prompt-injection). The envelope
+/// is hookEventName=UserPromptSubmit + additionalContext, framed as a `<project_index>` of facts (no
+/// imperative, no meta-claim — that framing is what avoids the injection flag).
 #[test]
-fn claude_grep_gets_said_recall_injected() {
-    let path = "test_steering_grep.said";
+fn claude_user_prompt_gets_factual_project_index() {
+    let path = "test_steering_ups.said";
     let mut b = brain_with_code(path);
 
-    // The exact Claude PreToolUse stdin JSON for a Grep tool call.
+    // The Claude UserPromptSubmit stdin JSON carries the user's `prompt`.
     let stdin = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Grep",
-        "tool_input": { "pattern": "session expires too quickly seconds instead of minutes" }
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "why do sessions expire too quickly, seconds instead of thirty minutes?"
     });
 
     let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{path}.spill"));
 
-    let out = out.expect("a code-search hook must emit a decision");
-    eprintln!("hook decision JSON:\n{}", serde_json::to_string_pretty(&out).unwrap());
-    // It must be an ALLOW (never block) with injected context.
-    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "allow", "must allow (inject-and-proceed)");
+    let out = out.expect("a user prompt with a matching recall must emit a decision");
+    eprintln!("UserPromptSubmit decision JSON:\n{}", serde_json::to_string_pretty(&out).unwrap());
+    // TRUSTED-channel envelope: UserPromptSubmit + additionalContext, NO permissionDecision.
+    assert_eq!(out["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+    assert!(out["hookSpecificOutput"].get("permissionDecision").is_none());
     let ctx = out["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or("");
-    assert!(ctx.contains("make_session"), "injected .said context must point at the buggy make_session; got:\n{ctx}");
-    assert!(ctx.contains(".said memory"), "context must be labelled as .said memory");
+    assert!(ctx.contains("make_session"), "factual index must point at make_session; got:\n{ctx}");
+    assert!(ctx.contains("<project_index"), "must be framed as a factual <project_index> block");
+    // Honesty/framing: NO imperative command (that's what trips the injection defense).
+    assert!(!ctx.to_lowercase().contains("instead of grep") && !ctx.to_lowercase().contains("you must"),
+        "context must be FACTUAL, not an imperative instruction; got:\n{ctx}");
+}
+
+/// POSTToolUse "allow then redirect" (the trusted channel): grep already RAN; the hook injects the
+/// `.said` recall as feedback on the result. The agent acts on it (vs distrusting pre-tool injection).
+#[test]
+fn claude_post_tool_grep_redirects_with_recall() {
+    let path = "test_steering_post.said";
+    let mut b = brain_with_code(path);
+    // Claude PostToolUse JSON carries tool_name + tool_input + tool_output (the grep result).
+    let stdin = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Grep",
+        "tool_input": { "pattern": "session expires too quickly seconds instead of minutes" },
+        "tool_output": { "type": "text", "text": "(grep found nothing useful)" }
+    });
+    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{path}.spill"));
+    let out = out.expect("post-tool code search must emit a redirect");
+    eprintln!("post-tool decision:\n{}", serde_json::to_string_pretty(&out).unwrap());
+    // PostToolUse envelope: hookEventName=PostToolUse + additionalContext (NO permissionDecision).
+    assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+    assert!(out["hookSpecificOutput"].get("permissionDecision").is_none(),
+        "PostToolUse must NOT carry a permissionDecision (the tool already ran)");
+    let ctx = out["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or("");
+    assert!(ctx.contains("make_session"), "redirect must point at the buggy make_session; got:\n{ctx}");
+    assert!(ctx.contains("<project_index"), "redirect must be a factual <project_index> block");
 }
 
 /// A Bash grep/rg command is also a code search → same inject behaviour.

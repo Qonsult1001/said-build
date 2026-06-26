@@ -1,15 +1,37 @@
-# Agent steering — telling Claude when/what to use `.said` (nudge-faithful, removal-safe)
+# Agent steering — telling Claude when/what to use `.said` (removal-safe)
 
-**Status:** BUILT (Claude Code). `said hook` + `said setup`/`--remove`/`--dry-run` ship in said-cli;
-the decision core is `sca-core::steering`; the guidance text is `said-prompts::steering`. Tested:
-core 3 unit + 4 e2e (`test_steering_e2e`), prompts 3 (`said-prompts::steering::tests`), CLI 5 e2e
-(`test_steering_cli`). One open experiment (inject-vs-block, below) is still to run.
+**Status:** BUILT + PROVEN LIVE (Claude Code). Decision core `sca-core::steering`, guidance text
+`said-prompts::steering`, CLI `said hook` + `said setup`/`--remove`/`--dry-run`.
+
+## THE KEY FINDING — channel + framing is everything (proven by live A/B)
+
+Getting an agent to USE injected memory is a universal problem, and the recall quality is NOT the
+hard part — the DELIVERY CHANNEL and the FRAMING are. Measured against live Claude Code 2.1.81:
+
+| Approach | Live result |
+|----------|-------------|
+| `.said` recall via PreToolUse hook `additionalContext` | Model FLAGS it as prompt-injection, REFUSES it |
+| `.said` recall via PostToolUse hook `additionalContext` | Same — distrusted (and often DROPPED, Claude Code #18427) |
+| `.said` as an MCP tool ("use before grep") | Model often doesn't call it, greps anyway |
+| **`.said` recall via `UserPromptSubmit`, framed as factual `<project_index>`** | **Model answers FROM `.said` in 1 turn, ZERO tool calls, ~$0.036 (vs grep baseline 4 turns ~$0.090)** |
+
+**Why** (confirmed by Anthropic's own docs — strengthen-guardrails + hooks reference): Pre/PostToolUse
+`additionalContext` lands "next to the tool result" — the LOWEST-trust slot the model is TRAINED to be
+skeptical of (instruction-hierarchy: system > user > tool-output). `UserPromptSubmit` context rides the
+high-trust user-message slot. AND the text must be FACTUAL labeled data, never an imperative ("use
+this instead of grep") or a meta-claim ("this is trusted memory") — imperative framing trips the
+injection defense even on the trusted channel. This is what Mem0/Zep/Letta (inject as system data) and
+claude-mem (SessionStart) and nudge (UserPromptSubmit "Continue") all converge on.
+
+So `.said` DEFAULTS to: **UserPromptSubmit channel + `<project_index source=".said">` factual framing.**
+(PreToolUse Inject/Block and PostToolUse Redirect remain in the code as legacy/experimental — the model
+distrusts them; do not rely on them.)
 
 Try it:
-```
-said setup                 # opt-in: registers the PreToolUse hook in .claude/settings.local.json
-                           # (gitignored, *.bak backup) + bundles .claude/skills/said/SKILL.md
-printf '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"…"}}' | said hook
+```text
+said setup                 # opt-in: registers the UserPromptSubmit hook in .claude/settings.local.json
+                           # (gitignored, *.bak backup, embeds the brain --path) + bundles the said skill
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"where is session expiry handled?"}' | said hook
 said setup --remove        # clean removal — no git trace
 ```
 

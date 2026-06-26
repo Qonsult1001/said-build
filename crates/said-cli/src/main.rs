@@ -1347,7 +1347,7 @@ fn main() {
         #[cfg(feature = "code")]
         Commands::Hook { ref agent, ref mode } => cmd_hook(cli.path.as_deref(), agent, mode),
         #[cfg(feature = "code")]
-        Commands::Setup { ref agent, remove, dry_run } => cmd_setup(agent, remove, dry_run),
+        Commands::Setup { ref agent, remove, dry_run } => cmd_setup(cli.path.as_deref(), agent, remove, dry_run),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
@@ -3142,7 +3142,7 @@ fn cmd_hook(path: Option<&str>, agent: &str, mode: &str) -> Result<(), String> {
 /// skill. Writes the agent's GITIGNORED local settings (never CLAUDE.md), so removal leaves no git
 /// trace. Idempotent; `--remove` cleanly undoes it.
 #[cfg(feature = "code")]
-fn cmd_setup(agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
+fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
     use sca_core::steering::Agent;
     let Some(agent) = Agent::from_str_ci(agent) else {
         return Err(format!("unknown agent '{agent}' (supported: claude)"));
@@ -3150,6 +3150,19 @@ fn cmd_setup(agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
     // Resolve the absolute path to THIS binary so the hook command is unambiguous.
     let exe = std::env::current_exe().map_err(|e| format!("cannot resolve said binary path: {e}"))?;
     let exe_str = exe.to_string_lossy().to_string();
+    // Resolve the brain path NOW and embed it ABSOLUTELY in the hook command, so the hook subprocess
+    // (run by the agent, possibly from a different cwd) always loads the right brain — cwd auto-detect
+    // is unreliable as a subprocess (the live A/B showed the hook silently not finding the brain).
+    // Absolute path WITHOUT canonicalize: on Windows canonicalize() returns the `\\?\` extended-length
+    // prefix, which the said binary can't open (the live A/B proved the hook silently failed with it).
+    // Make it absolute by joining cwd if relative, and strip any `\\?\` prefix defensively.
+    let brain_abs: Option<String> = resolve::resolve(path).ok().map(|p| {
+        let abs = if p.is_absolute() { p } else {
+            std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p)
+        };
+        let s = abs.to_string_lossy().to_string();
+        s.strip_prefix(r"\\?\").map(|x| x.to_string()).unwrap_or(s)
+    });
 
     let settings_path = std::path::Path::new(agent.settings_path()); // .claude/settings.local.json
     let skill_path = std::path::Path::new(".claude/skills/said/SKILL.md");
@@ -3201,7 +3214,7 @@ fn cmd_setup(agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
     } else {
         serde_json::json!({})
     };
-    add_said_hook(&mut settings, &exe_str);
+    add_said_hook(&mut settings, &exe_str, brain_abs.as_deref());
 
     if dry_run {
         println!("would register PreToolUse hook in {} →\n{}",
@@ -3219,32 +3232,48 @@ fn cmd_setup(agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
 }
 
 /// Merge the `.said` PreToolUse hook into a Claude settings JSON object. Matcher `Grep|Bash` (the
-/// code-search surfaces). Idempotent — replaces any prior said hook entry.
+/// Registers on UserPromptSubmit — the TRUSTED channel proven by the live A/B + Anthropic's docs: a
+/// PreToolUse/PostToolUse `additionalContext` lands "next to the tool result" (the lowest-trust slot
+/// the model is TRAINED to distrust → it flags it as prompt-injection), whereas UserPromptSubmit
+/// context rides the user-message slot and the model USES it. On each prompt the hook recalls `.said`
+/// and injects the matching code as FACTUAL labeled data. UserPromptSubmit fires for EVERY prompt (no
+/// tool matcher). Idempotent — replaces any prior said entry.
 #[cfg(feature = "code")]
-fn add_said_hook(settings: &mut serde_json::Value, exe: &str) {
-    let command = format!("{} hook --agent claude", shell_quote(exe));
+fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str>) {
+    // Embed the resolved brain path so the hook subprocess always loads the right brain regardless of
+    // the cwd the agent invokes it from (cwd auto-detect is unreliable as a subprocess).
+    let command = match brain {
+        Some(b) => format!("{} --path {} hook --agent claude", shell_quote(exe), shell_quote(b)),
+        None => format!("{} hook --agent claude", shell_quote(exe)),
+    };
+    // UserPromptSubmit entries have NO matcher (they fire on every prompt).
     let entry = serde_json::json!({
-        "matcher": "Grep|Bash",
         "hooks": [ { "type": "command", "command": command, "__said": true } ]
     });
     let hooks = settings.as_object_mut().unwrap()
         .entry("hooks").or_insert_with(|| serde_json::json!({}));
-    let pre = hooks.as_object_mut().unwrap()
-        .entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
-    let arr = pre.as_array_mut().unwrap();
+    let ups = hooks.as_object_mut().unwrap()
+        .entry("UserPromptSubmit").or_insert_with(|| serde_json::json!([]));
+    let arr = ups.as_array_mut().unwrap();
     // drop any existing said entry first (idempotent)
     arr.retain(|e| !hook_entry_is_said(e));
     arr.push(entry);
 }
 
 /// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.
+/// Cleans BOTH PostToolUse (current) and PreToolUse (legacy, in case an old setup wrote there).
 #[cfg(feature = "code")]
 fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
     let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false; };
-    let Some(pre) = hooks.get_mut("PreToolUse").and_then(|p| p.as_array_mut()) else { return false; };
-    let before = pre.len();
-    pre.retain(|e| !hook_entry_is_said(e));
-    pre.len() != before
+    let mut changed = false;
+    for key in ["UserPromptSubmit", "SessionStart", "PostToolUse", "PreToolUse"] {
+        if let Some(arr) = hooks.get_mut(key).and_then(|p| p.as_array_mut()) {
+            let before = arr.len();
+            arr.retain(|e| !hook_entry_is_said(e));
+            if arr.len() != before { changed = true; }
+        }
+    }
+    changed
 }
 
 /// Does a PreToolUse entry belong to `.said`? (marked with our `__said` flag inside its hooks).
