@@ -42,13 +42,21 @@ pub struct SearchTool {
 
 #[mcp_tool(
     name = "ask",
-    description = "Ask the brain a natural-language question — runs the 3-engine smart \
-                   router: Sym (exact symbol lookup, confidence 1.00), Grep (literal \
-                   keyword match, 0.40-0.95), and SCA semantic (the recall pipeline with \
-                   BM25, entity boost, multi-hop bridge, confidence 0.30-0.80). Results \
-                   are merged by confidence with a self-calibrating relative cutoff. \
-                   Use deep=true to widen the candidate pool. Same behavior as `said ask` \
-                   on the CLI — identical fusion + identical result set.",
+    description = "Find code or knowledge in this project's `.said` memory by MEANING. Call this \
+                   BEFORE grepping or reading files when you need to LOCATE something: a function by \
+                   what it DOES (not its exact name), the source of a bug from a symptom, or a past \
+                   fix/decision — it points at the precise file + symbol far cheaper than reading the \
+                   codebase, and finds matches grep can't (semantic + symbol + call-graph in one \
+                   query). Returns ranked results [confidence][kind] doc_id + snippet; act on what it \
+                   returns (and hand symbols to your LSP for type-precise references). It does not \
+                   invent results — if it has nothing relevant it returns nothing, then grep normally. \
+                   Runs the 3-engine fusion (Sym 1.00 / Grep 0.40-0.95 / SCA semantic 0.30-0.80); \
+                   deep=true widens the pool. Same fusion as `said ask` on the CLI. \
+                   EFFICIENCY: a single high-confidence hit ([0.95]+ or [symbol]) IS the answer — read \
+                   that one frame with `get` and stop; do NOT re-ask the same question many ways or \
+                   sweep the whole codebase to double-check. Re-query only if the top result is low \
+                   confidence or clearly off-topic. One good `ask` should REPLACE a multi-step \
+                   investigation, not kick one off.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
