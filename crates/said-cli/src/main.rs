@@ -613,6 +613,10 @@ enum Commands {
         /// Which agent's hook protocol to speak. Default: claude.
         #[arg(long, default_value = "claude")]
         agent: String,
+        /// Steer mode: `inject` (recall + let grep proceed, default) or `block` (deny + redirect to
+        /// .said first). The open experiment — inject is the safer default.
+        #[arg(long, default_value = "inject")]
+        mode: String,
     },
 
     /// Register the `.said` agent-steering hook with a coding agent (opt-in). Writes the hook into
@@ -1341,7 +1345,7 @@ fn main() {
             content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
         #[cfg(feature = "code")]
-        Commands::Hook { ref agent } => cmd_hook(cli.path.as_deref(), agent),
+        Commands::Hook { ref agent, ref mode } => cmd_hook(cli.path.as_deref(), agent, mode),
         #[cfg(feature = "code")]
         Commands::Setup { ref agent, remove, dry_run } => cmd_setup(agent, remove, dry_run),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
@@ -3113,19 +3117,21 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
 /// the subprocess the agent's hook system invokes; it must be FAST and FAIL-OPEN (any error → emit
 /// nothing so the agent is never blocked). See sca_core::steering.
 #[cfg(feature = "code")]
-fn cmd_hook(path: Option<&str>, agent: &str) -> Result<(), String> {
+fn cmd_hook(path: Option<&str>, agent: &str, mode: &str) -> Result<(), String> {
     use std::io::Read;
     let Some(agent) = sca_core::steering::Agent::from_str_ci(agent) else {
         // Unknown agent → fail open (emit nothing), don't error the agent's tool call.
         return Ok(());
     };
+    let mode = sca_core::steering::SteerMode::from_str_ci(mode)
+        .unwrap_or(sca_core::steering::SteerMode::Inject);
     // Read the agent's hook JSON from stdin.
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() { return Ok(()); }
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&buf) else { return Ok(()); };
     // Open the brain (auto-detect path). If there's no brain, fail open.
     let mut brain = match open_brain(path) { Ok(b) => b, Err(_) => return Ok(()) };
-    if let Some(decision) = sca_core::steering::run_hook(&mut brain, agent, &v) {
+    if let Some(decision) = sca_core::steering::run_hook(&mut brain, agent, &v, mode) {
         // Emit the decision JSON on stdout for the agent to read.
         println!("{}", serde_json::to_string(&decision).unwrap_or_default());
     }

@@ -75,7 +75,29 @@ pub enum HookDecision {
     Passthrough,
     /// Let the tool call proceed, but inject `context` for the model to read first (fail-open default).
     AllowWithContext { context: String },
-    // (block/redirect intentionally NOT the default — see the design doc's open experiment.)
+    /// DENY the tool call and tell the agent to use `.said` first; `reason` carries the recall +
+    /// instruction. The agent must act on `.said` instead of grepping (block-redirect mode).
+    Deny { reason: String },
+}
+
+/// How the hook reacts when the agent is about to search code AND `.said` has a relevant answer.
+/// The OPEN EXPERIMENT (docs/16-agent-steering): does Block beat Inject on tokens-to-locate?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerMode {
+    /// Inject `.said` recall as context, LET the search proceed (fail-open default).
+    Inject,
+    /// DENY the search and redirect the agent to act on `.said` first (forceful, max token-saving).
+    Block,
+}
+
+impl SteerMode {
+    pub fn from_str_ci(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "inject" | "allow" => Some(SteerMode::Inject),
+            "block" | "deny" | "redirect" => Some(SteerMode::Block),
+            _ => None,
+        }
+    }
 }
 
 /// An agent adapter: parse this agent's PreToolUse stdin JSON into a normalized `HookEvent`, and render
@@ -109,10 +131,10 @@ fn search_intent(event: &HookEvent) -> Option<String> {
 }
 
 /// THE DECISION — agent-agnostic, pure, testable. When the agent is about to search code, query
-/// `.said` and return the recall as `additionalContext` so the model sees what `.said` already knows
-/// BEFORE it greps (often it then doesn't need to). Non-search calls pass through untouched.
-/// Fail-open: if `.said` has nothing relevant, passthrough (never block the agent).
-pub fn decide(brain: &mut SaidFile, event: &HookEvent) -> HookDecision {
+/// `.said`. In `Inject` mode return the recall as context and let the search proceed; in `Block` mode
+/// DENY the search and redirect the agent to act on `.said` first. Non-search calls pass through.
+/// Fail-open in BOTH modes: if `.said` has nothing relevant, passthrough (never block on no-answer).
+pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookDecision {
     let Some(intent) = search_intent(event) else { return HookDecision::Passthrough; };
     // Query .said via the documented retrieval verb. Top-5 is enough to orient the agent cheaply.
     let (cands, keywords) = crate::ask::ask(brain, &intent, 5, false, None);
@@ -136,8 +158,17 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent) -> HookDecision {
         ctx.push_str(&format!("{}. [{:.2}][{}] {} {}\n   {}\n",
             i + 1, c.confidence, c.kind, c.doc_id, loc, snippet.replace('\n', " ")));
     }
-    ctx.push_str("(If this answers your need, you can skip the grep.)");
-    HookDecision::AllowWithContext { context: ctx }
+    match mode {
+        SteerMode::Inject => {
+            ctx.push_str("(If this answers your need, you can skip the grep.)");
+            HookDecision::AllowWithContext { context: ctx }
+        }
+        SteerMode::Block => {
+            ctx.push_str("Use the above from .said instead of grepping. If it doesn't cover what you \
+                          need, re-run the search.");
+            HookDecision::Deny { reason: ctx }
+        }
+    }
 }
 
 // ── Claude Code adapter ─────────────────────────────────────────────────────────────────────────
@@ -182,6 +213,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     "additionalContext": context,
                 }
             })),
+            HookDecision::Deny { reason } => Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            })),
         }
     }
 }
@@ -195,13 +233,14 @@ pub fn adapter_for(agent: Agent) -> Box<dyn AgentAdapter> {
 
 /// End-to-end: take an agent's raw PreToolUse stdin JSON, run the decision against `brain`, and return
 /// the agent's stdout JSON (or `None` for "emit nothing / passthrough"). This is what a `said hook`
-/// subcommand wires to stdin/stdout. Pure except for the `.said` query — fully testable.
-pub fn run_hook(brain: &mut SaidFile, agent: Agent, stdin_json: &serde_json::Value)
+/// subcommand wires to stdin/stdout. Pure except for the `.said` query — fully testable. `mode` selects
+/// inject-and-proceed (default) vs block-redirect (the open experiment).
+pub fn run_hook(brain: &mut SaidFile, agent: Agent, stdin_json: &serde_json::Value, mode: SteerMode)
     -> Option<serde_json::Value>
 {
     let adapter = adapter_for(agent);
     let event = adapter.parse_event(stdin_json)?;
-    let decision = decide(brain, &event);
+    let decision = decide(brain, &event, mode);
     adapter.render_decision(&decision)
 }
 

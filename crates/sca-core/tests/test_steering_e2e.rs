@@ -51,7 +51,7 @@ fn claude_grep_gets_said_recall_injected() {
         "tool_input": { "pattern": "session expires too quickly seconds instead of minutes" }
     });
 
-    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin);
+    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{path}.spill"));
 
@@ -74,7 +74,7 @@ fn claude_bash_grep_gets_recall() {
         "tool_name": "Bash",
         "tool_input": { "command": "rg 'expires_at' src/" }
     });
-    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin);
+    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{path}.spill"));
     let out = out.expect("bash-grep must emit a decision");
@@ -91,14 +91,14 @@ fn claude_write_passes_through() {
         "tool_name": "Write",
         "tool_input": { "file_path": "x.rs", "content": "fn x(){}" }
     });
-    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin);
+    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
     // A non-search Bash command (not grep) also passes through.
     let stdin2 = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": { "command": "cargo test" }
     });
-    let out2 = run_hook(&mut b, Agent::ClaudeCode, &stdin2);
+    let out2 = run_hook(&mut b, Agent::ClaudeCode, &stdin2, sca_core::steering::SteerMode::Inject);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{path}.spill"));
     assert!(out.is_none(), "Write must pass through (emit nothing)");
@@ -121,7 +121,7 @@ fn no_relevant_memory_fails_open() {
         "tool_name": "Grep",
         "tool_input": { "pattern": "kubernetes ingress controller TLS termination" }
     });
-    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin);
+    let out = run_hook(&mut b, Agent::ClaudeCode, &stdin, sca_core::steering::SteerMode::Inject);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{path}.spill"));
     // No relevant hit → passthrough (None). Must NOT block, must NOT inject noise.

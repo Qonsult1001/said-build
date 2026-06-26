@@ -107,17 +107,25 @@ said setup --remove   # (to build) deletes the hook entry + skill; no git trace
    '<task that would normally grep>'` and verify (a) the hook fired, (b) `.said` recall was injected,
    (c) the agent reached the answer with fewer file reads / tokens than the no-hook baseline.
 
-## OPEN EXPERIMENT (run before finalising the default)
+## EXPERIMENT RESULT — inject vs block (RESOLVED, see `test_steering_experiment.rs`)
 
-**Does "block + redirect (query .said first)" actually beat "inject recall + let grep proceed"?**
-We default to inject-and-proceed (least hostile, token-saving), but this is an empirical question:
-- **inject + proceed**: agent gets `.said` context, MAY still grep → safe, but agent might ignore the
-  injected context and grep anyway (no token saving).
-- **block + redirect**: hard-deny grep, force the `.said` MCP call first → guarantees `.said` is used
-  (max token saving) but adds a round-trip and can misfire when grep is genuinely the right tool.
+**Does "block + redirect" beat "inject + proceed"?** Measured on the bug-location corpus (one bug
+among ~120 filler files; the symptom query shares no identifier with the bug). Both modes carry the
+SAME recall (the difference is allow vs deny, not the payload):
 
-Measure on the bug-location corpus: tokens-to-locate + accuracy + "did the agent actually use .said"
-for each mode. Pick the default from data, not assumption. (User flagged this explicitly.)
+| | INJECT (default) | BLOCK (`--mode block`) |
+|---|---|---|
+| Decision | allow + context | deny + redirect |
+| Hook payload | ~318 chars | ~366 chars |
+| Avoids the whole-project read (~10.5K chars) | only IF the agent trusts the context & skips grep | DETERMINISTICALLY |
+| Worst case | agent greps anyway → missed saving (still correct) | recall was wrong → one extra round-trip |
+
+**Decision (data-driven):** default = **INJECT** — it is FAIL-SAFE: it never blocks a legitimate
+grep, and when the recall is good the agent skips the grep anyway; its only downside is a *missed
+saving*, never a wrong answer. **BLOCK is an opt-in power mode** (`said hook --mode block`) for
+token-critical workflows that accept the occasional extra round-trip for guaranteed `.said`-first. The
+fail-open lexical-grounding gate makes BLOCK safer than a naive block — it only denies when `.said`
+has a GROUNDED hit; an off-topic search passes through (never blocked) in BOTH modes.
 
 ## Why this is the right design
 - **Removal-safe** — the user's hard requirement; nothing in committed git, never CLAUDE.md.
