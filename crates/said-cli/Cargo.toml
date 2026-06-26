@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sca-core = { path = "../sca-core", features = ["static-embed"] }
 said-vault = { path = "../said-vault" }
+said-prompts = { path = "../said-prompts" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 blake3 = "1.5"

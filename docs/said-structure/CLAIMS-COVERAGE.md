@@ -118,7 +118,16 @@ Tracked here so the gaps are visible, not hidden.
 These are the next build targets to make `.said`'s MCP world-class for coding (currently code-only;
 to be extended). The retrieval CORE already wins on accuracy + tokens; the gap is the MCP *surface*.
 
-## Agent steering (Claude Code) → DESIGNED, see `16-agent-steering.md`
+## Agent steering (Claude Code) → BUILT, see `16-agent-steering.md`
+`said hook` (stdin PreToolUse JSON → stdout decision; injects `.said` recall when the agent is about
+to grep, fail-open) + `said setup`/`--remove`/`--dry-run` (registers the hook in gitignored
+`.claude/settings.local.json`, *.bak backup, `__said` marker; bundles `.claude/skills/said/SKILL.md`
+from `said-prompts::steering::SKILL_BODY`; NEVER CLAUDE.md). Decision core: `sca-core::steering`.
+Tested: core 3 unit + 4 e2e, prompts 3, CLI 5 e2e (`test_steering_cli`: inject / passthrough /
+fail-open / dry-run / install→remove-clean). Removal leaves no git trace. **OPEN EXPERIMENT** (still
+to run): does block-redirect beat inject-and-proceed on tokens-to-locate? Original DESIGNED note:
+
+## (history) Agent steering — DESIGNED, see `16-agent-steering.md`
 How `.said` tells the agent WHEN/WHAT to use it — without ever editing CLAUDE.md (which persists in
 git history and can't be cleanly removed when `.said` is uninstalled). Investigated nudge
 (attunehq/nudge, Apache-2.0) at the source level: it is NOT an MCP server — it's a binary the agent

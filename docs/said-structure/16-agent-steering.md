@@ -1,7 +1,17 @@
 # Agent steering — telling Claude when/what to use `.said` (nudge-faithful, removal-safe)
 
-**Status:** DESIGNED, not yet built. This records the mechanism, why it's removal-safe, how it bundles,
-the end-to-end test plan, and one open experiment to run. Source of truth before writing code.
+**Status:** BUILT (Claude Code). `said hook` + `said setup`/`--remove`/`--dry-run` ship in said-cli;
+the decision core is `sca-core::steering`; the guidance text is `said-prompts::steering`. Tested:
+core 3 unit + 4 e2e (`test_steering_e2e`), prompts 3 (`said-prompts::steering::tests`), CLI 5 e2e
+(`test_steering_cli`). One open experiment (inject-vs-block, below) is still to run.
+
+Try it:
+```
+said setup                 # opt-in: registers the PreToolUse hook in .claude/settings.local.json
+                           # (gitignored, *.bak backup) + bundles .claude/skills/said/SKILL.md
+printf '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"…"}}' | said hook
+said setup --remove        # clean removal — no git trace
+```
 
 ## The problem
 

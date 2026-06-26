@@ -603,6 +603,33 @@ enum Commands {
         #[arg(long, value_name = "DIR")]
         bruno: Option<std::path::PathBuf>,
     },
+
+    /// Agent-steering hook: read a coding agent's PreToolUse JSON on STDIN, inject relevant `.said`
+    /// recall on STDOUT when the agent is about to search code (else stays silent / passthrough).
+    /// Invoked as a subprocess by the agent's hook system — you don't normally run this by hand.
+    /// See `said setup`. (nudge-style: docs/said-structure/16-agent-steering.md)
+    #[cfg(feature = "code")]
+    Hook {
+        /// Which agent's hook protocol to speak. Default: claude.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+    },
+
+    /// Register the `.said` agent-steering hook with a coding agent (opt-in). Writes the hook into
+    /// the agent's GITIGNORED local settings (`.claude/settings.local.json`) and bundles a `said`
+    /// skill — NEVER edits CLAUDE.md, so removal leaves no git trace. `--remove` cleanly undoes it.
+    #[cfg(feature = "code")]
+    Setup {
+        /// Which agent to set up. Default: claude.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Remove the hook + bundled skill instead of installing.
+        #[arg(long)]
+        remove: bool,
+        /// Print what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[cfg(feature = "forge")]
@@ -1313,6 +1340,10 @@ fn main() {
             cli.path.as_deref(), file, mode, symbol.as_deref(), line, anchor.as_deref(),
             content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
+        #[cfg(feature = "code")]
+        Commands::Hook { ref agent } => cmd_hook(cli.path.as_deref(), agent),
+        #[cfg(feature = "code")]
+        Commands::Setup { ref agent, remove, dry_run } => cmd_setup(agent, remove, dry_run),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
@@ -3075,6 +3106,153 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         }
     }
     Ok(())
+}
+
+/// `said hook` — the agent-steering PreToolUse hook. Reads the agent's hook JSON from STDIN, runs the
+/// `.said` decision, and writes the agent's decision JSON to STDOUT (or nothing = passthrough). This is
+/// the subprocess the agent's hook system invokes; it must be FAST and FAIL-OPEN (any error → emit
+/// nothing so the agent is never blocked). See sca_core::steering.
+#[cfg(feature = "code")]
+fn cmd_hook(path: Option<&str>, agent: &str) -> Result<(), String> {
+    use std::io::Read;
+    let Some(agent) = sca_core::steering::Agent::from_str_ci(agent) else {
+        // Unknown agent → fail open (emit nothing), don't error the agent's tool call.
+        return Ok(());
+    };
+    // Read the agent's hook JSON from stdin.
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() { return Ok(()); }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&buf) else { return Ok(()); };
+    // Open the brain (auto-detect path). If there's no brain, fail open.
+    let mut brain = match open_brain(path) { Ok(b) => b, Err(_) => return Ok(()) };
+    if let Some(decision) = sca_core::steering::run_hook(&mut brain, agent, &v) {
+        // Emit the decision JSON on stdout for the agent to read.
+        println!("{}", serde_json::to_string(&decision).unwrap_or_default());
+    }
+    Ok(())
+}
+
+/// `said setup [--remove] [--dry-run]` — opt-in registration of the agent-steering hook + bundled
+/// skill. Writes the agent's GITIGNORED local settings (never CLAUDE.md), so removal leaves no git
+/// trace. Idempotent; `--remove` cleanly undoes it.
+#[cfg(feature = "code")]
+fn cmd_setup(agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
+    use sca_core::steering::Agent;
+    let Some(agent) = Agent::from_str_ci(agent) else {
+        return Err(format!("unknown agent '{agent}' (supported: claude)"));
+    };
+    // Resolve the absolute path to THIS binary so the hook command is unambiguous.
+    let exe = std::env::current_exe().map_err(|e| format!("cannot resolve said binary path: {e}"))?;
+    let exe_str = exe.to_string_lossy().to_string();
+
+    let settings_path = std::path::Path::new(agent.settings_path()); // .claude/settings.local.json
+    let skill_path = std::path::Path::new(".claude/skills/said/SKILL.md");
+
+    if remove {
+        // ---- REMOVE: strip the said hook from settings + delete the bundled skill ----
+        let mut removed = Vec::new();
+        if settings_path.exists() {
+            let raw = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
+            if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if remove_said_hook(&mut json) {
+                    if dry_run { removed.push(format!("would strip said hook from {}", agent.settings_path())); }
+                    else {
+                        std::fs::write(settings_path, serde_json::to_string_pretty(&json).unwrap())
+                            .map_err(|e| e.to_string())?;
+                        removed.push(format!("stripped said hook from {}", agent.settings_path()));
+                    }
+                }
+            }
+        }
+        if skill_path.exists() {
+            if dry_run { removed.push("would delete .claude/skills/said/SKILL.md".into()); }
+            else { let _ = std::fs::remove_file(skill_path); removed.push("deleted .claude/skills/said/SKILL.md".into()); }
+        }
+        if removed.is_empty() { println!("said setup: nothing to remove (hook/skill not found)."); }
+        else { for r in &removed { println!("said setup --remove: {r}"); } }
+        println!("(no git trace — settings.local.json is gitignored.)");
+        return Ok(());
+    }
+
+    // ---- INSTALL ----
+    // 1) Bundle the skill (guidance lives here, NEVER CLAUDE.md).
+    if dry_run {
+        println!("would write .claude/skills/said/SKILL.md ({} bytes)", said_prompts::steering::SKILL_BODY.len());
+    } else {
+        std::fs::create_dir_all(".claude/skills/said").map_err(|e| e.to_string())?;
+        std::fs::write(skill_path, said_prompts::steering::SKILL_BODY).map_err(|e| e.to_string())?;
+        println!("said setup: wrote .claude/skills/said/SKILL.md");
+    }
+
+    // 2) Register the PreToolUse hook into .claude/settings.local.json (gitignored), backing up first.
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let raw = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
+        if !dry_run {
+            // back up before mutating (nudge's *.bak convention)
+            let _ = std::fs::write(format!("{}.bak", agent.settings_path()), &raw);
+        }
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    add_said_hook(&mut settings, &exe_str);
+
+    if dry_run {
+        println!("would register PreToolUse hook in {} →\n{}",
+            agent.settings_path(), serde_json::to_string_pretty(&settings).unwrap());
+    } else {
+        if let Some(parent) = settings_path.parent() { let _ = std::fs::create_dir_all(parent); }
+        std::fs::write(settings_path, serde_json::to_string_pretty(&settings).unwrap())
+            .map_err(|e| e.to_string())?;
+        println!("said setup: registered PreToolUse hook in {} (gitignored, backed up to *.bak)", agent.settings_path());
+    }
+
+    println!("\n{}", said_prompts::steering::STEERING_SUMMARY);
+    println!("To remove cleanly (no git trace): said setup --remove");
+    Ok(())
+}
+
+/// Merge the `.said` PreToolUse hook into a Claude settings JSON object. Matcher `Grep|Bash` (the
+/// code-search surfaces). Idempotent — replaces any prior said hook entry.
+#[cfg(feature = "code")]
+fn add_said_hook(settings: &mut serde_json::Value, exe: &str) {
+    let command = format!("{} hook --agent claude", shell_quote(exe));
+    let entry = serde_json::json!({
+        "matcher": "Grep|Bash",
+        "hooks": [ { "type": "command", "command": command, "__said": true } ]
+    });
+    let hooks = settings.as_object_mut().unwrap()
+        .entry("hooks").or_insert_with(|| serde_json::json!({}));
+    let pre = hooks.as_object_mut().unwrap()
+        .entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
+    let arr = pre.as_array_mut().unwrap();
+    // drop any existing said entry first (idempotent)
+    arr.retain(|e| !hook_entry_is_said(e));
+    arr.push(entry);
+}
+
+/// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.
+#[cfg(feature = "code")]
+fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
+    let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false; };
+    let Some(pre) = hooks.get_mut("PreToolUse").and_then(|p| p.as_array_mut()) else { return false; };
+    let before = pre.len();
+    pre.retain(|e| !hook_entry_is_said(e));
+    pre.len() != before
+}
+
+/// Does a PreToolUse entry belong to `.said`? (marked with our `__said` flag inside its hooks).
+#[cfg(feature = "code")]
+fn hook_entry_is_said(entry: &serde_json::Value) -> bool {
+    entry.get("hooks").and_then(|h| h.as_array())
+        .map(|arr| arr.iter().any(|h| h.get("__said").and_then(|x| x.as_bool()).unwrap_or(false)))
+        .unwrap_or(false)
+}
+
+/// Minimal shell-quote for the binary path inside the hook command (handles spaces).
+#[cfg(feature = "code")]
+fn shell_quote(s: &str) -> String {
+    if s.contains(' ') || s.contains('"') { format!("\"{}\"", s.replace('"', "\\\"")) } else { s.to_string() }
 }
 
 /// Helper: emit an empty `ask` result (no confident match) with proper JSON shape.
