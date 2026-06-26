@@ -138,6 +138,32 @@ on the trusted channel. Same pattern Mem0/Zep/Letta (system-data) + claude-mem (
 Tested: core 3 unit + 5 e2e (incl. UserPromptSubmit), prompts 3, CLI 5 e2e; canary 0.95; regression
 15/15. Removal leaves no git trace.
 
+## Agent-judged write model (the brain WRITES as it works) → BUILT + TESTED, see `19`/`20`
+
+`.said` is a brain, not a static index: it accumulates across sessions only if it writes. Mirrors how
+Claude Code auto-memory actually works (researched, docs/19, 15-system survey) — the MODEL decides what's
+worth keeping ("useful in a future session"), distilled, NOT every Q&A.
+
+| Claim | Test / evidence | Status |
+| --- | --- | --- |
+| Primary writes: agent records on conclusion (learn_fix/remember/journal) | said-prompts `steering` RECORD-WHAT-YOU-CONCLUDE (MCP_INSTRUCTIONS + SKILL_BODY); prompts tests 3/3 | ✅ (2d8de94) |
+| SessionEnd backstop: writes last context ONLY if agent didn't (idempotent, distilled) | `sca-core::steering::backstop_session_end`; `test_session_backstop.rs` 3/3 + live smoke | ✅ (a56c31d) |
+| `said setup` registers BOTH UserPromptSubmit (read) + SessionEnd (write); `--remove` strips both | `test_steering_cli.rs` round-trip 5/5 | ✅ (a56c31d) |
+| Recall reinforcement on every `ask` (rare: only 2/15 surveyed systems) | `brain.reconsolidate` via `log_query` | ✅ (pre-existing) |
+| Accumulated non-file memory makes later tasks cheaper | live A/B (docs/20 corrected): memory $0.722 vs baseline $0.960 = ~25% cheaper at equal correctness; A2 (fix+why) −47% | ✅ measured (5 Q, single-run; pass-rate-over-N pending) |
+| Accumulation beats static ON an already-indexed codebase | live A/B (docs/20): NOT proven (+17%) — a distilled note can't out-rank the source it summarizes; win is on NON-file knowledge only | ⚠️ honest negative |
+
+## Live-source ingest connectors → browser BUILT, see `06-ingestion-plugins`
+
+Live/personal sources (browser history, email) ingest as EXTERNAL POINTERS (`remember_as_external_pointer`):
+index a searchable summary + `external:uri`, NOT embedded content — the live source stays source-of-truth.
+
+| Claim | Test / evidence | Status |
+| --- | --- | --- |
+| Browser history → external pointers (Chrome/Edge `History` SQLite) | `browser_ingest.rs` 3 tests + LIVE real Chrome (188/200 pages recalled by meaning to live URLs) | ✅ (86cbed7) |
+| Feature-gated native-only (off WASM path), bundled SQLite, dedup by stable URL id | `browser` feature; rusqlite bundled; blake3 doc_id | ✅ |
+| Email connector (live IMAP/Apple Mail → pointers) | — | ◻ designed, not built |
+
 **(legacy experiment)** PreToolUse INJECT/BLOCK (`said hook --mode`) — kept in code, distrusted live.
 The earlier inject-vs-block experiment (test_steering_experiment.rs) is now moot for the default, since
 the whole PreToolUse channel is distrusted; BLOCK
