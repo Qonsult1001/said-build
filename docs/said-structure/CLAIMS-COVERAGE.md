@@ -118,6 +118,17 @@ Tracked here so the gaps are visible, not hidden.
 These are the next build targets to make `.said`'s MCP world-class for coding (currently code-only;
 to be extended). The retrieval CORE already wins on accuracy + tokens; the gap is the MCP *surface*.
 
+## Agent steering (Claude Code) → DESIGNED, see `16-agent-steering.md`
+How `.said` tells the agent WHEN/WHAT to use it — without ever editing CLAUDE.md (which persists in
+git history and can't be cleanly removed when `.said` is uninstalled). Investigated nudge
+(attunehq/nudge, Apache-2.0) at the source level: it is NOT an MCP server — it's a binary the agent
+invokes as a `PreToolUse` subprocess hook (stdin JSON → allow/deny+context stdout), Claude Code +
+Codex only, registered in gitignored `.claude/settings.local.json`, never CLAUDE.md. `.said` will
+mirror this: a `said hook` subcommand (inject `.said` recall as `additionalContext` when the agent is
+about to grep, fail-open) + an opt-in `said setup` that registers it + bundles a `said` skill.
+Removal-safe by construction. **OPEN EXPERIMENT recorded**: does block-redirect ("query .said first")
+beat inject-and-proceed? — measure on the bug-location corpus before fixing the default. Not built yet.
+
 ## KNOWN GAPS (honest — claimed/expected but NOT yet delivered)
 | Gap | Evidence | Why it matters / fix |
 |-----|----------|----------------------|
