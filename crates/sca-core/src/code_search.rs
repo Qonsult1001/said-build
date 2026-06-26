@@ -531,21 +531,51 @@ fn collect_chunks(
     );
 
     if is_definition {
-        let start = node.start_position();
+        let def_start = node.start_position();
         let end = node.end_position();
-        let content = std::str::from_utf8(&source[node.byte_range()])
+        let body = std::str::from_utf8(&source[node.byte_range()])
             .unwrap_or("")
             .to_string();
 
+        // Prepend the contiguous LEADING doc-comments. In tree-sitter, `///` / `//!` / `#` / `/** */`
+        // doc-comments are SIBLING comment nodes *before* the definition, NOT part of its byte range —
+        // so without this the single richest natural-language description of what a function DOES (its
+        // doc-comment) is excluded from the indexed chunk. Measured: "the function that builds the
+        // wikilink concept graph" failed to retrieve `build_concept_links` even though its doc-comment
+        // literally says it builds a concept graph from wiki/concept references — because that comment
+        // wasn't indexed. Walk backwards over immediately-preceding comment siblings (contiguous, no
+        // blank-line gap, so we don't slurp an unrelated earlier comment block) and fold them in.
+        let mut lead = String::new();
+        let mut anchor_row = def_start.row;
+        let mut prev = node.prev_sibling();
+        while let Some(p) = prev {
+            if matches!(p.kind(), "line_comment" | "block_comment" | "comment")
+                && p.end_position().row + 1 >= anchor_row
+            {
+                let txt = std::str::from_utf8(&source[p.byte_range()]).unwrap_or("");
+                lead = format!("{}\n{}", txt, lead);
+                anchor_row = p.start_position().row;
+                prev = p.prev_sibling();
+                continue;
+            }
+            break;
+        }
+        let (content, start_row) = if lead.is_empty() {
+            (body, def_start.row)
+        } else {
+            // Index from the first doc-comment line so the chunk's span matches its content.
+            (format!("{}\n{}", lead.trim_end(), body), anchor_row)
+        };
+
         // Extract the name from the first identifier child
         let name = find_name_node(node, source)
-            .unwrap_or_else(|| format!("{}:L{}", kind, start.row + 1));
+            .unwrap_or_else(|| format!("{}:L{}", kind, def_start.row + 1));
 
         let calls = extract_calls(&content, &name);
         chunks.push(CodeChunk {
             name,
             content,
-            start_line: start.row + 1,
+            start_line: start_row + 1,
             end_line: end.row + 1,
             kind: kind.to_string(),
             calls,
