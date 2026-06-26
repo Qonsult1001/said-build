@@ -86,3 +86,39 @@ Both the CLI (`said ask`) and the MCP `ask` tool call the same `sca_core::ask::a
 `handler.rs`). There is **no separate MCP ranking path** — every fix above applies to both. An earlier
 appearance of an "MCP-only" problem was a test harness passing the wrong argument name (`question`
 instead of the tool's `query` field), which returned an error, not a different ranking.
+
+---
+
+## 4. Doc-comments excluded from indexed code chunks
+
+**Commit:** `85ffff4`
+
+**Symptom.** A descriptive query — "the function that builds the wikilink concept graph" — could not
+retrieve `build_concept_links` AT ALL (absent from the top-20), even though that function's doc-comment
+literally describes building a wiki/concept GRAPH. Grep for the doc-comment's words ("navigable graph",
+"cross-document map") returned nothing.
+
+**Root cause.** `ast_chunk` indexed only a definition's own tree-sitter byte range. But `///` / `//!` /
+`/** */` doc-comments are SIBLING comment nodes BEFORE the definition, not part of it — so the single
+richest natural-language description of what each function DOES was never indexed.
+
+**Fix.** Walk backwards over the contiguous preceding comment siblings (no blank-line gap) and prepend
+them to the chunk content; index the chunk from the first doc-comment line.
+
+**Verified.** `build_concept_links` went from absent-in-top-20 to retrievable + grep-able by its
+doc-comment vocabulary (now in the top-N the LLM picks from). Unit test + regression 15/15.
+
+**Design note (the rerank correction).** Getting the answer to RANK #1 inside the engine was the wrong
+goal. Per docs/3.5 + docs/13: `.said` surfaces the top-N and the LLM reranks by reading back (the
+interactive loop's implicit rerank). The bar is "in the top-N", which the doc-comment fix met.
+
+---
+
+## Known gap — opt-in LLM rerank is documented but unimplemented
+
+`docs/13-integrations.md` (line 112) specifies that headless single-shot consumers get a
+LongMemEval-grade benefit from an opt-in LLM rerank: **CLI `said ask --rerank`** and **MCP `ask` with
+`rerank: true`** — the LLM picks/reorders the top-N when there's no agent loop to do the implicit
+read-back rerank. **Neither is implemented.** Deferred (the top-N contract is sufficient for agent-loop
+consumers, which do the rerank by reading back). Tracked here so the doc and code are honestly
+reconciled.
