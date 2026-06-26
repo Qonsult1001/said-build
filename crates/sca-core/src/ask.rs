@@ -291,6 +291,47 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+/// How DISTINCTIVE is a symbol-name match — i.e. how confident should Engine A be that hitting this
+/// symbol answers the query, vs the name being a common English word that *coincidentally* names a
+/// symbol? This is the symbol-engine analogue of Engine B's IDF/rarity guard (see the long comment at
+/// ask.rs ~393: "do NOT treat rare common-English words as discriminators — a rare word can
+/// coincidentally land in the WRONG doc and out-rank the correct semantic match").
+///
+/// Measured failure this fixes: a descriptive query "which function builds the wikilink concept graph
+/// from frames" generated "frames" as a symbol candidate, hit the trivial symbol `frames` at flat 1.00,
+/// and BURIED the real `build_concept_links`. Likewise "the abstention gate" → symbol `threshold`,
+/// "the steering hook" → symbol `steering`. All coincidental single-word matches outranking the answer.
+///
+/// Signal is purely structural + corpus-derived (NO hard-coded stopword list):
+///   * a COMPOUND identifier (snake_case, camelCase humps, or a long name) is an intentional, specific
+///     symbol the user almost certainly means → distinctiveness 1.0 (full confidence, unchanged).
+///   * a single short all-lowercase token that is ALSO a plain dictionary-shaped word is most likely
+///     coincidental → discounted toward the grep band so a strong semantic match can win.
+/// `query_len` = number of query keywords; a 1-word query that literally IS the symbol name keeps full
+/// confidence (the user typed the identifier), but the SAME word buried in a long descriptive query does not.
+fn symbol_distinctiveness(name: &str, query_len: usize) -> f32 {
+    let has_underscore = name.contains('_');
+    // camelCase / PascalCase hump = a lower→upper transition anywhere in the name.
+    let has_hump = name.chars().zip(name.chars().skip(1))
+        .any(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase());
+    let has_digit = name.chars().any(|c| c.is_ascii_digit());
+    let is_compound = has_underscore || has_hump || has_digit || name.len() >= 12;
+    if is_compound {
+        return 1.0; // intentional identifier — full confidence (the common case, unchanged behaviour)
+    }
+    // A short single-word lowercase name (frames, threshold, steering, ask). If the user's WHOLE query
+    // is essentially this one word, they typed the identifier on purpose → keep it strong. If it's one
+    // word inside a longer descriptive question, it's probably coincidental → discount so Engine C wins.
+    if query_len <= 1 {
+        1.0
+    } else {
+        // Discount grows with query length: the more descriptive the question, the less a lone
+        // common-word symbol match should dominate. Floor keeps it a real (grep-band) candidate, not
+        // dropped — if it IS the answer, the float rerank can still surface it.
+        (0.92 - 0.06 * (query_len.saturating_sub(1) as f32)).clamp(0.55, 0.92)
+    }
+}
+
 /// Run the full 3-engine `ask` fusion against a `SaidFile` brain.
 ///
 /// * `brain` — the opened `.said` file
@@ -329,6 +370,7 @@ pub fn ask(
     // available as the explicit `code_calls` / `code_callers` verbs the caller invokes WHEN it wants
     // the neighbourhood (see docs/said-structure/06-ingestion-plugins/lsp.md — .said returns stored
     // facts, the LSP resolves types, the LLM orchestrates between them).
+    let query_len = keywords.len();
     for cand_name in ask_symbol_candidates(&keywords, &keywords_orig) {
         for sym_hit in brain.sym(&cand_name, 5) {
             if sym_hit.name != cand_name { continue; }
@@ -336,9 +378,13 @@ pub fn ask(
                 if !scope.contains(&sym_hit.doc_id) { continue; }
             }
             let content = brain.get(&sym_hit.doc_id).unwrap_or_default();
+            // Weight by distinctiveness: a compound identifier (build_concept_links) stays at 1.00; a
+            // coincidental common-word match (frames/threshold in a long descriptive query) is discounted
+            // into the grep band so a stronger semantic answer can win. See symbol_distinctiveness.
+            let sym_conf = symbol_distinctiveness(&sym_hit.name, query_len);
             upsert(&mut candidates, AskCandidate {
                 doc_id: sym_hit.doc_id.clone(),
-                confidence: 1.00,
+                confidence: sym_conf,
                 kind: "symbol",
                 content,
                 location: Some(format!(
@@ -473,7 +519,9 @@ pub fn ask(
                 // semantic score be the primary ranking signal among the tied siblings.
                 // Blend toward s_sem rather than a tiny nudge — these docs have no
                 // lexical signal to lose, so semantic should dominate.
-                existing.confidence = existing.confidence.max(confidence) + h.score * 0.40;
+                // Cap at 1.0: a symbol hit (≤1.00) that ALSO greps must not inflate ABOVE the symbol
+                // ceiling (measured: coincidental matches reached 1.27, dominating the real answer).
+                existing.confidence = (existing.confidence.max(confidence) + h.score * 0.40).min(1.0);
             }
         }
         upsert(&mut candidates, AskCandidate {
@@ -670,7 +718,14 @@ pub fn ask(
             let s_slow = brain.engine.brain.s_slow_read(&q_emb);
             let s_slow_boost = if s_slow > 0.1 { 1.0 + (s_slow * 0.01).min(0.5) } else { 1.0 };
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
-                let is_sym = c.kind == "symbol";
+                // Pin ABOVE the semantic rerank ONLY a DISTINCTIVE symbol hit (a compound identifier the
+                // user clearly meant — confidence kept at the symbol ceiling). A symbol hit that
+                // Engine A already DISCOUNTED (a coincidental common-word match like `frames`/`threshold`
+                // in a long descriptive query — see symbol_distinctiveness) must NOT pin; it competes on
+                // cosine like any candidate so a stronger semantic answer (the real `build_concept_links`)
+                // can lead. Without this gate the pin (sort by is_sym first) re-floats the coincidental
+                // symbol to rank-0 even after the confidence discount.
+                let is_sym = c.kind == "symbol" && c.confidence >= 0.95;
                 // Prefer the STORED doc embedding (the exact indexed 64-dim vector) over
                 // re-encoding the displayed content — re-encoding can drift from what was
                 // indexed (truncated/modified content) and loses fidelity. Fall back to
