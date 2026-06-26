@@ -27,7 +27,19 @@ reading whole files when you need to LOCATE something by meaning, or recall cont
 .said RETURNS the relevant code/details — it never invents them; you act on what it returns and hand \
 symbols to your language server (LSP) for type-precise references. It does not replace your editor or \
 LSP; it is the fast, token-lean way to find the RIGHT place to look. When .said surfaces the answer, \
-you can skip the grep.";
+you can skip the grep.
+
+RECORD WHAT YOU CONCLUDE (so the next session is cheaper):
+.said is a BRAIN, not just an index — it remembers across sessions only if you write to it. Like a good \
+engineer's notes, you decide what is worth keeping: save a learning the moment you CONCLUDE something \
+that would be useful in a future session, not every step. Concretely:
+  • a VERIFIED fix (tests pass) → `learn_fix` (problem + the change-set) — future runs replay it.
+  • a durable decision, a non-obvious invariant, a build/test command, a convention you discovered → \
+`remember` (one distilled fact, not a transcript).
+  • wrapping up a piece of work or at a natural checkpoint → `journal` (what was wanted, decided, built, \
+blockers, next steps).
+Distil, don't dump: store the INVARIANT, not the raw answer. Skip the obvious and the unverified. \
+.said dedupes, so re-recording a known fact is cheap — but a clean one-line learning beats a wall of text.";
 
 /// The bundled `said` SKILL body (`.claude/skills/said/SKILL.md`) written by `said setup`. Bootstrap
 /// guidance lives HERE, never in CLAUDE.md — so removing `.said` leaves no committed trace. The leading
@@ -53,7 +65,22 @@ reading files,
 
 .said RETURNS the relevant code/details — it does not invent them, and it does not replace your editor \
 or language server. You stay in control: act on what it returns, and hand symbols to your LSP for \
-type-precise references. If .said already shows the answer, skip the grep.";
+type-precise references. If .said already shows the answer, skip the grep.
+
+RECORD WHAT YOU CONCLUDE (this is what makes .said a brain, not a static index):
+
+.said remembers across sessions only if you write to it — so the next session starts where this one \
+ended instead of rediscovering everything. Like an engineer's notebook, YOU decide what's worth keeping: \
+save a learning the moment you CONCLUDE something that would help a future session, not every step.
+
+  • a VERIFIED fix (tests pass) → call learn_fix with the problem + the change-set; future runs replay it.
+  • a durable decision, a non-obvious invariant, a build/test command, or a convention you discovered → \
+call remember with ONE distilled fact (not a transcript).
+  • wrapping up a piece of work, or a natural checkpoint (\"moving on to X\") → call journal with what was \
+wanted, decided, built, blockers, and next steps.
+
+Distil, don't dump — store the INVARIANT, not the raw answer. Skip the obvious and the unverified. \
+.said dedupes, so re-recording a known fact is cheap; a clean one-line learning beats a wall of text.";
 
 /// One-line summary used by `said setup` output / `said plugin list`.
 pub const STEERING_SUMMARY: &str =
