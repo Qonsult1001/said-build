@@ -8,12 +8,21 @@ a real run — turns, USD cost, cache-read tokens, and a correctness check again
 **Codebase under test.** `.said`'s own workspace — **322 Rust files, ~125K lines**, indexed to **4,372
 memories**. Not a toy: the agent has to find the right file/function among hundreds.
 
-**Arms.**
-| Arm | What the agent has |
-|---|---|
-| **grep** | Claude Code with only built-in `Grep`/`Read` — the honest baseline |
-| **mcp** | + the `said-mcp` server registered (34 tools: `ask`, `sym`, `search`, `code_calls`, …) |
-| **hook** | + the `said` `UserPromptSubmit` hook — recall injected as a factual `<project_index>` |
+**Arms — all three are the SAME Claude Code agent; only the `.said` integration differs.** There is no
+"Claude vs `.said`" single comparison because there are **two distinct ways to wire `.said` in**, and
+the whole point is to find out which one actually helps. So the baseline is Claude with no `.said`, and
+the two `.said` arms are *pull* (the model may call `.said`) vs *push* (`.said` recall is delivered to
+the model automatically).
+
+| Arm | Plain name | What the agent has | `.said` delivery |
+|---|---|---|---|
+| **grep** | **Claude-native (baseline)** | Claude Code with only built-in `Grep`/`Read`/`Bash` | none |
+| **mcp** | **`.said` via MCP tools (pull)** | + the `said-mcp` server (34 tools: `ask`, `sym`, `search`, `code_calls`, …) Claude may *choose* to call | pull |
+| **hook** | **`.said` via hook (push)** | + the `said` `UserPromptSubmit` hook — recall auto-injected as a factual `<project_index>` every prompt | push |
+
+The central result is about *delivery*: the same `.said` data **helps when pushed (hook) and is
+break-even when only made available (mcp)** — because the model often does not reach for the MCP tools
+on its own. Naming the arms "Claude vs `.said`" would hide exactly this finding.
 
 **Task suite.** 14 tasks spanning novice→expert and every retrieval nuance: find-symbol, locate-logic,
 cross-file, algorithm, past-fix, multi-hop, abstention, code-graph, deep-internals. Each has a gold
@@ -86,10 +95,29 @@ outlier is most of the MCP arm's extra cost. The lesson is the same one the stee
   orchestration) and is proven separately by `hard-eval/recall-measure.sh`: an LRU target is recalled at
   **0.73–0.75** and the semantic fingerprint separates the adversarial LFU twin. See FIXES-LOG /
   `recall_coding_fix`.
-- **T12 (deep-internals).** "Which section must be written so `sym()` works after reopen?" — answer
-  `TRGM`. No arm named it; this is genuinely deep internal knowledge that lives in the code + design docs
-  (it's literally the bug fixed in FIXES-LOG #1), not something recall surfaces from a code index. An
-  honest "the agent couldn't infer this from the codebase" result.
+- **T12 (deep-internals).** "Which section must be written so `sym()` works after reopen?" — the gold
+  oracle wanted `TRGM` (the bug fixed in FIXES-LOG #1: `sym()` needs the `TRGM` doc-id list). All three
+  arms answered the **`SYMS` / symbols** section instead — which is *also* correct (`sym()` reads from
+  the SYMS-loaded `symbol_index`); the *complete* answer is "both SYMS and TRGM". Notably the **mcp arm
+  produced an accurate code trace** ("`sym()` reads `symbol_index`, populated by SYMS at line 545–561…").
+  So this is partly an **over-strict oracle** (it only accepted `TRGM`), not purely an agent miss — the
+  agents reasoned about the index correctly but didn't know about the TRGM dependency that the fix
+  introduced.
+
+### Where `.said` actually lost (honest head-to-head: hook vs Claude-native)
+
+Across 14 tasks: **hook cheaper on 4, tie on 8, Claude-native cheaper on 2.** The two losses:
+
+| Task | Result | Why |
+|---|---|---|
+| **T05** (algorithm — "how is Hamming distance computed?") | grep $0.127/9t vs **hook $0.135/12t (+7%)** | Both correct. The injected recall didn't pinpoint the `popcount`/XOR code, so the agent investigated anyway **and** paid for the injection — a semantic algorithm question where recall added noise, not signal. The one case where push genuinely cost a little more. |
+| **T06** (past-fix) | grep $0.034/**1t** vs hook $0.062/4t (+45%) | grep "won" only by **giving up in 1 turn** (read the skill doc, paraphrased). Both were *wrong*. Failing cheaply is not a real win. |
+
+So on the tasks that mattered, `.said` (hook) did not lose: its only true cost loss was T05 (+7%, a
+recall-noise case), and T05 is also where MCP-pull lost ($0.165). The wins are concentrated on the hard
+multi-round questions: **T02 −54%, T11 −42%, T07 (multi-hop) 5→3 turns.** The 8 ties are trivial
+single-symbol lookups where grep already resolves a unique identifier in one pass and there is no recall
+saving to be had — `.said` correctly does no harm there.
 
 **Where grep already wins (and `.said` shouldn't pretend otherwise):** trivial single-symbol lookups
 (T01, T09, T13) are ties — grep finds a unique identifier in one pass, and there's no recall saving to
