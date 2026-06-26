@@ -66,6 +66,10 @@ docs = ["docx", "dep:pdf-extract", "dep:pdfium"]
 # OCR for scanned/image-only PDFs. PaddleOCR v5 via MNN inference.
 # Models bundled at compile time (~6 MB). Requires pdfium for page rendering.
 ocr = ["dep:ocr-rs", "dep:image", "docs"]
+# Browser-history ingest (Chrome/Edge `History` SQLite → external pointers). NATIVE-ONLY (rusqlite is
+# a C lib); feature-gated OFF the WASM path like `whisper`. Stores a searchable summary + external:uri
+# per visited page — the live source (the browser DB) stays the source of truth, re-synced on demand.
+browser = ["dep:rusqlite"]
 
 [dependencies.pyo3]
 version = "0.22"
@@ -203,6 +207,13 @@ version = "0.6"
 optional = true
 default-features = false
 features = ["deflate"]
+
+# Browser-history ingest: read Chrome/Edge `History` SQLite. `bundled` compiles SQLite from source so
+# there's no system-lib dependency. NATIVE-ONLY (the `browser` feature is off the WASM build).
+[dependencies.rusqlite]
+version = "0.31"
+optional = true
+features = ["bundled"]
 
 # Tree-sitter: proper AST parsing for ALL languages (no regex hacks)
 [dependencies.tree-sitter]

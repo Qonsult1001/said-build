@@ -65,6 +65,8 @@ pub mod gpu_search;
 pub mod whisper_ingest;
 #[cfg(feature = "docx")]
 pub mod document_ingest;
+#[cfg(feature = "browser")]
+pub mod browser_ingest;
 pub mod steering;
 pub mod vault_tombstone;
 #[cfg(feature = "ocr")]
