@@ -2414,7 +2414,15 @@ impl SaidFile {
         //   zstd-compressed raw trigram index bytes
         let mut trgm_offset: u64 = 0;
         if let Some(ref idx) = self.trigram_index {
-            if !self.trigram_doc_ids.is_empty() && idx.num_trigrams() > 0 {
+            // Write TRGM whenever we have the doc-id list AND either real trigram postings OR a symbol
+            // index that DEPENDS on this list. The SYMS section stores positional `doc_index` values
+            // and `sym()` translates them back to doc_ids via `trigram_doc_ids` (docs 3.6) — so if we
+            // saved SYMS but skipped TRGM (e.g. trigram postings came out empty because frame text
+            // wasn't yet readable at rebuild time), `trigram_doc_ids` would be empty on reopen and
+            // `sym()` would return 0 results despite a fully-loaded symbol index. (Measured: a real
+            // `said init` indexed 36 symbols but `sym` returned nothing — this guard was the cause.)
+            let symbols_need_doc_ids = self.symbol_index.as_ref().map(|s| s.num_names() > 0).unwrap_or(false);
+            if !self.trigram_doc_ids.is_empty() && (idx.num_trigrams() > 0 || symbols_need_doc_ids) {
                 trgm_offset = buf.len() as u64;
                 buf.extend_from_slice(b"TRGM");
                 buf.extend_from_slice(&(self.trigram_doc_ids.len() as u32).to_le_bytes());
@@ -2600,7 +2608,15 @@ impl SaidFile {
 
         let mut trgm_offset: u64 = 0;
         if let Some(ref idx) = self.trigram_index {
-            if !self.trigram_doc_ids.is_empty() && idx.num_trigrams() > 0 {
+            // Write TRGM whenever we have the doc-id list AND either real trigram postings OR a symbol
+            // index that DEPENDS on this list. The SYMS section stores positional `doc_index` values
+            // and `sym()` translates them back to doc_ids via `trigram_doc_ids` (docs 3.6) — so if we
+            // saved SYMS but skipped TRGM (e.g. trigram postings came out empty because frame text
+            // wasn't yet readable at rebuild time), `trigram_doc_ids` would be empty on reopen and
+            // `sym()` would return 0 results despite a fully-loaded symbol index. (Measured: a real
+            // `said init` indexed 36 symbols but `sym` returned nothing — this guard was the cause.)
+            let symbols_need_doc_ids = self.symbol_index.as_ref().map(|s| s.num_names() > 0).unwrap_or(false);
+            if !self.trigram_doc_ids.is_empty() && (idx.num_trigrams() > 0 || symbols_need_doc_ids) {
                 trgm_offset = buf.len() as u64;
                 buf.extend_from_slice(b"TRGM");
                 buf.extend_from_slice(&(self.trigram_doc_ids.len() as u32).to_le_bytes());
