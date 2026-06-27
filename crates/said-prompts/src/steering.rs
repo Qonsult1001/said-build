@@ -33,13 +33,13 @@ RECORD WHAT YOU CONCLUDE (so the next session is cheaper):
 .said is a BRAIN, not just an index — it remembers across sessions only if you write to it. Like a good \
 engineer's notes, you decide what is worth keeping: save a learning the moment you CONCLUDE something \
 that would be useful in a future session, not every step. Concretely:
-  • a VERIFIED fix (tests pass) → `learn_fix` (problem + the change-set) — future runs replay it.
-  • a durable decision, a non-obvious invariant, a build/test command, a convention you discovered → \
-`remember` (one distilled fact, not a transcript).
-  • wrapping up a piece of work or at a natural checkpoint → `journal` (what was wanted, decided, built, \
-blockers, next steps).
-Distil, don't dump: store the INVARIANT, not the raw answer. Skip the obvious and the unverified. \
-.said dedupes, so re-recording a known fact is cheap — but a clean one-line learning beats a wall of text.";
+  • CODE learnings (a verified fix, a bug's root cause, a non-obvious invariant, an architectural \
+decision + its WHY) → `learn_fix` (problem + WHY + change-set), stored STRUCTURED not as a label.
+  • USER / non-coding facts, or when the user says \"remember …\" → `remember`, used like an end user \
+would (\"remember my mom's birthday\", \"remember to revisit this fn\"). One distilled fact.
+  • wrapping up work / a checkpoint → `journal` (wanted, decided, built, blockers, next steps).
+Rule of thumb: learned something about the CODE → learn_fix; the USER asked to keep something → remember. \
+Distil don't dump; skip the obvious/unverified; .said dedupes.";
 
 /// The bundled `said` SKILL body (`.claude/skills/said/SKILL.md`) written by `said setup`. Bootstrap
 /// guidance lives HERE, never in CLAUDE.md — so removing `.said` leaves no committed trace. The leading
@@ -73,14 +73,21 @@ RECORD WHAT YOU CONCLUDE (this is what makes .said a brain, not a static index):
 ended instead of rediscovering everything. Like an engineer's notebook, YOU decide what's worth keeping: \
 save a learning the moment you CONCLUDE something that would help a future session, not every step.
 
-  • a VERIFIED fix (tests pass) → call learn_fix with the problem + the change-set; future runs replay it.
-  • a durable decision, a non-obvious invariant, a build/test command, or a convention you discovered → \
-call remember with ONE distilled fact (not a transcript).
-  • wrapping up a piece of work, or a natural checkpoint (\"moving on to X\") → call journal with what was \
-wanted, decided, built, blockers, and next steps.
+PICK THE RIGHT VERB BY DOMAIN:
+  • CODING LEARNINGS → learn_fix. A verified code fix (tests pass), a bug's ROOT CAUSE, a non-obvious \
+code invariant, an architectural decision and its WHY. Pass the problem + the WHY in the learnings + the \
+change-set. This is the code-knowledge store the orchestrator replays — store it STRUCTURED, never as a \
+one-line label (a weak note gets out-ranked by the source it summarizes).
+  • USER / NON-CODING FACTS, or when the USER SAYS \"remember …\" → remember. Use it exactly as an end \
+user would: \"remember my mom's birthday\", \"remember to revisit this function later\", a preference, a \
+project fact, anything outside code the user wants kept. One distilled fact.
+  • WRAPPING UP a piece of work or a checkpoint (\"moving on to X\") → journal: what was wanted, decided, \
+built, blockers, next steps.
 
-Distil, don't dump — store the INVARIANT, not the raw answer. Skip the obvious and the unverified. \
-.said dedupes, so re-recording a known fact is cheap; a clean one-line learning beats a wall of text.";
+Distil, don't dump — store the INVARIANT/decision, not the raw transcript. Skip the obvious and the \
+unverified. .said dedupes, so re-recording a known fact is cheap; a clean structured learning beats a \
+wall of text. Rule of thumb: did I learn something about the CODE? learn_fix. Did the USER ask me to \
+keep something (coding or not)? remember.";
 
 /// One-line summary used by `said setup` output / `said plugin list`.
 pub const STEERING_SUMMARY: &str =
