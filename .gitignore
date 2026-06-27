@@ -40,3 +40,9 @@ learning-factory/
 .claude/settings.local.json
 /model-eval/
 /research/
+
+# LLM connector secret — provider API key, never committed
+**/OrchestrationFactory.API/data/llm-config.json
+
+# transient benchmark working dir (moat scratch — regenerated per run)
+hard-eval/repo/

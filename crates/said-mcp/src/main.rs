@@ -230,7 +230,29 @@ async fn main() -> SdkResult<()> {
         #[cfg(feature = "whisper")]
         caps.push_str("- 'ingest': Also supports video/audio transcription (MP4, MP3, WAV).\n");
 
-        caps.push_str("\n## CROSS-LANGUAGE BRIDGING\n\n\
+        // Code-locate steering: tell the agent to reach for `.said` BEFORE grepping the codebase.
+        // This is the TRUSTED channel — the model CALLS `ask` (vs distrusting injected hook context).
+        caps.push_str("\n## LOCATING CODE (use `.said` BEFORE grep)\n\n\
+             When you need to LOCATE something in this project's code — a function by what it DOES \
+             (not its exact name), the source of a bug from a symptom, or a past fix — call `ask` \
+             FIRST, before grepping or reading files. `.said` finds it by MEANING (semantic + symbol \
+             + call-graph) and points at the precise file + symbol far cheaper than reading the \
+             codebase; grep can't match a symptom that shares no identifier with the buggy line. \
+             Act on what `ask` returns (hand symbols to your LSP for type-precise references). If \
+             `ask` returns nothing relevant, then grep normally — it never invents results.\n\n\
+             ## CODING MEMORY (learn_fix — store a verified fix the way the orchestrator does)\n\n\
+             When you SOLVE a coding problem and a real build/test gate is GREEN, store it with \
+             `learn_fix` so a future session (you, the CLI, or the orchestrator) reloads it instead \
+             of re-deriving. Write the SAME structured iteration note the orchestrator stores — NOT a \
+             one-line label (a thin note gets out-ranked by the source it summarizes). Capture:\n\
+             - the PROBLEM solved (plain words — this is the recall key);\n\
+             - the FILES/functions touched and why;\n\
+             - ERRORS + corrections — approaches that FAILED, so they are never retried;\n\
+             - the non-obvious INVARIANT a textbook version gets wrong (the highest-value field);\n\
+             - the KEY RESULT — plus the verified change-set (the `edits` that built+passed).\n\
+             ONLY after the gate is green — `success` is the sole recorded outcome. This writes the \
+             SAME store as `said learn-fix` and the orchestrator (one shared learning store).\n\n\
+             ## CROSS-LANGUAGE BRIDGING\n\n\
              The brain links SQL and application code semantically. A search for 'card validation' \
              returns BOTH the SQL stored procedure AND the C# service that calls it.\n\n\
              ## DATA RETENTION\n\n\

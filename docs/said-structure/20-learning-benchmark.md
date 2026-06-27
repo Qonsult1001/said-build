@@ -409,3 +409,101 @@ re-injected fix and stops, sometimes still verifies against source. So:
 **What a real per-task claim needs:** 5–10 samples/task to average out the agent's run-to-run variance
 (the agent's verify-vs-trust decision is stochastic). Until then, claim only the stable aggregate
 (memory cheaper, more or equal correct), not per-task determinism.
+
+---
+
+## LESSONS LEARNED from A1–A5 (the design rules every future memory benchmark must follow)
+
+Seven versions (v1–v7) of this A/B taught a small number of hard rules. They are collected here so the
+mistakes are never repeated, and they are the design contract behind the research-correct protocol in
+[`23-benchmark-methodology.md`](23-benchmark-methodology.md).
+
+### L1. The answer must live in NO source file (or the test measures code-reading, not memory)
+The single biggest mistake (v1, and a regression I re-introduced once and had to be corrected on twice):
+asking a question whose answer is in the indexed source. When both arms can `Read` the answer, the memory
+arm just reads the code like the baseline — memory adds nothing, and can cost *more* (it sometimes verifies
+the recall against the source anyway). Proven directly: on a fully-`init`'d brain, both arms answered
+identical questions by reading the source; the injection was never cited. **Rule: a memory task's gold
+answer must be a past DECISION, a FIX + its WHY, or a non-obvious INVARIANT that appears in no file as
+prose.** `init` is the floor in BOTH arms; the only variable is the seeded non-file learning.
+
+### L2. `init` is the floor in every arm; the seeded learning is the only difference
+Keep base capability constant (Voyager/ReasoningBank/ExpeL): both arms get the same `init`'d codebase +
+the same hook. The memory arm differs ONLY by carrying realistic prior-session learnings. This isolates
+"does accumulated memory carry what the floor cannot" from "is the model good at reading code."
+
+### L3. Store the RIGHT way — structured `learn_fix`, never a lazy `remember` one-liner
+The retracted "+17% worse" result came from storing the learning as a one-line `remember` label, which
+buried below the indexed source at recall time. The SAME learning stored as a structured `learn_fix`
+(Title / Files+Functions / Learnings / WHY / change_set, via the one shared writer
+`sca_core::ask::learn_coding_fix`) leads at `[0.84][semantic]` and `recall-fix` returns the root cause
+verbatim. **A properly-recorded learning out-ranks even the indexed source it concerns.** A weak note
+actively degrades recall (orchestration's own dedup-guard warns of this).
+
+### L4. Strict regex oracles UNDERCOUNT — use a lenient/LLM-graded oracle
+Every version flagged the same artifact: the regex scored 1–2/5 while both arms actually answered ~4/5.
+Cost/turns were the trustworthy signal; raw "correct" counts were not. **Rule: gold tokens are lenient
+substrings, and a real run adds an LLM-graded oracle pass (`SAID_LLM_GRADE`).**
+
+### L5. Each A* maps to a DISTINCT docs/23 axis — partition, don't pool
+- **A1** (why ask() skips the call-graph) → co-solved **convergence** (both answer; memory recalls the
+  decision instead of grinding).
+- **A2** (sym()/TRGM fix + WHY) → **convergence** (baseline greps ~18t to reconstruct the WHY; memory
+  recalls it — the −29 to −47% win when recall fires).
+- **A3** (the encoder/embed-model gotcha) → **ACCURACY / memory-only-solves** (baseline CANNOT answer;
+  only the seeded learning carries it — the v3/v4 correctness *flip*).
+- **A4** (a git SHA that exists in no file/fix) → **ABSTENTION** (clean give-up is CORRECT;
+  grind-then-fabricate is the WORST outcome).
+- **A5** (doc-comment recall bug + fix) → **convergence** (the fix-recall-starved paraphrase; −64% in v5
+  once recall stopped starving).
+Reporting these as one pooled number hides the mechanism; report the three buckets separately.
+
+### L6. Abstention is a PER-TASK property, not a global prompt suffix
+A blanket "say you don't have it and stop" hint on every task makes the agent abstain on ANSWERABLE
+questions (measured: it gave up on A1/A2/A5 even though the fix was injected), collapsing both arms to
+"both abstain" and destroying the comparison. **Rule: the give-up hint goes ONLY on the unanswerable
+abstention probe (A4); answerable tasks get a neutral prompt.**
+
+### L7. A failed RUN is not a wrong ANSWER — exclude it, never score it 0
+A timed-out/errored `claude` call produces no valid output. Scoring that as `correct=0` mis-counts an
+infra failure as the agent answering wrong, inflating the pass@k denominator with phantom failures.
+**Rule: retry a failed run; if it still has no parseable result, mark it INVALID and EXCLUDE it from
+pass@k denominators and turn stats** (`is_valid_run` gate + `valid` column; the aggregator skips INVALID).
+
+### L8. Single runs (and N=2) are noise — the per-task verdict needs n≥5
+The stable finding across v6/v7 is the *aggregate* (memory modestly cheaper, ≥ correct). The per-task
+winners/losers MOVE between runs because the agent's verify-vs-trust decision is stochastic (A2 went
+16t→8t→10t across runs). **Rule: claim only the stable aggregate until n≥5 (ideally ≥3 seeds); never
+state per-task determinism off one sample.** This is the open item every version ended on, and the reason
+docs/23 mandates n≥5.
+
+### Net design contract (what a correct A1–A5 run looks like)
+init-floor both arms · non-file gold (L1) · structured learn_fix seeds (L3) · A*→axis partition (L5) ·
+per-task abstention only on A4 (L6) · NA-exclusion (L7) · lenient+LLM oracle (L4) · n≥5 + seeds (L8).
+The harness `hard-eval/bench_research.sh` now encodes all eight; `hard-eval/bench_aggregate.sh` computes
+the three axes with INVALID excluded.
+
+### L9. HOW the memory is injected is the lever the benchmark measures — the nudge pattern
+
+A1–A5 does not just measure "is the right learning recalled" — it measures whether the agent **USES** it
+instead of re-deriving from source. That depends entirely on the injection mechanism, and the benchmark
+history is the proof that the **nudge pattern** (documented in
+[`22-memory-injection-nudge-pattern.md`](22-memory-injection-nudge-pattern.md)) is what makes it work.
+The two docs are one story: doc 22 is the *mechanism*, this doc is its *measurement*. The exact changes
+and their measured effect:
+
+| Injection change (commit) | Doc 22 rule | Measured effect in this benchmark |
+|---|---|---|
+| Plain FACTS, not an authority/imperative claim (5fabe2d) | "inject as plain facts; never 'gate-verified, REUSE this'" | the isolated proof: **17 turns → 1 turn, $0.27 → $0.045** — the `<verified_memory>` "REUSE this" framing made the agent re-investigate to *verify the claim*; plain `<project_memory>` facts were used directly |
+| Solve-first lead line (8795d2d) | "Found prior work… read this before repeating old debugging work" | A2/A5 stop grinding when recall fires (v5: A5 **−64%**) |
+| Decision-point re-injection on PreToolUse, not only UserPromptSubmit (637b13f) | nudge's anti-decay: re-inject at the moment the agent reaches for a tool | A2 16t→8–9t when the agent reaching to `Read` source re-surfaces "you already concluded this" (variance-dominated at N=2 — see L8) |
+| Top-K = 3, model picks (e8f9f95) | nudge `HOOK_SEARCH_LIMIT=3` | rescues the case where the right learning isn't rank-1 (the rank-3-brain A/B: top-1 RED 5 attempts → top-5 GREEN 1) |
+
+**The causal chain the versions established:** v4 isolated that *injection framing was the problem, not
+recall* ("when recall fires, the plain-facts injection is USED: A1 −40%"); v5 showed that **with the nudge
+injection + the fix-recall-starvation fix, memory wins on both axes for the first time**. So a benchmark
+result is only valid against the *current* injection mechanism — if doc 22's pattern changes, these
+numbers must be re-measured. **Rule: never benchmark memory without first confirming the injection path
+matches doc 22 (plain facts + solve-first lead + decision-point re-injection + top-K).** A regression in
+the injection mechanism shows up here as "recall fired but the agent re-investigated anyway" (turns UP),
+which is exactly the doc-22 failure signature.

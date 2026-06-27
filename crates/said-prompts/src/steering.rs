@@ -35,7 +35,11 @@ editor or LSP.
 Write the moment you conclude something a future session would pay to know — not every step. You decide \
 what is worth keeping, like an engineer's notes:
   • learned about the code (a verified fix, a root cause, a non-obvious invariant, an architectural \
-decision + its why) → `learn_fix`: problem + why + change-set, stored structured (not a one-line label).
+decision + its why) → `learn_fix` AFTER the gate is green. Write it as the SAME structured iteration \
+note the orchestrator stores: problem; files/functions touched; errors+corrections (approaches that \
+FAILED, so they're never retried); the non-obvious INVARIANT a textbook version gets wrong; key result. \
+Plus the verified change-set. A one-line label gets out-ranked by the source it summarizes — store the \
+whole story.
   • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
 would (\"remember to revisit this fn\").
   • closing out work → `journal`: wanted, decided, built, blockers, next.
@@ -72,8 +76,12 @@ replace your editor or LSP.
 Write the moment you conclude something a future session would pay to know — not every step. You \
 decide what is worth keeping, like an engineer's notes:
   • learned about the code (a verified fix, a root cause, a non-obvious invariant, an architectural \
-decision + its why) → `learn_fix`: problem + why + change-set, stored structured (not a one-line \
-label — a weak note gets out-ranked by the source it summarizes).
+decision + its why) → `learn_fix`, ONLY after a build/test gate is green. Write it as the SAME \
+structured iteration note the orchestrator stores — not a one-line label (a weak note gets out-ranked \
+by the source it summarizes). Capture: \
+the problem; the files/functions touched and why; errors+corrections (approaches that FAILED, so they \
+are never retried); the non-obvious INVARIANT a textbook version gets wrong; the key result — plus the \
+verified change-set.
   • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
 would (\"remember to revisit this fn\", \"remember my mom's birthday\").
   • closing out work → `journal`: wanted, decided, built, blockers, next.
