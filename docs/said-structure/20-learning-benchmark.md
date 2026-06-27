@@ -312,3 +312,37 @@ still shows memory pricier — but the cause is now ISOLATED and it is NOT the i
 fires) and accumulation improves correctness (A3 flip). The aggregate is held flat by recall MISSING on
 2/5 paraphrased questions. Next lever is recall precision for paraphrased fix queries (the documented
 top-N + LLM-rerank path, or a lower/looser fix floor) — not the injection, which is done.
+
+---
+
+## v5 — both fixes in (nudge injection + fix-recall starvation): memory now wins on BOTH axes
+
+After the injection fix (5fabe2d) AND the fix-recall-starvation fix (fa7a99d, restoring the 14.3
+SCA-survival guarantee), the accumulation A/B flipped for the first time:
+
+| | baseline | memory |
+|---|---|---|
+| Cost | $0.850 | **$0.806** (cheaper) |
+| Correct | 3/5 | **4/5** |
+
+Per-task:
+
+| Task | baseline | memory | what it shows |
+|---|---|---|---|
+| A1 | 4t/$0.063 ✓ | 4t/$0.060 ✓ | tie (slightly cheaper) |
+| A2 | 10t/$0.158 ✓ | 19t/$0.319 ✓ | baseline cheaper — memory over-investigated (the residual paraphrase-floor case: A2 fingerprints are strong but the weak spine keeps it ~0.34, borderline) |
+| A3 | 5t/$0.078 ✗ | 9t/$0.151 **✓** | **correctness flip — accumulation answers what the code can't** |
+| A4 | 1t/$0.051 ✗ | 2t/$0.094 ✗ | both wrong (abstain-style task) |
+| A5 | 18t/$0.501 ✓ | 13t/$0.182 **✓** | **memory −64% — the fix-recall fix paying off** (A5 was the "No known fix" paraphrase before fa7a99d; now recalled + used, vs baseline grinding 18 turns) |
+
+**Honest reading.** This is the significant shift: memory is now cheaper AND more correct. The wins are
+directly attributable to the two fixes — A5 (−64%) is the previously-starved paraphrase now recalled
+(fa7a99d), A3 is the accumulation correctness flip, and A1 shows the plain-facts injection used cheaply
+(5fabe2d). The one loss, A2, is the residual paraphrase-floor case already tracked (strong fingerprints,
+weak spine → borderline 0.34, so the memory wasn't confidently injected and the agent investigated).
+
+**Caveat (unchanged, stated plainly).** N=5 with two large opposite swings (A5 −64%, A2 +102%) is
+directionally convincing but not statistically airtight. The mechanism wins are real and explained; a
+pass-rate over N + the A2 paraphrase-floor calibration would harden the aggregate. We claim: with the
+injection + fix-recall fixes, memory recall is USED (not re-investigated) and the accumulation A/B now
+nets cheaper + more correct — first time it has.
