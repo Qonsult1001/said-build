@@ -96,3 +96,30 @@ facts, per nudge.
    injection rule; matches nudge's lean notes).
 5. Verify live: with the hook on, a known-answerable question should be answered in ~1 turn citing the
    memory, NOT a multi-turn re-investigation. If turns go UP, the framing is wrong — re-read this doc.
+
+---
+
+## Decision-point re-injection — nudge's ARCHITECTURE, not just its wording (the A2 fix)
+
+The injection wording (plain facts + solve-first lead) is necessary but NOT sufficient. nudge's own
+research (`research/nudge/docs/RESEARCH.md`) names the real problem: injected guidance **DECAYS** —
+~95% compliance in early messages → **20-60% after 10+ exchanges**, and **completely forgotten after
+compaction**; the model "can recite the rule when asked but ignores it in practice." A one-shot
+UserPromptSubmit injection therefore isn't enough — the agent receives the memory, then later reaches for
+the source and re-derives what it already had.
+
+nudge's fix (verified in `packages/nudge/src/hook/evaluate.rs`): re-inject the matching learned note on
+**BOTH channels** — `context_for_hooks` returns `user_prompt` AND `pre_tool_use`, and the PreToolUse path
+emits `AllowPreToolUseWithContext` (allow the tool + surface the note) **at the decision point** — right
+as the agent is about to act. That is the anti-decay mechanism, not the preamble string.
+
+`.said` now mirrors this: `decide()` does fix-first recall on UserPromptSubmit (Provide) **and**
+PreToolUse (AllowWithContext) and PostToolUse (Redirect); `said setup` registers a PreToolUse hook
+(matcher `Read|Grep|Bash`); the `Read` tool yields a recall intent (the file path) so a Read of source
+re-surfaces a fix that covers it. Measured on A2 (a question the agent kept re-investigating despite the
+fix being injected at prompt time): **16 turns → 8–9 turns, ~40% cheaper, consistent**, because when the
+agent reached to Read the source the hook re-injected "you already concluded this." Fail-open (allow +
+context, never blocks); the fix-recall floor self-abstains on unrelated tool calls.
+
+**Lesson (the mistake I kept making):** don't paraphrase nudge's note text — replicate nudge's
+*architecture*: facts not claims, AND re-inject at the decision point, not only at prompt time.
