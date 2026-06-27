@@ -260,6 +260,13 @@ enum Commands {
         #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
     },
+    /// Print the 10-section coding-iteration NOTE template (Title / Current State /
+    /// Task / Files and Functions / Workflow / Errors and Corrections / Codebase
+    /// Documentation / Learnings / Key Results / Worklog). Fill it in after a green
+    /// gate and pass it to `learn-fix --note-file` — the SAME structured story the
+    /// orchestrator stores, so the saved memory recalls well (not a one-line label).
+    #[cfg(feature = "code")]
+    FixTemplate,
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
@@ -1336,6 +1343,8 @@ fn main() {
         #[cfg(feature = "code")]
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
+        #[cfg(feature = "code")]
+        Commands::FixTemplate => { print!("{}", said_prompts::coding::ITERATION_TEMPLATE); Ok(()) }
         #[cfg(feature = "code")]
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,

@@ -251,7 +251,9 @@ async fn main() -> SdkResult<()> {
              - the non-obvious INVARIANT a textbook version gets wrong (the highest-value field);\n\
              - the KEY RESULT — plus the verified change-set (the `edits` that built+passed).\n\
              ONLY after the gate is green — `success` is the sole recorded outcome. This writes the \
-             SAME store as `said learn-fix` and the orchestrator (one shared learning store).\n\n\
+             SAME store as `said learn-fix` and the orchestrator (one shared learning store). To get the \
+             exact 10-section note template, call `prompts/get name=\"fix-template\"` (or `said \
+             fix-template` on the CLI) and fill it in.\n\n\
              ## CROSS-LANGUAGE BRIDGING\n\n\
              The brain links SQL and application code semantically. A search for 'card validation' \
              returns BOTH the SQL stored procedure AND the C# service that calls it.\n\n\

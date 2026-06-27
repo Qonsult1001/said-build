@@ -81,7 +81,8 @@ structured iteration note the orchestrator stores — not a one-line label (a we
 by the source it summarizes). Capture: \
 the problem; the files/functions touched and why; errors+corrections (approaches that FAILED, so they \
 are never retried); the non-obvious INVARIANT a textbook version gets wrong; the key result — plus the \
-verified change-set.
+verified change-set. Get the exact 10-section template via `prompts/get name=\"fix-template\"` (CLI: \
+`said fix-template`) and pass it to learn_fix.
   • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
 would (\"remember to revisit this fn\", \"remember my mom's birthday\").
   • closing out work → `journal`: wanted, decided, built, blockers, next.

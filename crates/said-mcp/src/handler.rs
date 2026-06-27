@@ -623,6 +623,22 @@ impl ServerHandler for SaidServerHandler {
                     icons: vec![],
                     meta: None,
                 },
+                Prompt {
+                    name: "fix-template".to_string(),
+                    title: Some("Coding-fix iteration template".to_string()),
+                    description: Some(
+                        "The 10-section coding-iteration note template (Title / Current \
+                         State / Task / Files and Functions / Workflow / Errors and \
+                         Corrections / Codebase Documentation / Learnings / Key Results / \
+                         Worklog). Fill it in after a green gate and pass it to `learn_fix` \
+                         â€” the SAME structured story the orchestrator stores, so the saved \
+                         memory recalls well (not a one-line label)."
+                            .to_string(),
+                    ),
+                    arguments: vec![],
+                    icons: vec![],
+                    meta: None,
+                },
             ],
         })
     }
@@ -681,6 +697,22 @@ impl ServerHandler for SaidServerHandler {
                     }],
                 })
             }
+            "fix-template" => Ok(GetPromptResult {
+                description: Some(
+                    "The 10-section coding-iteration note template to fill after a green \
+                     gate and pass to learn_fix (same structure the orchestrator stores)."
+                        .to_string(),
+                ),
+                meta: None,
+                messages: vec![PromptMessage {
+                    role: Role::Assistant,
+                    content: ContentBlock::TextContent(TextContent::new(
+                        said_prompts::coding::ITERATION_TEMPLATE.to_string(),
+                        None,
+                        None,
+                    )),
+                }],
+            }),
             other => Err(RpcError::invalid_params()
                 .with_message(format!("Unknown prompt: '{}'", other))),
         }
