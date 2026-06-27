@@ -151,7 +151,8 @@ worth keeping ("useful in a future session"), distilled, NOT every Q&A.
 | `said setup` registers BOTH UserPromptSubmit (read) + SessionEnd (write); `--remove` strips both | `test_steering_cli.rs` round-trip 5/5 | ✅ (a56c31d) |
 | Recall reinforcement on every `ask` (rare: only 2/15 surveyed systems) | `brain.reconsolidate` via `log_query` | ✅ (pre-existing) |
 | Accumulated non-file memory makes later tasks cheaper | live A/B (docs/20 corrected): memory $0.722 vs baseline $0.960 = ~25% cheaper at equal correctness; A2 (fix+why) −47% | ✅ measured (5 Q, single-run; pass-rate-over-N pending) |
-| Accumulation beats static ON an already-indexed codebase | live A/B (docs/20): NOT proven (+17%) — a distilled note can't out-rank the source it summarizes; win is on NON-file knowledge only | ⚠️ honest negative |
+| A PROPER structured learning (learn_fix, the orchestration way) out-ranks even indexed source | recall on a fully-init'd brain: a lazy `remember` one-liner buried at [0.56] fell back to the code symbol; the SAME learning via `learn-fix` (structured note + change_set) leads at **[0.84] semantic** and `recall-fix` returns ROOT CAUSE→save()→TRGM verbatim | ✅ |
+| ~~Accumulation can't beat static on indexed code~~ (RETRACTED) | the earlier "+17%" used a LAZY one-line `remember` label, not a structured `learn_fix` — methodology error, not a `.said` property. orchestration's own dedup-guard comment warns a weak note outranks/degrades; the fix is to store the RIGHT way (see row above) | ❌ retracted |
 
 ## Live-source ingest connectors → browser BUILT, see `06-ingestion-plugins`
 

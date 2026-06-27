@@ -177,3 +177,32 @@ the cost figures are the defensible signal, not that raw correctness count). And
 an end-to-end run where the agent WRITES them across real prior sessions is the final proof. But the
 direction is now clear and correctly measured: accumulated memory that carries non-file knowledge makes
 later tasks cheaper.
+
+---
+
+## RETRACTION — the "+17%" was a methodology error (lazy note vs proper learn_fix)
+
+The "+17% / not proven on indexed code" conclusion above is **withdrawn.** It came from storing the
+write-back as a LAZY one-line `remember` label — `remember("Learned: save is the function that writes
+the TRGM section")` — which is NOT how `.said` is meant to record a learning, and not how
+`said-orchestration` does it.
+
+The correct write is the **structured `learn_fix`** path (the orchestration `steps/learn.rs` move): the
+LLM authors a structured note (Title / Files+Functions / Learnings / the WHY / Key Results) plus the
+machine `change_set`, stored via the ONE shared writer `sca_core::ask::learn_coding_fix` (byte-identical
+across CLI `learn-fix`, MCP `learn_fix`, and the orchestrator), with a dedup guard.
+
+Measured difference on a FULLY-init'd brain (4,386 frames), same "sym()/TRGM" question:
+
+| Write style | `ask` recall of the learning |
+|---|---|
+| LAZY `remember` one-liner (what the flawed run used) | buried — top hit fell back to `[0.56][symbol] sym`, the note didn't surface |
+| PROPER `learn-fix` (structured note + change_set) | **`[0.84][semantic]`** leads; `recall-fix` returns **ROOT CAUSE → save() → TRGM** verbatim (perfect recall) |
+
+So a properly-recorded learning out-ranks even the indexed source it concerns — exactly the
+"perfect recall" `said-orchestration` already relies on. The negative was the wrong tool/wording, not a
+property of write-back. orchestration's own dedup-guard comment (`steps/learn.rs`) warns that a *weaker*
+note outranks and degrades recall — which is precisely the failure the lazy benchmark reproduced.
+
+**Net:** write-back works on indexed code too, when stored as a structured learn_fix (not a label). The
+honest open item remains a pass-rate-over-N end-to-end run, not the retracted "+17%".
