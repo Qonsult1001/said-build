@@ -163,3 +163,41 @@ encoder → semantic dead → recall_fix always "No known fix" (while the CLI re
 Fixed: `attach_encoder` now warns loudly once when no encoder loads, naming the fix (rebuild with
 `--features coding`/`full`). Verified end-to-end through the MCP server: recall_fix returns the stored fix
 (trgm-fix → ROOT CAUSE → TRGM). Build requirement: ship said-mcp with a bundle that includes embed-model.
+
+---
+
+## 6. (RESOLVED) Fix-recall starved by a coincidental symbol hit — violated the 14.3 SCA-survival guarantee
+
+**Commit:** `fa7a99d`
+
+**Symptom.** A verified coding fix that recalled fine on its exact problem text returned "No known fix"
+on a PARAPHRASE — even though `brain.query` (SCA semantic) surfaced the fix at 0.71. On the live A/B this
+made `recall_fix` miss on paraphrased questions (A2/A5), so the agent investigated from scratch (the cost
+that held the accumulation benchmark flat).
+
+**Root cause — a documented contract was violated.** `docs/14-novel-mechanisms/14.3-relative-cutoff.md`
+guarantees: *"the top-3 semantic hits always pass the cutoff even when a symbol or trigram hit
+dominates"* (ASK_SCA_GUARANTEED=3). Two things broke that for fix recall:
+1. `best_coding_fixes` called `ask(deep=false)`. The non-deep abstention block (ask.rs ~794) drops the
+   semantic tail when ANY "confident" hit exists — and a COINCIDENTAL symbol match (query word "save" →
+   a `save` symbol) counts as confident. So the semantically-recalled fix frame was discarded AFTER the
+   guaranteed-survival cutoff — i.e. the abstention block (added later) overrode the 14.3 guarantee.
+2. `rel_conf = conf/top_conf` was a raw multiplier; in deep mode the float rerank can zero a fix frame's
+   ask confidence (its stored text differs from the query), so `rel_conf=0` nullified strong
+   semantic+intent fingerprints → final score 0.
+
+**Fix (restores the documented contract).** `best_coding_fixes` asks with `deep=true` (the fix-recall
+path needs the full semantic-led pool to filter by `FIX_KIND_TAG`, then re-scores by fingerprints — it
+must not be subject to end-user abstention trimming, which is what the 14.3 guarantee protects). And
+`rel_conf` is floored at 0.5 (membership in the fix-filtered set IS the spine signal; the fingerprint
+discriminators decide; a strong spine still ranks higher).
+
+**Verified.** Paraphrased fixes that returned "No known fix" now recall (A5-style 0.76; A2-style found
+at 0.34, semantic 0.49 + intent 0.61, up from absent). Adversarial decoy separation preserved (LRU
+target leads LFU/TTL, `hard-eval/recall-measure.sh`). Regression 15/15; recall canary green.
+
+**Note.** A heavy paraphrase whose SPINE (ask) signal is weak can still land just under the default 0.45
+`SAID_RECALL_MIN` even with strong fingerprints (A2 = 0.34). That is the top-N-vs-hard-floor tension: the
+orchestrator injects top-k=5 and lets the LLM pick, so a borderline-but-correct fix still reaches the
+model. A calibrated/lower fix floor for paraphrase is the remaining tuning lever, tracked, not a
+regression.
