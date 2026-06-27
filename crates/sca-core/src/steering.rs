@@ -175,6 +175,21 @@ fn search_intent(event: &HookEvent) -> Option<String> {
 /// trusted channel (Anthropic hooks doc; measured). Fail-open: nothing GROUNDED → passthrough.
 pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookDecision {
     let Some(intent) = search_intent(event) else { return HookDecision::Passthrough; };
+
+    // FIX-FIRST RECALL (mirrors said-orchestration's memory step). Before the generic ask, check the
+    // VERIFIED coding-fix store: if a gate-verified fix matches this intent, inject IT — framed as a
+    // trusted prior to REUSE, not a raw code-index dump. The earlier raw `<project_index>` dump of a fix
+    // frame was REJECTED live ("there are no project memory files") because it read as search results,
+    // not as authoritative recalled memory. We inject THE IDEA (the learned recipe/why) + a capped
+    // reference, with the orchestration directive that scales by confidence — the proven pattern that
+    // makes the model reuse instead of re-derive. Only on UserPromptSubmit/SessionStart (the trusted
+    // channel); fix recall has its own confidence floor so it self-abstains.
+    if matches!(event.phase, HookPhase::UserPromptSubmit | HookPhase::SessionStart) {
+        if let Some(fix) = crate::ask::recall_coding_fix(brain, &intent, 0.45) {
+            return HookDecision::Provide { context: render_verified_fix(&fix) };
+        }
+    }
+
     let (cands, keywords) = crate::ask::ask(brain, &intent, 5, false, None);
     if cands.is_empty() { return HookDecision::Passthrough; }
     // FAIL-OPEN guard. For a literal GREP pattern (tool channels) we require LEXICAL GROUNDING (the
@@ -223,6 +238,35 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
         // recall), but the match must be total. Passthrough is the safe no-op.
         HookPhase::SessionEnd => HookDecision::Passthrough,
     }
+}
+
+/// Render a recalled VERIFIED coding fix as PLAIN FACTUAL CONTEXT — the nudge pattern (attunehq/nudge:
+/// the UserPromptSubmit "Continue" outcome emits the learned note as plain stdout, NO wrapper tag, NO
+/// meta-claim). The earlier `<verified_memory>…this is gate-verified, REUSE it…>` framing was REJECTED
+/// live: Claude treated the assertive claim as something to verify and re-investigated the source (17
+/// turns) instead of using it. Plain factual recall — stated as what's known, not a claim about its
+/// authority — is what the model assimilates. This matches the project's own steering finding: on the
+/// trusted UserPromptSubmit channel the text must be FACTS, never an imperative/meta-claim, or it trips
+/// the injection-skepticism defense. We surface the learning (the idea + why); the model decides.
+fn render_verified_fix(fix: &crate::ask::RecalledFix) -> String {
+    const NOTE_MAX: usize = 2400; // ~600 tokens of learning — the gotchas, not the codebase
+    let cap = |s: &str, max: usize| -> String {
+        if s.len() <= max { return s.to_string(); }
+        let mut kept = String::new();
+        for line in s.lines() {
+            if kept.len() + line.len() + 1 > max { break; }
+            kept.push_str(line); kept.push('\n');
+        }
+        kept.push_str("…\n");
+        kept
+    };
+    // Plain prior-work note. A labeled `<project_index>`-style block of FACTS (consistent with the
+    // generic-recall path), no "reuse this"/"verified" imperative — the note's own content carries the
+    // recipe + why, and the model applies it as it sees fit.
+    format!(
+        "<project_memory source=\".said\">\nPrior work on a problem of this shape recorded:\n{}\n</project_memory>",
+        cap(&fix.note, NOTE_MAX)
+    )
 }
 
 /// Compact factual lines for the legacy (tool-adjacent) channels.
