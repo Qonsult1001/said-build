@@ -18,28 +18,29 @@
 /// The MCP `instructions` string the said-mcp server returns at connect. Concise (< 2KB — Claude Code
 /// truncates server instructions). Loaded on connect, removed on disconnect — no git trace.
 pub const MCP_INSTRUCTIONS: &str = "\
-.SAID — MEMORY + CODE INDEX:
-.said is a portable memory and code-knowledge index for this project. Prefer it over blind grepping or \
-reading whole files when you need to LOCATE something by meaning, or recall context from earlier work:
-  • Find code by what it DOES (not its exact name) — semantic + symbol + call-graph in one query.
-  • Locate a bug from a symptom — it points at the precise function, far cheaper than reading files.
-  • Recall a past fix, a decision, or project knowledge — .said remembers across sessions.
-.said RETURNS the relevant code/details — it never invents them; you act on what it returns and hand \
-symbols to your language server (LSP) for type-precise references. It does not replace your editor or \
-LSP; it is the fast, token-lean way to find the RIGHT place to look. When .said surfaces the answer, \
-you can skip the grep.
+.SAID — PROJECT MEMORY + CODE INDEX
 
-RECORD WHAT YOU CONCLUDE (so the next session is cheaper):
-.said is a BRAIN, not just an index — it remembers across sessions only if you write to it. Like a good \
-engineer's notes, you decide what is worth keeping: save a learning the moment you CONCLUDE something \
-that would be useful in a future session, not every step. Concretely:
-  • CODE learnings (a verified fix, a bug's root cause, a non-obvious invariant, an architectural \
-decision + its WHY) → `learn_fix` (problem + WHY + change-set), stored STRUCTURED not as a label.
-  • USER / non-coding facts, or when the user says \"remember …\" → `remember`, used like an end user \
-would (\"remember my mom's birthday\", \"remember to revisit this fn\"). One distilled fact.
-  • wrapping up work / a checkpoint → `journal` (wanted, decided, built, blockers, next steps).
-Rule of thumb: learned something about the CODE → learn_fix; the USER asked to keep something → remember. \
-Distil don't dump; skip the obvious/unverified; .said dedupes.";
+Default: before you grep or open files to locate something, query .said first with `ask`. It finds code \
+by meaning — semantic + symbol + call-graph in one query — and recalls context from earlier sessions, \
+for far fewer tokens than reading files blind.
+
+Query (`ask`) when you need to:
+  • find code by what it DOES, not its exact name;
+  • trace a bug from a symptom to the function that causes it;
+  • recall a past fix, a decision, or anything concluded in an earlier session.
+It returns real code and stored facts, never invented. Act on what it returns; hand the symbols to your \
+LSP for type-precise references. .said points you at the right place to look — it does not replace your \
+editor or LSP.
+
+Write the moment you conclude something a future session would pay to know — not every step. You decide \
+what is worth keeping, like an engineer's notes:
+  • learned about the code (a verified fix, a root cause, a non-obvious invariant, an architectural \
+decision + its why) → `learn_fix`: problem + why + change-set, stored structured (not a one-line label).
+  • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
+would (\"remember to revisit this fn\").
+  • closing out work → `journal`: wanted, decided, built, blockers, next.
+Distil, don't dump. Skip the obvious and the unverified. .said dedupes. Rule of thumb: learned about the \
+CODE → learn_fix; the USER asked to keep something → remember.";
 
 /// The bundled `said` SKILL body (`.claude/skills/said/SKILL.md`) written by `said setup`. Bootstrap
 /// guidance lives HERE, never in CLAUDE.md — so removing `.said` leaves no committed trace. The leading
@@ -53,40 +54,32 @@ description: Use .said memory to locate code by meaning and recall project conte
 
 # Using .said
 
-This project has a `.said` brain — a portable memory and code index. Before you grep the codebase or \
-read files to find something, `.said` is queried automatically (a PreToolUse hook injects the relevant \
-memory) and you can also call the `.said` MCP tools directly.
+This project has a `.said` brain — portable memory + a code index.
 
-REACH FOR .said WHEN YOU NEED TO:
-  • find code by INTENT (\"the function that retries failed webhooks\") — not just by exact name,
-  • LOCATE a bug from a symptom — it points at the precise function, a fraction of the tokens of \
-reading files,
-  • recall a past fix, a decision, or domain knowledge from earlier sessions.
+Default: before you grep or open files to locate something, query `.said` first with `ask`. It finds \
+code by meaning — semantic + symbol + call-graph in one query — and recalls context from earlier \
+sessions, for far fewer tokens than reading files blind. (A hook also injects the top hit on each \
+prompt; `ask` is how you query it yourself.)
 
-.said RETURNS the relevant code/details — it does not invent them, and it does not replace your editor \
-or language server. You stay in control: act on what it returns, and hand symbols to your LSP for \
-type-precise references. If .said already shows the answer, skip the grep.
+Query (`ask`) when you need to:
+  • find code by what it DOES, not its exact name;
+  • trace a bug from a symptom to the function that causes it;
+  • recall a past fix, a decision, or anything concluded in an earlier session.
+It returns real code and stored facts, never invented. Act on what it returns; hand the symbols to \
+your LSP for type-precise references. `.said` points you at the right place to look — it does not \
+replace your editor or LSP.
 
-RECORD WHAT YOU CONCLUDE (this is what makes .said a brain, not a static index):
+Write the moment you conclude something a future session would pay to know — not every step. You \
+decide what is worth keeping, like an engineer's notes:
+  • learned about the code (a verified fix, a root cause, a non-obvious invariant, an architectural \
+decision + its why) → `learn_fix`: problem + why + change-set, stored structured (not a one-line \
+label — a weak note gets out-ranked by the source it summarizes).
+  • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
+would (\"remember to revisit this fn\", \"remember my mom's birthday\").
+  • closing out work → `journal`: wanted, decided, built, blockers, next.
 
-.said remembers across sessions only if you write to it — so the next session starts where this one \
-ended instead of rediscovering everything. Like an engineer's notebook, YOU decide what's worth keeping: \
-save a learning the moment you CONCLUDE something that would help a future session, not every step.
-
-PICK THE RIGHT VERB BY DOMAIN:
-  • CODING LEARNINGS → learn_fix. A verified code fix (tests pass), a bug's ROOT CAUSE, a non-obvious \
-code invariant, an architectural decision and its WHY. Pass the problem + the WHY in the learnings + the \
-change-set. This is the code-knowledge store the orchestrator replays — store it STRUCTURED, never as a \
-one-line label (a weak note gets out-ranked by the source it summarizes).
-  • USER / NON-CODING FACTS, or when the USER SAYS \"remember …\" → remember. Use it exactly as an end \
-user would: \"remember my mom's birthday\", \"remember to revisit this function later\", a preference, a \
-project fact, anything outside code the user wants kept. One distilled fact.
-  • WRAPPING UP a piece of work or a checkpoint (\"moving on to X\") → journal: what was wanted, decided, \
-built, blockers, next steps.
-
-Distil, don't dump — store the INVARIANT/decision, not the raw transcript. Skip the obvious and the \
-unverified. .said dedupes, so re-recording a known fact is cheap; a clean structured learning beats a \
-wall of text. Rule of thumb: did I learn something about the CODE? learn_fix. Did the USER ask me to \
+Distil, don't dump. Skip the obvious and the unverified. `.said` dedupes. Rule of thumb: did I learn \
+something about the CODE? `learn_fix`. Did the USER ask me to \
 keep something (coding or not)? remember.";
 
 /// One-line summary used by `said setup` output / `said plugin list`.
@@ -104,17 +97,18 @@ mod tests {
         // Substantive, and under Claude Code's 2KB server-instruction truncation.
         assert!(MCP_INSTRUCTIONS.len() > 200, "instructions must be substantive");
         assert!(MCP_INSTRUCTIONS.len() < 2048, "must stay under the 2KB MCP-instruction limit");
-        // House style: an ALL-CAPS header + `•` bullets (matches tools.rs / strategy.rs).
-        assert!(MCP_INSTRUCTIONS.contains(".SAID — MEMORY + CODE INDEX:"));
         assert!(MCP_INSTRUCTIONS.contains('•'));
-        // The three documented capabilities (find-by-intent / locate-bug / recall) are all named.
-        assert!(MCP_INSTRUCTIONS.contains("Find code by what it DOES"));
-        assert!(MCP_INSTRUCTIONS.contains("Locate a bug from a symptom"));
-        assert!(MCP_INSTRUCTIONS.contains("Recall a past fix"));
-        // Honesty ethos (aligns with retrieval::NEVER_DO / core::SYSTEM_PRINCIPLES): never invents.
-        assert!(MCP_INSTRUCTIONS.contains("never invents"));
-        // Division of labor: defers type-precise work to the LSP (matches docs/16-agent-steering).
-        assert!(MCP_INSTRUCTIONS.contains("language server"));
+        // FUNCTIONAL: the QUERY tool must be named (the read half can't bind to no tool — the bug we fixed).
+        assert!(MCP_INSTRUCTIONS.contains("`ask`"), "must name the query tool `ask`");
+        // The default/interception point leads (not buried last).
+        assert!(MCP_INSTRUCTIONS.contains("Default: before you grep"), "default-first interception line");
+        // All three write verbs named, split by domain.
+        assert!(MCP_INSTRUCTIONS.contains("`learn_fix`") && MCP_INSTRUCTIONS.contains("`remember`")
+            && MCP_INSTRUCTIONS.contains("`journal`"), "all three write verbs named");
+        // Honesty ethos: returns real facts, never invented.
+        assert!(MCP_INSTRUCTIONS.contains("never invented"));
+        // Division of labor: defers type-precise work to the LSP.
+        assert!(MCP_INSTRUCTIONS.contains("LSP"));
     }
 
     #[test]
@@ -123,8 +117,10 @@ mod tests {
         assert!(SKILL_BODY.starts_with("---\nname: said\n"), "must open with SKILL.md frontmatter");
         assert_eq!(SKILL_BODY.matches("---").count(), 2, "exactly one frontmatter block");
         assert!(SKILL_BODY.contains("# Using .said"));
+        // The query tool is named (the read-half-binds-to-no-tool bug fix).
+        assert!(SKILL_BODY.contains("`ask`"), "skill must name the query tool `ask`");
         // Honesty ethos again — the skill must not over-claim.
-        assert!(SKILL_BODY.contains("it does not invent them"));
+        assert!(SKILL_BODY.contains("never invented"));
         // CRITICAL: no literal backslash may leak into the written file (Rust `\\`-continuations
         // consume the backslash + leading whitespace; if one survived, SKILL.md would be malformed).
         assert!(!SKILL_BODY.contains('\\'), "no literal backslash may reach the written SKILL.md");
