@@ -379,3 +379,33 @@ A1 (−85%), partly offset by A5/A2 over-investigation. With N=2 over 5 tasks, t
 sound end-to-end (the corruption that masked every prior run is fixed and guarded); the residual softness
 is tuning (A2/A5 over-investigation: the agent sometimes verifies the recall instead of trusting it) and
 sample size, not broken recall. A larger pass-rate-over-N would harden the aggregate.
+
+---
+
+## v7 — decision-point re-injection across all tasks: aggregate win stable, per-task is VARIANCE-dominated
+
+Re-ran the full clean A/B after adding nudge's decision-point re-injection (fix-first recall on
+UserPromptSubmit + PreToolUse + PostToolUse, commit 637b13f). Clean fixture (5/5 bodies). 2 samples/task.
+
+| | baseline | memory |
+|---|---|---|
+| Cost | $1.628 | **$1.484 (−9%)** |
+| Turns | 89 | **84 (−6%)** |
+| Correct | 7/10 | 7/10 |
+
+Per-task: A1 −33%, A4 −28% (clear wins); A3 ~tie; **A2 +5%, A5 +6% (slightly worse this run)**.
+
+**Honest cross-run finding.** The aggregate "memory is modestly cheaper" is STABLE across v6 and v7
+(−3% then −9%). But the PER-TASK winners/losers MOVE between runs: v6 had A1 winning big and A2/A5
+losing; v7 has A1+A4 winning and A2/A5 lagging. A2 specifically went 16t (pre-fix) → 8t (isolated
+re-test) → 10t (this full run) — it is NOT deterministically fixed; the agent sometimes trusts the
+re-injected fix and stops, sometimes still verifies against source. So:
+
+- The decision-point re-injection mechanism is sound and uniform (fires for every task, nothing
+  regressed badly), and the aggregate is a consistent modest win.
+- It is NOT "every task fixed exactly the same" — per-task results are variance-dominated at N=2. An
+  earlier "A2 fixed (16→8)" claim was over-stated off a single sample; the full run corrects it.
+
+**What a real per-task claim needs:** 5–10 samples/task to average out the agent's run-to-run variance
+(the agent's verify-vs-trust decision is stochastic). Until then, claim only the stable aggregate
+(memory cheaper, more or equal correct), not per-task determinism.
