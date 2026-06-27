@@ -271,6 +271,32 @@ build/save path (ensure pending/spill bodies are flushed into `self.data` — or
 before the next incremental index). Until fixed, batch fix-seeding must `compact()`/full-rebuild between
 adds, or store all fixes then `build_index` once.
 
+**CONFIRMED ROOT CAUSE (2026-06-27).** Reproduced reliably at scale + isolated to the BLOCK-COMPACTED
+save path (a `said init` brain is block-dict compacted, so `SaidFile::save()` takes the
+`self.frames.has_blocks()` branch, NOT the uncompacted one). That branch calls
+`self.frames.flush_block_pending(buf.len())` (said_file.rs ~2354 and ~2567), which delegates to
+`flush_block_pending_with_source(base, &[])` — **with an EMPTY source slice.** In
+`flush_block_pending_with_source` (frames.rs ~880), an EXISTING (already-persisted) block can only be
+copied forward by reading its bytes from `source_data`; with an empty source it hits the
+"can't recover this block" branch and the block (carrying the prior fix's body) is **silently dropped**.
+So every re-save of a block-compacted brain loses pre-existing block bodies that weren't re-pending.
+
+**ATTEMPTED FIX + WHY IT'S NOT YET DONE.** Passing `self.data.as_slice()` (cloned to avoid the
+frames/data borrow conflict) as the source REGRESSED 1/5→0/5 and surfaced a SECOND, independent bug: a
+`task_identity` doc_id COLLISION (5 distinct problems → 2 ids; whitespace-free labels should be distinct
+but the stored ids collide). The two bugs are tangled in the hottest serialization path, so the change
+was REVERTED rather than ship a half-fix. The correct fix must: (1) pass a valid source to
+flush_block_pending so existing blocks copy forward, AND (2) fix the doc_id collision so distinct fixes
+get distinct frames — with the #[ignore]'d guard test (test_learnfix_body_corruption_8) going green.
+
+**SAFE WORKAROUND until fixed.** Seed multiple fixes by storing ALL of them, then `compact()` +
+`build_index()` + `save()` ONCE at the end (a full rebuild re-encodes every body), instead of
+save-per-fix. Or store fixes on a SMALL brain (no block compaction) and merge. The verify-bodies gate
+(get each fix, assert non-empty) MUST run before trusting any multi-fix brain.
+
+**Guard test:** `crates/sca-core/tests/test_learnfix_body_corruption_8.rs` (#[ignore], run with
+`-- --ignored`) — currently RED, self-builds a block-compacted brain, asserts fix#1 body survives fix#2.
+
 **Benchmark note.** All accumulation correctness numbers (docs/20 v3–v5) are SUSPECT because of this —
 the cost numbers (memory cheaper) are less affected (they measure agent behavior given whatever was
 injected), but a clean re-run requires this fix or a single-batch-index seeding path.
