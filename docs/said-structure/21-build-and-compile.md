@@ -9,22 +9,28 @@ return "No known fix" while the CLI recalled the same fix at 0.82.)
 ## THE ONE RULE: every build that does semantic recall MUST include `embed-model`
 
 `embed-model` bakes the said-lam static encoder into the binary. Without it:
+
 - `build_index` produces **0 SCA fingerprints** (semantic recall dead),
 - `ask` / `search` fall back to symbol + grep only (no `[semantic]` hits),
 - `recall_fix` can NEVER clear its 0.45 score floor (semantic=0 caps the score at 0.30) → always
   "No known fix",
 - and **none of this errors** — it just silently under-performs.
 
-### The asymmetry that bit us (memorize this)
+### The asymmetry that bit us (now fixed at the source)
+
+Originally `said-mcp`'s default was `["docs"]` — **no embed-model** — so a bare `cargo build -p said-mcp`
+shipped an encoder-less server that silently ran symbol+grep only (FIXES-LOG #5). Both defaults now
+include the encoder:
 
 | Binary | `default` features | Safe to build with no `--features`? |
 |---|---|---|
-| **`said` (CLI)** | `["embed-model"]` | ✅ yes — default already bakes the encoder |
-| **`said-mcp`** | `["docs"]` — **NO embed-model** | ❌ **NO** — a plain `cargo build -p said-mcp` ships an **encoder-less** server |
+| **`said` (CLI)** | `["embed-model"]` | ✅ yes |
+| **`said-mcp`** | `["embed-model", "docs"]` | ✅ yes (fixed — was `["docs"]`) |
 
-So: **a bare `cargo build -p said-mcp` is a TRAP.** Always pass a bundle that includes `embed-model`.
-(The server now prints a loud one-time stderr WARNING when it starts with no encoder — but build it
-right and you'll never see it.)
+Two belt-and-braces guards remain so this can never silently recur: (1) the defaults bake the encoder,
+and (2) the server prints a loud one-time stderr WARNING if it ever starts with no encoder. **Still
+prefer an explicit bundle** (`--no-default-features --features "coding"`) for ship builds so the variant
+is deterministic and minimal — don't rely on defaults for releases.
 
 ## Shipping bundles (identical names for CLI and MCP)
 

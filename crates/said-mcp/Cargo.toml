@@ -19,7 +19,11 @@ rust-mcp-sdk = { version = "0.9", default-features = false, features = ["server"
 said-forge = { path = "../said-forge", optional = true }
 
 [features]
-default = ["docs"]
+# embed-model is in the default so a bare `cargo build -p said-mcp` is NEVER encoder-less. Without it the
+# server silently runs symbol+grep only and every recall_fix returns "No known fix" (FIXES-LOG #5). The
+# CLI's default already bakes the encoder; the MCP server now matches it (+~4.8MB, worth it — a portable
+# brain that can't do semantic recall is not the product). See docs/said-structure/21-build-and-compile.md.
+default = ["embed-model", "docs"]
 docs = ["sca-core/docs"]
 ocr = ["sca-core/ocr"]
 whisper = ["sca-core/whisper"]
