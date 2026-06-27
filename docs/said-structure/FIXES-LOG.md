@@ -234,3 +234,43 @@ Query2doc 2303.07678, doc2query 1904.08375, ANCE-PRF 2108.13454, RankGPT 2304.09
 2104.08821, QB-Norm 2408.04887). The distributional gate is the cheapest, fully-offline, no-LLM,
 no-magic-number option; doc2query (learn-time question expansion) is the tracked follow-up to RAISE
 scores, and top-N + LLM rerank is the optional-LLM ceiling.
+
+---
+
+## 8. (OPEN, HIGH PRIORITY) Repeated `learn-fix` on a large brain corrupts PRIOR fix bodies
+
+**Status:** root-caused + minimal repro; fix not yet applied (core storage path — needs care).
+
+**Symptom (minimal repro).** On a large init'd brain (~4,387 frames):
+```
+learn-fix #1 → fix::6eb6… , get → 266 chars         (body present)
+learn-fix #2 → fix::…     , get #2 → 257 chars       (body present)
+get #1 again → 0 chars                                (FIRST body now EMPTY)
+```
+A second `learn-fix` blanks the first fix's body. With 5 seeds, only the LAST retains a body — so
+multi-fix brains effectively hold one recallable fix. Does NOT reproduce on a small/empty brain (2
+sequential learn-fix both keep bodies) — it's scale/incremental-path specific.
+
+**Impact (this is the bug under the benchmarks).** Every accumulation A/B silently tested a brain where
+4 of 5 seeded fixes had empty bodies → "A2/A3 recall failures" and the "correctness regression" were
+mostly this, not the recall/gate logic. It also means real users who `learn-fix` repeatedly on a real
+(large) codebase brain lose all but the most-recent fix's body. High priority.
+
+**Root cause (hypothesis, strong).** `learn_coding_fix` does `remember_with_pillar` → `build_index()` →
+`save()`. `build_index`'s incremental path reads frame bodies via
+`frames.read_frame_text(doc_id, self.data.as_slice())` — i.e. from the mmap of the LAST-SAVED file. A
+newly-added frame's body lives in the pending/spill buffer, not yet in `self.data`; after the next
+`save()` + the following `learn-fix`'s incremental `build_index`, a prior fix frame's body is read from a
+stale/!current `self.data` and re-indexed (and re-saved) as empty. The frame's doc_id + tags survive
+(they're in metadata), but the body is lost — exactly the observed signature (doc_id recallable, `get`
+empty).
+
+**Next step.** Reproduce in a Rust unit test (two `learn_coding_fix` on a >50-frame brain, assert
+`get` of the first is non-empty after the second), then fix the body source in the incremental
+build/save path (ensure pending/spill bodies are flushed into `self.data` — or re-read from the spill —
+before the next incremental index). Until fixed, batch fix-seeding must `compact()`/full-rebuild between
+adds, or store all fixes then `build_index` once.
+
+**Benchmark note.** All accumulation correctness numbers (docs/20 v3–v5) are SUSPECT because of this —
+the cost numbers (memory cheaper) are less affected (they measure agent behavior given whatever was
+injected), but a clean re-run requires this fix or a single-batch-index seeding path.
