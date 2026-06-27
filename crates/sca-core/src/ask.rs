@@ -1124,8 +1124,48 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     let lang_want = std::env::var("SAID_RECALL_LANG").ok()
         .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
     let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
-    best_coding_fixes(brain, problem, fetch_k).into_iter()
-        .filter(|(_, score)| *score >= min_score)
+
+    // Over-fetch a wider pool than k so we can measure THIS query's score distribution for the gate
+    // below — the top candidate's absolute score is meaningless on its own (embedding anisotropy:
+    // arXiv 2104.08821; cross-query non-comparability / QB-Norm), so we gate on whether it STANDS OUT
+    // from the pool, not on a fixed floor. Documented enhancement (docs/11-known-limitations §dynamic
+    // cutoff: "if top is 0.5 and rank 2 is 0.49, widen").
+    let pool = best_coding_fixes(brain, problem, fetch_k.max(8));
+
+    // PER-QUERY DISTRIBUTIONAL GATE. Keep a candidate if EITHER:
+    //   (a) it clears the absolute floor (a confident hit — the fast, unchanged path), OR
+    //   (b) it is the TOP candidate AND it stands out from the rest of the fix pool — i.e. the gap to
+    //       the next fix candidate is large relative to the pool spread. This recovers the documented
+    //       failure where the RIGHT fix is rank-1 but at a moderate score (A2: 0.34, the only matching
+    //       fix) that a fixed floor wrongly rejects — WITHOUT letting decoys through: when two genuinely
+    //       near-identical fixes are both present (the LRU/LFU twin case), the top does NOT stand out, so
+    //       the absolute floor remains the gate and the twin-discrimination contract is preserved.
+    // No hard-coded magic threshold: the gate is RELATIVE to each query's own candidate spread.
+    let gate_keep: std::collections::HashSet<String> = {
+        let mut keep: std::collections::HashSet<String> = pool.iter()
+            .filter(|(_, s)| *s >= min_score).map(|(d, _)| d.clone()).collect();
+        if let Some((top_id, top_s)) = pool.first().cloned() {
+            if !keep.contains(&top_id) {
+                // Standout test: the top must clearly lead the rest of the pool. Use the gap to rank-2
+                // measured against the pool's own spread (max-min). A lone strong candidate (rank-2 far
+                // below) stands out; a cluster of near-ties does not.
+                let rest: Vec<f32> = pool.iter().skip(1).map(|(_, s)| *s).collect();
+                let second = rest.first().copied().unwrap_or(0.0);
+                let pool_min = rest.iter().cloned().fold(top_s, f32::min);
+                let spread = (top_s - pool_min).max(1e-6);
+                let lead = (top_s - second) / spread; // 1.0 = top is the only thing up here
+                // Stands out if it leads the field decisively (lead ≥ ~0.6 of the spread) AND is at
+                // least a meaningful match (not noise — half the absolute floor). Both relative.
+                if (rest.is_empty() || lead >= 0.6) && top_s >= min_score * 0.5 {
+                    keep.insert(top_id);
+                }
+            }
+        }
+        keep
+    };
+
+    pool.into_iter()
+        .filter(|(doc_id, _)| gate_keep.contains(doc_id))
         .map(|(doc_id, score)| {
             let body = brain.get(&doc_id).unwrap_or_default();
             // Language signal, in priority order: first-class `lang:` META TAG (written at
@@ -1296,18 +1336,22 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
     let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
-        // ask confidence is the "right-neighborhood" SPINE signal — but in deep mode the float rerank
-        // can zero a fix frame's ask confidence (its stored text differs from the query, so the centered
-        // cosine ≈ 0) even though the fix is the correct answer. Used as a raw MULTIPLIER, rel_conf=0
-        // then nullified strong semantic+intent fingerprints (measured: a paraphrased fix with
-        // semantic=0.49 intent=0.61 scored 0.000 and was wrongly dropped). The frame is ALREADY in the
-        // fix-filtered candidate set, so its membership is the spine signal; floor rel_conf so it
-        // contributes without being able to veto the fingerprint discriminators that actually pick the
-        // right fix. Floor 0.5 = "it's in the neighborhood"; a strong spine (→1.0) still ranks higher.
-        let rel_conf = (conf / top_conf).max(0.5);
         let semantic = sem_fp.get(doc_id).copied()
             .or_else(|| sem_fp.get(&format!("{}{}", FIX_ACTION_ID_PREFIX, id16)).copied())
             .unwrap_or(0.0);
+        // rel_conf is the documented "right NEIGHBORHOOD" spine (docs/15-orchestration): it confirms the
+        // fix is in the candidate neighborhood; the fingerprints discriminate WITHIN it. The ask
+        // confidence is the natural spine — BUT in deep mode the float rerank zeros a fix frame's ask
+        // conf because a good fix NOTE intentionally doesn't echo the problem's words (its centered
+        // cosine ≈ 0). Using that zero as a multiplier vetoed strong-fingerprint fixes (A2: semantic
+        // 0.49 + intent 0.61 but ask=0 → 0.34, under the 0.45 floor). The fix: when the ask spine is
+        // unreliable (≈0), fall back to the SEMANTIC FINGERPRINT as the neighborhood signal — it IS a
+        // documented neighborhood measure (rank_by_fingerprint), and deep mode doesn't destroy it. A
+        // real match in the semantic neighborhood gets a strong rel_conf; a decoy in a DIFFERENT
+        // neighborhood gets a weak one, so twin discrimination is preserved (the LRU/LFU case still
+        // splits on the within-neighborhood fingerprint+intent terms).
+        let ask_spine = conf / top_conf;
+        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) };
         // ask confidence = right neighborhood (spine); the semantic fingerprint of the
         // PROBLEM (meaning) + the action fingerprint (isolated INTENT) pick the right
         // one within it. Weighted comparably so an adversarial twin (an LFU fix that
