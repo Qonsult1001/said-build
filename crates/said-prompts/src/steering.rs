@@ -90,40 +90,51 @@ pub const STEERING_SUMMARY: &str =
 mod tests {
     use super::*;
 
-    /// Mirrors the said-prompts test pattern (lib.rs): assert exact key phrases are present, the
-    /// const is substantive, and house-style + honesty-ethos markers appear.
+    /// SMOKE TEST, not a wording lock. Asserts the const carries the right CONCEPTS (named tools, the
+    /// honesty ethos, the LSP handoff, the byte bound) — deliberately NOT exact prose, so copy edits to
+    /// the instructions don't require lock-step test edits. (The old version pinned 5 literal phrases and
+    /// silently coupled style to CI; that was unintentional.)
     #[test]
     fn mcp_instructions_aligned_and_bounded() {
         // Substantive, and under Claude Code's 2KB server-instruction truncation.
         assert!(MCP_INSTRUCTIONS.len() > 200, "instructions must be substantive");
         assert!(MCP_INSTRUCTIONS.len() < 2048, "must stay under the 2KB MCP-instruction limit");
-        assert!(MCP_INSTRUCTIONS.contains('•'));
         // FUNCTIONAL: the QUERY tool must be named (the read half can't bind to no tool — the bug we fixed).
         assert!(MCP_INSTRUCTIONS.contains("`ask`"), "must name the query tool `ask`");
-        // The default/interception point leads (not buried last).
-        assert!(MCP_INSTRUCTIONS.contains("Default: before you grep"), "default-first interception line");
         // All three write verbs named, split by domain.
         assert!(MCP_INSTRUCTIONS.contains("`learn_fix`") && MCP_INSTRUCTIONS.contains("`remember`")
             && MCP_INSTRUCTIONS.contains("`journal`"), "all three write verbs named");
-        // Honesty ethos: returns real facts, never invented.
-        assert!(MCP_INSTRUCTIONS.contains("never invented"));
+        // Honesty ethos — same central concept check both surfaces use (case-insensitive, any phrasing).
+        assert!(asserts_never_invents(MCP_INSTRUCTIONS), "must carry the never-invents honesty ethos");
         // Division of labor: defers type-precise work to the LSP.
         assert!(MCP_INSTRUCTIONS.contains("LSP"));
     }
 
     #[test]
     fn skill_body_is_valid_skill_md() {
-        // Proper SKILL.md frontmatter (name + description between --- fences).
+        // Frontmatter anchored at the ENDS, not by counting `---` across the body. Counting breaks the
+        // moment anyone adds a `---` horizontal rule in the prose; anchoring survives body edits.
         assert!(SKILL_BODY.starts_with("---\nname: said\n"), "must open with SKILL.md frontmatter");
-        assert_eq!(SKILL_BODY.matches("---").count(), 2, "exactly one frontmatter block");
-        assert!(SKILL_BODY.contains("# Using .said"));
+        // The opening fence closes with a `---` line immediately followed by the body heading.
+        assert!(SKILL_BODY.contains("---\n\n# Using .said") || SKILL_BODY.contains("---\n# Using .said"),
+            "frontmatter closes with --- right before the body heading");
         // The query tool is named (the read-half-binds-to-no-tool bug fix).
         assert!(SKILL_BODY.contains("`ask`"), "skill must name the query tool `ask`");
-        // Honesty ethos again — the skill must not over-claim.
-        assert!(SKILL_BODY.contains("never invented"));
+        // Honesty ethos — centrally enforced (same concept check as MCP_INSTRUCTIONS, case-insensitive).
+        assert!(asserts_never_invents(SKILL_BODY), "skill must carry the never-invents honesty ethos");
+        // All three write verbs named (concept, not exact prose).
+        assert!(SKILL_BODY.contains("`learn_fix`") && SKILL_BODY.contains("`remember`")
+            && SKILL_BODY.contains("`journal`"), "all three write verbs named");
         // CRITICAL: no literal backslash may leak into the written file (Rust `\\`-continuations
         // consume the backslash + leading whitespace; if one survived, SKILL.md would be malformed).
         assert!(!SKILL_BODY.contains('\\'), "no literal backslash may reach the written SKILL.md");
+    }
+
+    /// The honesty invariant, enforced ONCE for both surfaces (concept, case-insensitive) so a copy edit
+    /// to either string doesn't silently couple wording to CI. Accepts any "never invent(s/ed)" phrasing.
+    fn asserts_never_invents(s: &str) -> bool {
+        let l = s.to_lowercase();
+        l.contains("never invent") || l.contains("does not invent") || l.contains("not invented")
     }
 
     #[test]
