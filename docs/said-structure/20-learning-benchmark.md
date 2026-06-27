@@ -206,3 +206,37 @@ note outranks and degrades recall — which is precisely the failure the lazy be
 
 **Net:** write-back works on indexed code too, when stored as a structured learn_fix (not a label). The
 honest open item remains a pass-rate-over-N end-to-end run, not the retracted "+17%".
+
+---
+
+## v2 (proper structured learn_fix writes) — INCONCLUSIVE, reported as such
+
+Re-ran the accumulation A/B with the memory arm seeded via PROPER structured `learn-fix` (problem + WHY +
+change_set), not lazy `remember` labels. Raw result: baseline $0.773 / memory $1.053 (memory looked +36%
+WORSE). But the run has too many confounds to conclude anything, so it is reported as inconclusive — not
+as a disproof:
+
+1. **Seed recall under-fired on the big brain.** The seeded `fix::` frames DID store (verified present),
+   but on the 4,386-frame init'd brain a broad query (`ask "why does ask not walk the call-graph"`)
+   returned the **indexed code** (`[0.68][symbol]`) over the seeded DECISION, and `recall-fix` came back
+   "No known fix" for the broad phrasing. Yet a TARGETED query in the earlier isolated test recalled the
+   same learn_fix at **[0.84]** with `recall-fix` returning the root cause verbatim. So learn_fix recall
+   is **query-phrasing + threshold sensitive** on a large indexed brain — a real signal, but it means the
+   benchmark measured phrasing luck, not accumulation value.
+2. **A1 outlier dominated the cost.** memory/A1 = 12 turns / $0.438 vs baseline 5t / $0.105 — the agent,
+   not handed a strong recall, read `ask.rs:366-372` source COMMENTS deeply (which the doc-comment fix
+   now indexes) and spent 12 turns. One outlier = most of the +36%.
+3. **Strict regex oracle** again under-counts correctness (3/5 both arms; the answers were largely right).
+
+**Honest status of the whole write-back question:**
+- BUILT + capability-proven: the agent can write (learn_fix/remember/journal), the SessionEnd backstop
+  captures, and a TARGETED recall of a structured learn_fix returns the answer verbatim at 0.84.
+- NOT cleanly proven by an A/B: every accumulation run so far has a confound (lazy notes v1; seed-recall
+  phrasing + an outlier v2; over-strict oracle throughout). The one defensible positive remains the
+  corrected docs/20 run on NON-file knowledge (~25% cheaper), and the one defensible mechanism fact is the
+  0.84 targeted learn_fix recall.
+
+**Decision: stop running confounded single-shot A/Bs.** A trustworthy proof needs (a) a fixed, lenient
+LLM-graded oracle, (b) pass-rate over N to kill outliers like A1, (c) queries that match how the stored
+learning is phrased (or an LLM rerank of the top-N, the documented headless path). Until then we claim
+only what's mechanism-proven, not a cost win on indexed code.
