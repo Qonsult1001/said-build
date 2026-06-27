@@ -3,14 +3,13 @@
 //! blank the 1st fix's body. Reproduces ONLY at scale (the `said init` block-dict save path); small
 //! in-process brains do not trigger it. The test indexes a real directory to reach the block path.
 //!
-//! KNOWN-FAILING until #8 is fixed — marked #[ignore] so CI is green, but run it explicitly:
+//! REGRESSION GUARD (FIXES-LOG #8, FIXED): runs in CI to catch any re-regression.
 //!   cargo test -p sca-core --no-default-features --features "embed-model,code" \
 //!     --test test_learnfix_body_corruption_8 -- --ignored --nocapture
 use sca_core::said_file::SaidFile;
 fn blen(b: &mut SaidFile, id: &str) -> usize { b.get(id).map(|s| s.len()).unwrap_or(0) }
 
 #[test]
-#[ignore = "FIXES-LOG #8 — known-failing: block-save drops prior fix bodies on a large brain"]
 fn second_learnfix_must_not_blank_first_body_on_block_compacted_brain() {
     let dir = std::env::temp_dir().join(format!("said_8_{}", std::process::id()));
     let src = dir.join("src"); std::fs::create_dir_all(&src).unwrap();

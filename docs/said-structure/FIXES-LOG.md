@@ -237,7 +237,7 @@ scores, and top-N + LLM rerank is the optional-LLM ceiling.
 
 ---
 
-## 8. (OPEN, HIGH PRIORITY) Repeated `learn-fix` on a large brain corrupts PRIOR fix bodies
+## 8. (RESOLVED) Repeated `learn-fix` on a large brain corrupted PRIOR fix bodies
 
 **Status:** root-caused + minimal repro; fix not yet applied (core storage path — needs care).
 
@@ -293,6 +293,20 @@ get distinct frames — with the #[ignore]'d guard test (test_learnfix_body_corr
 `build_index()` + `save()` ONCE at the end (a full rebuild re-encodes every body), instead of
 save-per-fix. Or store fixes on a SMALL brain (no block compaction) and merge. The verify-bodies gate
 (get each fix, assert non-empty) MUST run before trusting any multi-fix brain.
+
+**RESOLVED (commit pending).** The FINAL root cause was narrower than the first hypothesis: it was NOT
+only that `flush_block_pending` passed an empty source (that path drops pre-existing BLOCKS, fixed by
+passing `self.data`). The real miss was COMMITTED NON-BLOCK frames: a fix added by `learn_coding_fix`
+AFTER the brain was block-compacted is stored as a Plain (inline) frame; once saved it becomes a
+COMMITTED frame that is NEITHER in a block NOR in `pending`. The block-save path
+(`flush_block_pending_with_source`) only re-emitted blocks + pending, so every committed inline frame's
+body was dropped on the next save — that is what blanked the prior fix. Fix: (a) `save()` passes
+`self.data` as the block source, and (b) `flush_block_pending_with_source` now also copies forward every
+committed non-block frame from `source_data` at its offset (updating the offset), before moving pending →
+committed. The earlier "task_identity doc_id collision" was a MISDIAGNOSIS — a display artifact of the
+corruption; `task_identity` gives distinct ids for distinct labels (verified). Result: CLI 5-fix store →
+5/5 bodies present + 5 distinct ids (was 1/5). Guard test now GREEN and RUNS IN CI (un-ignored). Binary
+regression 15/15, recall canary green, save/admin-restore/persistence integrity tests green.
 
 **Guard test:** `crates/sca-core/tests/test_learnfix_body_corruption_8.rs` (#[ignore], run with
 `-- --ignored`) — currently RED, self-builds a block-compacted brain, asserts fix#1 body survives fix#2.

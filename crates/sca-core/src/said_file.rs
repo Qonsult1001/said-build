@@ -2351,7 +2351,17 @@ impl SaidFile {
         let mut blkt_offset: u64 = 0;
 
         if self.frames.has_blocks() {
-            let (block_data, block_table) = self.frames.flush_block_pending(buf.len() as u64);
+            // FIXES-LOG #8: pass the CURRENT on-disk bytes as the block source. Without it,
+            // flush_block_pending(base) = flush_block_pending_with_source(base, &[]) and every
+            // already-persisted block (carrying prior frames' bodies) hits the "can't recover this
+            // block" path and is SILENTLY DROPPED — so each re-save (e.g. a 2nd learn-fix on a
+            // block-compacted brain) blanked earlier frame bodies. `self.data` is still the old-file
+            // mmap at this point in save(); read it out first to satisfy the borrow checker (frames is
+            // borrowed &mut). The clone is one extra copy of the source during save — acceptable; save
+            // already materializes the full output buffer.
+            let block_src: Vec<u8> = self.data.as_slice().to_vec();
+            let (block_data, block_table) =
+                self.frames.flush_block_pending_with_source(buf.len() as u64, &block_src);
             buf.extend_from_slice(&block_data);
 
             // DICT section — offset stored in header

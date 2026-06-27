@@ -930,6 +930,25 @@ impl FrameStore {
             }
         }
 
+        // FIXES-LOG #8: copy forward COMMITTED non-block frames (Plain/Zstd frames added by a PRIOR
+        // learn-fix / remember AFTER the brain was block-compacted — they were saved once, so they're in
+        // self.frames as committed, but they are NEITHER in a block NOR pending). The block-save path
+        // wrote only blocks + pending, so these committed inline frames were never re-written and their
+        // bodies were lost on the next save (the bug: a 2nd learn-fix blanked the 1st's body). Re-emit
+        // them from source_data at their current offset, then update the offset to the new location.
+        for frame in self.frames.iter_mut() {
+            if frame.status == FrameStatus::Deleted { continue; }
+            if frame.encoding == FrameEncoding::ZstdDictBlock { continue; } // handled via blocks above
+            let old_off = frame.offset as usize;
+            let comp_len = frame.compressed_len as usize;
+            if !source_data.is_empty() && old_off > 0 && old_off + comp_len <= source_data.len() && comp_len > 0 {
+                let new_off = current_offset;
+                data.extend_from_slice(&source_data[old_off..old_off + comp_len]);
+                current_offset += comp_len as u64;
+                frame.offset = new_off;
+            }
+        }
+
         // Move pending to committed
         for pending in self.pending.drain(..) {
             self.frames.push(pending.meta);
