@@ -3267,6 +3267,20 @@ fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str
     let se_arr = se.as_array_mut().unwrap();
     se_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
     se_arr.push(make_entry());
+
+    // 3) PreToolUse — DECISION-POINT re-injection (nudge's anti-decay mechanism, RESEARCH.md). When the
+    // agent is about to investigate (Read/Grep/Bash) and a VERIFIED fix already covers the intent, the
+    // hook re-surfaces that fix as allow+context so the agent doesn't re-derive what it already concluded
+    // (the A2 over-investigation). Matcher scopes it to the investigation tools so it doesn't fire on
+    // Write/Edit. Fail-open (allow + context, never blocks); the fix-recall floor self-abstains otherwise.
+    let pre_entry = serde_json::json!({
+        "matcher": "Read|Grep|Bash",
+        "hooks": [ { "type": "command", "command": command, "__said": true } ]
+    });
+    let pre = hooks_obj.entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
+    let pre_arr = pre.as_array_mut().unwrap();
+    pre_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+    pre_arr.push(pre_entry);
 }
 
 /// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.

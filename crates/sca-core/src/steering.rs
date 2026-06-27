@@ -176,18 +176,29 @@ fn search_intent(event: &HookEvent) -> Option<String> {
 pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookDecision {
     let Some(intent) = search_intent(event) else { return HookDecision::Passthrough; };
 
-    // FIX-FIRST RECALL (mirrors said-orchestration's memory step). Before the generic ask, check the
-    // VERIFIED coding-fix store: if a gate-verified fix matches this intent, inject IT — framed as a
-    // trusted prior to REUSE, not a raw code-index dump. The earlier raw `<project_index>` dump of a fix
-    // frame was REJECTED live ("there are no project memory files") because it read as search results,
-    // not as authoritative recalled memory. We inject THE IDEA (the learned recipe/why) + a capped
-    // reference, with the orchestration directive that scales by confidence — the proven pattern that
-    // makes the model reuse instead of re-derive. Only on UserPromptSubmit/SessionStart (the trusted
-    // channel); fix recall has its own confidence floor so it self-abstains.
-    if matches!(event.phase, HookPhase::UserPromptSubmit | HookPhase::SessionStart) {
-        if let Some(fix) = crate::ask::recall_coding_fix(brain, &intent, 0.45) {
-            return HookDecision::Provide { context: render_verified_fix(&fix) };
-        }
+    // FIX-FIRST RECALL — on BOTH the prompt channel AND the decision point (nudge's actual mechanism).
+    // Nudge's research (research/nudge/docs/RESEARCH.md): injected guidance DECAYS over a session
+    // (95% compliance early → 20-60% after 10+ turns / after compaction), and the model "can recite the
+    // rule but ignores it in practice." Their fix is to re-inject the matching learned note AT THE
+    // DECISION POINT too — `AllowPreToolUseWithContext` carries the note when the agent is about to use a
+    // tool (read/grep), not just once at prompt time. `.said` previously recalled the fix ONLY on
+    // UserPromptSubmit, so when the agent then went to READ/GREP the source, nothing re-surfaced the fix
+    // — that's the A2 over-investigation (it had the answer but re-derived it from source anyway).
+    //   • UserPromptSubmit/SessionStart → Provide the fix (trusted prompt-time context).
+    //   • PreToolUse (about to read/grep) → AllowWithContext: allow the tool BUT re-inject the fix so the
+    //     agent sees "you already concluded this" right as it reaches for the source. Fail-open (allow),
+    //     never blocks — matches nudge's Warning/AllowWithContext, not a hard Interrupt.
+    // recall_coding_fix self-abstains below its floor, so an unrelated tool call passes straight through.
+    if let Some(fix) = crate::ask::recall_coding_fix(brain, &intent, 0.45) {
+        return match event.phase {
+            HookPhase::UserPromptSubmit | HookPhase::SessionStart =>
+                HookDecision::Provide { context: render_verified_fix(&fix) },
+            HookPhase::PreToolUse =>
+                HookDecision::AllowWithContext { context: render_verified_fix(&fix) },
+            HookPhase::PostToolUse =>
+                HookDecision::Redirect { context: render_verified_fix(&fix) },
+            HookPhase::SessionEnd => HookDecision::Passthrough,
+        };
     }
 
     let (cands, keywords) = crate::ask::ask(brain, &intent, 5, false, None);
@@ -334,6 +345,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
             "Bash" => {
                 let cmd = input.and_then(|i| i.get("command")).and_then(|x| x.as_str()).unwrap_or("");
                 ToolAction::Shell { command: cmd.to_string() }
+            }
+            // A Read of a source file is an INVESTIGATION — recall against the file path so a verified
+            // fix that already covers it is re-surfaced at the decision point (nudge's PreToolUse
+            // learned-note re-injection). The path is the recall intent; the fix store matches on the
+            // problem text + the file in the change-set.
+            "Read" => {
+                let path = input.and_then(|i| i.get("file_path")).and_then(|x| x.as_str()).unwrap_or("");
+                ToolAction::CodeSearch { query: path.to_string() }
             }
             _ => ToolAction::Other,
         };
