@@ -260,11 +260,18 @@ fn render_verified_fix(fix: &crate::ask::RecalledFix) -> String {
         kept.push_str("…\n");
         kept
     };
-    // Plain prior-work note. A labeled `<project_index>`-style block of FACTS (consistent with the
-    // generic-recall path), no "reuse this"/"verified" imperative — the note's own content carries the
-    // recipe + why, and the model applies it as it sees fit.
+    // Nudge's EXACT lead line (attunehq/nudge learn.rs::hook_context_for_query): a plain factual note
+    // PLUS the one behavioral directive that makes the agent CONSULT MEMORY FIRST instead of
+    // re-investigating — "Read this before repeating old debugging work." This is the needle nudge
+    // threads: not an authority claim ("verified, REUSE this" — which trips the injection defense and was
+    // rejected live at 17 turns), but a factual "use this before grinding the source." Dropping the
+    // directive entirely (pure facts) over-corrected — the agent treated the note as optional background
+    // and STILL read the source (A2: 16 turns despite the fix being injected). The directive is what
+    // stops the over-investigation. Mirrors nudge verbatim in intent.
     format!(
-        "<project_memory source=\".said\">\nPrior work on a problem of this shape recorded:\n{}\n</project_memory>",
+        "<project_memory source=\".said\">\nFound prior work that may apply. Read this before \
+         repeating old debugging work — if it answers the question, use it and don't re-investigate:\n{}\n\
+         </project_memory>",
         cap(&fix.note, NOTE_MAX)
     )
 }

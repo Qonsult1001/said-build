@@ -6786,23 +6786,36 @@ struct FixIteration<'a> {
 /// so this is note-only — no payload, no hashing, no tags here.
 #[cfg(feature = "code")]
 fn make_fix_note(it: &FixIteration) -> String {
-    let steps = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
+    // Render each edit as a step ONLY if it carries a real action (a mode/op AND a target). A bare
+    // {"file":"x","op":"note"} or {"file":"x"} has no actionable step — rendering it as "1. ? x.rs"
+    // produces a CONTENT-FREE pointer that, when this note is recalled + injected, INVITES the agent to
+    // go read x.rs to "complete" the dangling step — i.e. it triggers exactly the over-investigation the
+    // memory was meant to prevent (measured: A2 spent 13-16 turns re-reading source despite the LEARNINGS
+    // line already holding the full answer). The documented intent (docs/15-orchestration §body layout):
+    // the note's LEARNINGS carry the recipe; steps are the real change-set, not vague file pointers.
+    let steps: Vec<String> = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
         Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
-            .map(|(i, e)| {
-                let mode = e.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
-                let file = e.get("file").and_then(|v| v.as_str()).unwrap_or("?");
+            .filter_map(|(i, e)| {
+                // A real action verb: prefer `mode`, else `op` if it's not a content-free marker.
+                let mode = e.get("mode").and_then(|v| v.as_str())
+                    .or_else(|| e.get("op").and_then(|v| v.as_str()).filter(|op| *op != "note"));
+                let file = e.get("file").and_then(|v| v.as_str()).unwrap_or("");
                 let tgt = e.get("symbol").and_then(|v| v.as_str())
                     .or_else(|| e.get("anchor").and_then(|v| v.as_str())).unwrap_or("");
-                format!("  {}. {} {} {}", i + 1, mode, file, tgt)
+                match mode {
+                    Some(m) if !file.is_empty() => Some(format!("  {}. {} {} {}", i + 1, m, file, tgt).trim_end().to_string()),
+                    _ => None, // no actionable step — skip (don't emit a dangling "? file" pointer)
+                }
             })
-            .collect::<Vec<_>>().join("\n"),
-        _ => "  (change-set)".to_string(),
+            .collect(),
+        _ => Vec::new(),
     };
     let mut note = String::new();
     if let Some(f) = it.files { if !f.trim().is_empty() { note.push_str(&format!("FILES: {}\n", f.trim())); } }
-    note.push_str(&format!("STEPS:\n{}\n", steps));
-    if let Some(e) = it.errors { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    // LEARNINGS (the answer/recipe) lead; STEPS only when there are real, actionable ones.
     if let Some(l) = it.learnings { if !l.trim().is_empty() { note.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
+    if let Some(e) = it.errors { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    if !steps.is_empty() { note.push_str(&format!("STEPS:\n{}\n", steps.join("\n"))); }
     note.push_str("RESULT: success — built+passed");
     note
 }
