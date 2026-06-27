@@ -1259,7 +1259,15 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
     let n = brain.frames.active_count();
     let fetch = (n / 2).clamp(50, 1000);
 
-    let (fusion_cands, _kw) = ask(brain, problem, fetch, false, None);
+    // deep=true is REQUIRED here. The non-deep abstention/cutoff path is tuned for end-user `ask`: when a
+    // coincidental high-confidence SYMBOL hit matches the query (e.g. the word "save" → a `save` symbol),
+    // it treats "a confident answer exists" as true and DROPS the semantic tail — which is exactly the
+    // fix frame we're after (a Procedural memory found semantically). Measured: on a paraphrased fix
+    // query, brain.query surfaced the fix at 0.71 but non-deep ask returned ONLY the symbol (fix
+    // starved), so recall_fix wrongly returned "No known fix"; deep ask returns the fix. We re-score the
+    // fix candidates ourselves below (rel_conf + semantic + intent fingerprints), so we want the FULL
+    // semantic-led pool here, not the abstention-trimmed top-K.
+    let (fusion_cands, _kw) = ask(brain, problem, fetch, true, None);
     let ranked: Vec<(String, f32)> = fusion_cands.iter()
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
@@ -1288,7 +1296,15 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
     let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
-        let rel_conf = conf / top_conf;
+        // ask confidence is the "right-neighborhood" SPINE signal — but in deep mode the float rerank
+        // can zero a fix frame's ask confidence (its stored text differs from the query, so the centered
+        // cosine ≈ 0) even though the fix is the correct answer. Used as a raw MULTIPLIER, rel_conf=0
+        // then nullified strong semantic+intent fingerprints (measured: a paraphrased fix with
+        // semantic=0.49 intent=0.61 scored 0.000 and was wrongly dropped). The frame is ALREADY in the
+        // fix-filtered candidate set, so its membership is the spine signal; floor rel_conf so it
+        // contributes without being able to veto the fingerprint discriminators that actually pick the
+        // right fix. Floor 0.5 = "it's in the neighborhood"; a strong spine (→1.0) still ranks higher.
+        let rel_conf = (conf / top_conf).max(0.5);
         let semantic = sem_fp.get(doc_id).copied()
             .or_else(|| sem_fp.get(&format!("{}{}", FIX_ACTION_ID_PREFIX, id16)).copied())
             .unwrap_or(0.0);
