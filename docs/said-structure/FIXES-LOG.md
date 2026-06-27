@@ -122,3 +122,35 @@ LongMemEval-grade benefit from an opt-in LLM rerank: **CLI `said ask --rerank`**
 read-back rerank. **Neither is implemented.** Deferred (the top-N contract is sufficient for agent-loop
 consumers, which do the rerank by reading back). Tracked here so the doc and code are honestly
 reconciled.
+
+---
+
+## 5. (OPEN BUG) `said init` produces a brain with DEAD semantic fingerprints — breaks learn_fix recall end-to-end
+
+**Symptom.** On a brain built by the real CLI `said init` (any size — reproduced at 37, 175, and 4,388
+frames), `rank_by_fingerprint(q)` returns **0 hits** and `ask` never emits a `[semantic]` result (only
+`[symbol]`/`[text]`). Downstream this kills coding-fix recall: `best_coding_fixes` scores
+`rel_conf * (0.3 + 0.4*semantic + 0.3*intent)`, so with `semantic=0` and `intent=0` the max score is
+**0.30 — permanently below the 0.45 recall floor**. Every `recall_fix` / MCP `recall_fix` / orchestrator
+memory-recall therefore returns "No known fix" on a real codebase. THIS is why learn_fix doesn't work
+end-to-end.
+
+**What it is NOT (8 controlled tests, all GREEN — the library is sound):**
+- NOT incremental indexing: a fix added incrementally to a 500-frame code brain fingerprints at 0.87.
+- NOT reopen: SCRM survives save→reopen (0.616→0.616; 0.87→0.87; recall_coding_fixes 0.893 after reopen).
+- NOT scale: `rank_by_fingerprint` returns 0.56–0.65 at N=5/50/500/2000 in-process.
+- NOT the fix vs code-mean hypothesis: full rebuild gave the same scores as incremental.
+- `build_index_with_progress` (the chunked path init uses) + save + reopen works in-process.
+
+**What it IS.** Something the CLI `said init` does differently from an in-process
+`remember_as` + `build_index_with_progress` + `save`. The verbose init prints "[2/3] Encoded (SCA):
+100% (0.0s)" — the 0.0s for real encoding is suspect. Leading hypotheses to check next: (a) the encoder
+is not actually loaded at the moment `cmd_init` calls `build_index` (try_load_encoder ordering vs the
+brain instance that gets indexed), or (b) the chunked-init branch encodes but does not persist the SCRM
+section the way the in-process path does. NOT yet fixed — diagnosed and narrowed.
+
+**Impact.** High: it silently disables the entire SCA semantic engine for CLI-built brains, so .said
+falls back to symbol+grep only. Matches the historical "embed-model opt-in → 0 fingerprints" failure
+class. The fix belongs in `said-cli::cmd_init` / `try_load_encoder` (or the chunked branch of
+`build_index_with_progress`), proven by: after `said init`, `rank_by_fingerprint` must be > 0 and `ask`
+must emit `[semantic]` hits.
