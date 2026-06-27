@@ -21,6 +21,8 @@ It's split into twelve sections so pages stay focused and cross-linkable.
 13. [Integrations architecture](13-integrations.md) — the two rules (offline-first; LLM in a separate process), crate inventory, `said-think`, and the LEANN-inspired Q2/Q3/Q4 plan
 14. [Novel mechanisms](14-novel-mechanisms/) — 8 shipped + 5 horizon, with math, formulas, proof-sketches, and literature positioning
 15. [Coding orchestration](15-orchestration.md) — the model-agnostic Claude-Code loop (plan→design→code→test→repair→learn): Claude-faithful apply, semantic coding-fix recall, and the learning-transfer moat (weak model RED→GREEN), with measured results
+16. [Agent steering](16-agent-steering.md) — when/what makes the agent USE .said (UserPromptSubmit channel + factual framing), the write-back model, SessionEnd backstop
+17. [Build & compile](21-build-and-compile.md) — **READ BEFORE BUILDING.** Feature bundles for CLI + MCP, the embed-model rule (a bare `cargo build -p said-mcp` ships an encoder-less server), post-build verification, the drift checklist
 
 ## Maintenance rules
 
