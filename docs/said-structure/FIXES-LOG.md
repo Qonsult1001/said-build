@@ -125,7 +125,7 @@ reconciled.
 
 ---
 
-## 5. (OPEN BUG) `said init` produces a brain with DEAD semantic fingerprints — breaks learn_fix recall end-to-end
+## 5. (RESOLVED) learn_fix recall dead end-to-end via MCP — the MCP server shipped without the encoder
 
 **Symptom.** On a brain built by the real CLI `said init` (any size — reproduced at 37, 175, and 4,388
 frames), `rank_by_fingerprint(q)` returns **0 hits** and `ask` never emits a `[semantic]` result (only
@@ -154,3 +154,12 @@ falls back to symbol+grep only. Matches the historical "embed-model opt-in → 0
 class. The fix belongs in `said-cli::cmd_init` / `try_load_encoder` (or the chunked branch of
 `build_index_with_progress`), proven by: after `said init`, `rank_by_fingerprint` must be > 0 and `ask`
 must emit `[semantic]` hits.
+
+**RESOLUTION (commit 895706c).** Two findings: (1) the earlier "dead fingerprints" brains were built by
+a stale/mis-featured binary — a current `coding`-bundle CLI build produces live semantic ([0.83]) and the
+full confirmed-fix loop works (recall-fix → 0.82). (2) The actual end-to-end MCP failure: `said-mcp`'s
+default features OMIT `embed-model`, so a plain `cargo build -p said-mcp` ships a server with no baked-in
+encoder → semantic dead → recall_fix always "No known fix" (while the CLI recalled the same fix at 0.82).
+Fixed: `attach_encoder` now warns loudly once when no encoder loads, naming the fix (rebuild with
+`--features coding`/`full`). Verified end-to-end through the MCP server: recall_fix returns the stored fix
+(trgm-fix → ROOT CAUSE → TRGM). Build requirement: ship said-mcp with a bundle that includes embed-model.
