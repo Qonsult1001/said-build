@@ -188,15 +188,22 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
     //   • PreToolUse (about to read/grep) → AllowWithContext: allow the tool BUT re-inject the fix so the
     //     agent sees "you already concluded this" right as it reaches for the source. Fail-open (allow),
     //     never blocks — matches nudge's Warning/AllowWithContext, not a hard Interrupt.
-    // recall_coding_fix self-abstains below its floor, so an unrelated tool call passes straight through.
-    if let Some(fix) = crate::ask::recall_coding_fix(brain, &intent, 0.45) {
+    // TOP-K, not top-1 — aligned to nudge's HOOK_SEARCH_LIMIT=3 (research/nudge learn.rs): nudge injects
+    // the top-3 matched notes and lets the model PICK, which rescues cases where the right note isn't
+    // rank-1 (the documented top-N-vs-hard-floor principle; also docs/15-orchestration injects top-k=5).
+    // `.said` previously injected only the single best fix (recall_coding_fix k=1) — a rank-2 correct fix
+    // on a paraphrase was lost. recall_coding_fixes self-abstains per-candidate below the floor, so an
+    // unrelated tool call still yields an empty set → passthrough.
+    const HOOK_FIX_TOPK: usize = 3; // == nudge HOOK_SEARCH_LIMIT
+    let fixes = crate::ask::recall_coding_fixes(brain, &intent, HOOK_FIX_TOPK, 0.45);
+    if !fixes.is_empty() {
         return match event.phase {
             HookPhase::UserPromptSubmit | HookPhase::SessionStart =>
-                HookDecision::Provide { context: render_verified_fix(&fix) },
+                HookDecision::Provide { context: render_verified_fixes(&fixes) },
             HookPhase::PreToolUse =>
-                HookDecision::AllowWithContext { context: render_verified_fix(&fix) },
+                HookDecision::AllowWithContext { context: render_verified_fixes(&fixes) },
             HookPhase::PostToolUse =>
-                HookDecision::Redirect { context: render_verified_fix(&fix) },
+                HookDecision::Redirect { context: render_verified_fixes(&fixes) },
             HookPhase::SessionEnd => HookDecision::Passthrough,
         };
     }
@@ -259,32 +266,42 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
 /// authority — is what the model assimilates. This matches the project's own steering finding: on the
 /// trusted UserPromptSubmit channel the text must be FACTS, never an imperative/meta-claim, or it trips
 /// the injection-skepticism defense. We surface the learning (the idea + why); the model decides.
-fn render_verified_fix(fix: &crate::ask::RecalledFix) -> String {
-    const NOTE_MAX: usize = 2400; // ~600 tokens of learning — the gotchas, not the codebase
-    let cap = |s: &str, max: usize| -> String {
-        if s.len() <= max { return s.to_string(); }
-        let mut kept = String::new();
-        for line in s.lines() {
-            if kept.len() + line.len() + 1 > max { break; }
-            kept.push_str(line); kept.push('\n');
-        }
-        kept.push_str("…\n");
-        kept
-    };
-    // Nudge's EXACT lead line (attunehq/nudge learn.rs::hook_context_for_query): a plain factual note
-    // PLUS the one behavioral directive that makes the agent CONSULT MEMORY FIRST instead of
-    // re-investigating — "Read this before repeating old debugging work." This is the needle nudge
-    // threads: not an authority claim ("verified, REUSE this" — which trips the injection defense and was
-    // rejected live at 17 turns), but a factual "use this before grinding the source." Dropping the
-    // directive entirely (pure facts) over-corrected — the agent treated the note as optional background
-    // and STILL read the source (A2: 16 turns despite the fix being injected). The directive is what
-    // stops the over-investigation. Mirrors nudge verbatim in intent.
-    format!(
+const FIX_NOTE_MAX: usize = 2400; // ~600 tokens of learning per fix — the gotchas, not the codebase
+
+fn cap_note(s: &str, max: usize) -> String {
+    if s.len() <= max { return s.to_string(); }
+    let mut kept = String::new();
+    for line in s.lines() {
+        if kept.len() + line.len() + 1 > max { break; }
+        kept.push_str(line); kept.push('\n');
+    }
+    kept.push_str("…\n");
+    kept
+}
+
+/// Render the top-K recalled VERIFIED fixes as one `<project_memory>` block. Mirrors nudge end-to-end:
+///  * top-K (== HOOK_SEARCH_LIMIT=3), not top-1 — the model PICKS the fitting one, rescuing a rank-2
+///    correct fix on a paraphrase (nudge learn.rs; docs/15-orchestration top-k=5).
+///  * nudge's EXACT lead line (learn.rs::hook_context_for_query): a plain factual note + the one
+///    behavioral directive that makes the agent consult memory FIRST — "Read this before repeating old
+///    debugging work." NOT an authority claim ("verified, REUSE this" — that tripped the injection
+///    defense, rejected live at 17 turns); NOT pure passive facts either (that over-corrected → the agent
+///    treated it as optional and still re-read source). The directive is what curbs over-investigation.
+fn render_verified_fixes(fixes: &[crate::ask::RecalledFix]) -> String {
+    let mut body = String::from(
         "<project_memory source=\".said\">\nFound prior work that may apply. Read this before \
-         repeating old debugging work — if it answers the question, use it and don't re-investigate:\n{}\n\
-         </project_memory>",
-        cap(&fix.note, NOTE_MAX)
-    )
+         repeating old debugging work — if it answers the question, use it and don't re-investigate.");
+    if fixes.len() > 1 {
+        body.push_str(&format!(" {} candidates, most relevant first; pick the matching one:", fixes.len()));
+    }
+    body.push('\n');
+    for (i, fix) in fixes.iter().enumerate() {
+        if fixes.len() > 1 { body.push_str(&format!("\n--- candidate {} ---\n", i + 1)); }
+        body.push_str(&cap_note(&fix.note, FIX_NOTE_MAX));
+        body.push('\n');
+    }
+    body.push_str("</project_memory>");
+    body
 }
 
 /// Compact factual lines for the legacy (tool-adjacent) channels.
