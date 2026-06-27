@@ -346,3 +346,36 @@ directionally convincing but not statistically airtight. The mechanism wins are 
 pass-rate over N + the A2 paraphrase-floor calibration would harden the aggregate. We claim: with the
 injection + fix-recall fixes, memory recall is USED (not re-investigated) and the accumulation A/B now
 nets cheaper + more correct — first time it has.
+
+---
+
+## v6 — CLEAN fixture (after the #8 corruption fix): memory wins all three axes (modestly)
+
+The first accumulation A/B on a VERIFIED-clean fixture. Earlier runs (v3–v5) were corrupted by FIXES-LOG
+#8 (a 2nd learn-fix blanked prior fix bodies, so 4 of 5 seeded fixes had empty bodies — the "correctness
+regressions" were that, not the recall logic). With #8 fixed, the hardened harness's verify-bodies gate
+confirmed all 5 fix bodies present (628–740 chars, 5 distinct ids) before running. 2 samples/task.
+
+| | baseline | memory |
+|---|---|---|
+| Cost | $2.292 | **$2.225** (−3%) |
+| Turns | 102 | **81** (−21%) |
+| Correct | 6/10 | **7/10** |
+
+Per-task (avg of 2):
+
+| Task | baseline | memory | note |
+|---|---|---|---|
+| A1 (callgraph decision) | $0.507 c2/2 | **$0.078 c2/2 (−85%)** | the clean win — baseline grinds ~20 turns, memory recalls in ~5 |
+| A2 (TRGM fix+why) | $0.195 c2/2 | $0.296 c2/2 (+52%) | memory over-investigated despite recall |
+| A3 (encoder gotcha) | $0.192 c2/2 | $0.156 c2/2 (−19%) | solid win |
+| A4 (hook-channel why) | $0.056 c0/2 | $0.061 c0/2 | both wrong (abstain-style) |
+| A5 (doc-comment fix) | $0.196 c0/2 | $0.522 c1/2 (+167%) | outlier: memory spent the turns and actually SOLVED it (baseline 0/2, memory 1/2) |
+
+**Honest verdict.** On a trustworthy fixture, memory beats baseline on cost (−3%), turns (−21%), AND
+correctness (7/10 vs 6/10) — the first time all three align. The win is real but MODEST and driven by
+A1 (−85%), partly offset by A5/A2 over-investigation. With N=2 over 5 tasks, two large opposite swings
+(A1 −85%, A5 +167%) make it directionally convincing, not statistically tight. The machinery is now
+sound end-to-end (the corruption that masked every prior run is fixed and guarded); the residual softness
+is tuning (A2/A5 over-investigation: the agent sometimes verifies the recall instead of trusting it) and
+sample size, not broken recall. A larger pass-rate-over-N would harden the aggregate.
