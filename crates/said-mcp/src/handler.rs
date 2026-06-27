@@ -446,9 +446,25 @@ impl SaidServerHandler {
                 "SAID-LAM-private/said-lam-static",
             ] {
                 if Path::new(p).exists() {
-                    let _ = brain.load_encoder(p);
-                    break;
+                    if brain.load_encoder(p).is_ok() {
+                        return;
+                    }
                 }
+            }
+            // NO encoder loaded — SCA semantic ranking is DEAD (every fingerprint scores 0.000), so
+            // `ask`/`search` fall back to symbol+grep only and `recall_fix` can never clear its score
+            // floor. This is almost always a BUILD error: the server was compiled without `embed-model`
+            // (e.g. a plain `cargo build -p said-mcp` uses default features, which omit it). Warn loudly
+            // ONCE so it can't silently degrade — rebuild with a bundle that bakes the encoder in
+            // (`--features coding`/`full`). Measured: this exact misbuild made every MCP recall_fix
+            // return "No known fix" while the CLI (built with `coding`) recalled the same fix at 0.82.
+            static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "said-mcp WARNING: no SCA encoder available — semantic search + recall_fix are \
+                     DISABLED (symbol+grep only). Rebuild said-mcp with `--features coding` (or `full`) \
+                     so the embed-model is baked in."
+                );
             }
         }
 
