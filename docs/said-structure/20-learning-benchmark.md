@@ -240,3 +240,45 @@ as a disproof:
 LLM-graded oracle, (b) pass-rate over N to kill outliers like A1, (c) queries that match how the stored
 learning is phrased (or an LLM rerank of the top-N, the documented headless path). Until then we claim
 only what's mechanism-proven, not a cost win on indexed code.
+
+---
+
+## v3 — the FIRST run with working end-to-end recall (after the encoder fix)
+
+The v1/v2 runs were all invalid: v1 used lazy `remember` labels, v2 used a brain/MCP whose encoder was
+dead (FIXES-LOG #5 — semantic scored 0.000, so recall could not fire at all). v3 is the first
+accumulation A/B where recall actually works: correct coding-bundle CLI + the encoder baked into the MCP,
+memory arm seeded via PROPER structured `learn-fix`, init as the floor in both arms, questions requiring
+past-decision/fix/why knowledge that lives in no source file.
+
+| Task | baseline | memory | note |
+|---|---|---|---|
+| A1 (why ask skips call-graph) | 4t / $0.064 ✓ | 10t / $0.303 ✓ | both right; memory re-read source anyway (behavioral miss) |
+| A2 (sym/TRGM fix + why) | 18t / $0.284 ✓ | 9t / $0.202 ✓ | **memory −29%** (recalled the fix instead of grinding 18 turns) |
+| A3 (encoder gotcha) | 9t / $0.156 **✗** | 9t / $0.169 **✓** | **memory CORRECT where baseline FAILED — the accumulation win** |
+| A4 (hook channel why) | 1t / $0.057 ✗ | 1t / $0.054 ✗ | both gave up in 1 turn (broken/abstain task) |
+| A5 (doc-comment fix) | 11t / $0.150 ✗ | 20t / $0.482 ✗ | outlier — memory ground 20 turns; both wrong |
+| **Total** | **$0.711 / 43t / 2-of-5 correct** | **$1.210 / 49t / 3-of-5 correct** | |
+
+### Honest reading
+
+- **Correctness improved: memory 3/5 vs baseline 2/5** — driven by the **A3 flip** (memory answered the
+  encoder-gotcha correctly; baseline could not, because that knowledge is in a test/decision the seeded
+  learning carried, not in the implementation the baseline grepped). That is the accumulation effect
+  working as designed: memory answers what the code alone cannot.
+- **Cost is HIGHER, from two outliers, not a systematic loss:** A2 shows the intended win (memory −29%,
+  recalled the fix vs baseline's 18-turn grind). But A1 (+$0.24) and A5 (+$0.33) are cases where the
+  agent had the memory available yet investigated the source anyway — a behavioral miss (model didn't
+  trust/lean on the injected recall), and A5 is a 20-turn outlier. On N=5 those two dominate the total.
+- **Net:** the first valid run shows memory **more correct (3/5 vs 2/5)** with the **clearest single win
+  being A2 (−29%)**, but **not cheaper overall** because two tasks where the agent over-investigated
+  swamp the average. This is consistent with the standing caveat: N=5 is noise-dominated; the signal is
+  the A3 correctness flip + the A2 cost win, not the aggregate.
+
+### What's still needed for a clean claim (unchanged)
+
+Pass-rate over N (to kill A1/A5-style outliers), a lenient LLM-graded oracle (the regex undercounts —
+both arms answered A4/A5 more correctly than scored), and queries phrased to match the stored learning
+(or the documented headless LLM rerank). The MECHANISM is now proven end-to-end (recall_fix returns the
+stored confirmed fix at 0.82 CLI + MCP); what remains unproven is a clean aggregate COST win, and we do
+not claim one.
