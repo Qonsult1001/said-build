@@ -24,6 +24,7 @@ It's split into twelve sections so pages stay focused and cross-linkable.
 16. [Agent steering](16-agent-steering.md) — when/what makes the agent USE .said (UserPromptSubmit channel + factual framing), the write-back model, SessionEnd backstop
 17. [Build & compile](21-build-and-compile.md) — **READ BEFORE BUILDING.** Feature bundles for CLI + MCP, the embed-model rule (a bare `cargo build -p said-mcp` ships an encoder-less server), post-build verification, the drift checklist
 18. [Memory injection — the nudge pattern](22-memory-injection-nudge-pattern.md) — **READ BEFORE TOUCHING INJECTION.** Inject recall as PLAIN FACTS, never an authority/imperative claim (verbatim from the cloned nudge source); the exact mistake + the measured 17→1 turn fix
+19. [Benchmark methodology](23-benchmark-methodology.md) — **READ BEFORE BENCHMARKING MEMORY.** Single-run pass@1 is WRONG; use pass@k + turns-to-converge on co-solved tasks + abstention-as-correct, partitioned into memory-only-solves / co-solved / neither. Research-cited.
 
 ## Maintenance rules
 
