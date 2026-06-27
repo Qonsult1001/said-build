@@ -282,3 +282,33 @@ both arms answered A4/A5 more correctly than scored), and queries phrased to mat
 (or the documented headless LLM rerank). The MECHANISM is now proven end-to-end (recall_fix returns the
 stored confirmed fix at 0.82 CLI + MCP); what remains unproven is a clean aggregate COST win, and we do
 not claim one.
+
+---
+
+## v4 — after the nudge injection fix: injection works, recall precision is now the bottleneck
+
+Re-ran with the corrected PLAIN-FACTS injection (commit 5fabe2d, the nudge pattern — see doc 22).
+Aggregate: baseline $0.874 / 29t / 2-of-5 correct; memory $1.205 / 51t / 3-of-5 correct. The aggregate
+still shows memory pricier — but the cause is now ISOLATED and it is NOT the injection:
+
+| Task | base | mem | recall fired? |
+|---|---|---|---|
+| A1 | 4t/$0.137 ✓ | 5t/$0.082 ✓ | yes — **memory −40%** |
+| A2 | 9t/$0.167 ✓ | 19t/$0.352 ✓ | **NO ("No known fix")** → agent investigated |
+| A3 | 5t/$0.073 ✗ | 9t/$0.149 **✓** | yes — **correctness flip (accumulation win)** |
+| A4 | 1t/$0.059 ✗ | 3t/$0.114 ✗ | partial |
+| A5 | 10t/$0.438 ✗ | 15t/$0.508 ✗ | **NO ("No known fix")** → agent investigated |
+
+**Two cleanly-separated problems; the injection one is fixed:**
+- **Injection framing — FIXED.** When recall fires, the plain-facts injection is USED: A1 memory −40%, and
+  the isolated proof was 17→1 turns / $0.27→$0.045 on the sym/TRGM question. The earlier
+  re-investigation (the "rejection") is gone (doc 22).
+- **Recall precision — the remaining bottleneck.** A2 and A5 returned **"No known fix"** — the seeded
+  verified fix EXISTS but the benchmark's paraphrased question scored below the 0.45 recall floor, so
+  nothing was injected and the agent investigated from scratch (the cost). That is a recall-scoring
+  problem (query-phrasing sensitivity of `best_coding_fixes` on a paraphrase), NOT an injection problem.
+
+**Honest net:** the injection mechanism is proven (used, not re-investigated, ~6–40% cheaper when it
+fires) and accumulation improves correctness (A3 flip). The aggregate is held flat by recall MISSING on
+2/5 paraphrased questions. Next lever is recall precision for paraphrased fix queries (the documented
+top-N + LLM-rerank path, or a lower/looser fix floor) — not the injection, which is done.
