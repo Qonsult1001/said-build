@@ -201,3 +201,36 @@ target leads LFU/TTL, `hard-eval/recall-measure.sh`). Regression 15/15; recall c
 orchestrator injects top-k=5 and lets the LLM pick, so a borderline-but-correct fix still reaches the
 model. A calibrated/lower fix floor for paraphrase is the remaining tuning lever, tracked, not a
 regression.
+
+---
+
+## 7. (RESOLVED) A2 paraphrase miss — the gate was the bug, not the matcher (per-query distributional gate)
+
+**Commit:** `6cbdd9f`
+
+**Symptom.** A paraphrased fix query ("which save function writes the section so sym survives reopen")
+recalled the CORRECT fix at rank-1 but at a moderate score (0.34), below the absolute recall floor, so
+`recall_fix` returned "No known fix" and the agent investigated (the A2 cost in the v5 A/B).
+
+**Root cause (docs + arXiv).** The bug is the GATE, not the matcher — the right fix is already rank-1.
+A fixed absolute cosine/score floor is the wrong gate because embedding spaces are anisotropic (vectors
+in a narrow cone, raw cosines concentrate and aren't comparable across queries — SimCSE arXiv:2104.08821;
+cross-query non-comparability / QB-Norm arXiv:2408.04887). 0.34 is not "low" in any absolute sense. This
+is the exact enhancement already noted in docs/11-known-limitations §dynamic cutoff: "if top is 0.5 and
+rank 2 is 0.49, widen."
+
+**Fix.** `recall_coding_fixes` gates on a PER-QUERY DISTRIBUTIONAL test: keep a candidate if it clears
+the absolute floor (unchanged) OR it is the top candidate that STANDS OUT from the rest of the fix pool
+(gap-to-rank-2 ≥ 0.6 of the pool spread). Relative to each query's own spread — no hard-coded magic
+number (consistent with the project's no-magic-threshold rule).
+
+**Decoy-safety by construction.** When two near-identical fixes are present (the LRU/LFU twin case), the
+top does NOT stand out → the absolute floor remains the gate → twin discrimination preserved. Verified:
+A2 recalls (lone standout 0.34); A5 still 0.76; LRU target leads LFU/TTL (recall-measure.sh); off-topic
+kubernetes query still abstains; regression 15/15; recall canary green.
+
+**Research backing (full set):** the gate-not-matcher framing + ranked alternatives (HyDE 2212.10496,
+Query2doc 2303.07678, doc2query 1904.08375, ANCE-PRF 2108.13454, RankGPT 2304.09542, anisotropy
+2104.08821, QB-Norm 2408.04887). The distributional gate is the cheapest, fully-offline, no-LLM,
+no-magic-number option; doc2query (learn-time question expansion) is the tracked follow-up to RAISE
+scores, and top-N + LLM rerank is the optional-LLM ceiling.
