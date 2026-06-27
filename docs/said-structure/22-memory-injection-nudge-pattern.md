@@ -1,7 +1,7 @@
 # Memory injection — the nudge pattern (the mistake to NEVER repeat)
 
 How `.said` injects recalled memory into a coding agent so the agent actually **uses** it. The reference
-implementation is **nudge** (attunehq/nudge), cloned locally at `SAID-ECHO/research/nudge` — **always
+implementation is **nudge** (attunehq/nudge), cloned locally at `research/nudge` — **always
 consult it before changing any injection code.** This doc records the exact mistake we kept making and
 the proven pattern from nudge's source.
 
@@ -86,7 +86,7 @@ facts, per nudge.
 
 ## Checklist before touching injection code (do this every time)
 
-1. **Read the nudge source first**: `SAID-ECHO/research/nudge/packages/nudge/src/hook/response.rs` and
+1. **Read the nudge source first**: `research/nudge/packages/nudge/src/hook/response.rs` and
    `evaluate.rs`. It is the perfectly-documented reference; do not reinvent the framing from memory.
 2. Trusted channel = **UserPromptSubmit**, rendered as `additionalContext` (Claude) / plain stdout.
    Never PreToolUse `additionalContext` for trusted injection (tool-adjacent = distrusted).
