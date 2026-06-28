@@ -6,36 +6,36 @@ project: said-demo
 
 # Said Canon Index (the wiki)
 
-This is the clickable hub. Every code file's sections are catalogued here. In a Markdown viewer/IDE the
-**file links below are Ctrl/Cmd-clickable** -- click to jump straight to the code. (Markdown is where
-clickable links work; that is why the navigable map lives here, and each code file just points back to
-`said.index.md`.)
+Click a file to jump to its code. Each section is wrapped `[S1] ... [/S1]`. One tag tells you the only
+thing you need: **can I edit it?**
 
-How to read a code file: each section is wrapped `[S1] ... [/S1]`. The number is execution order. The
-class on the open tag tells you who owns it:
-- **Fully** = framework, written by AI once, regenerated free every time (the token saving).
-- **AI** = new code the AI wrote for this entity (real work).
-- **Ignore** = the 20% slot you/AI fill for this entity (real work).
+- **GENERATED** -- .said wrote it and re-writes it. Do NOT edit (your change is lost on the next render).
+  To change a GENERATED section: edit the **canon** (changes it everywhere), or run `said eject S1` to
+  take it over (it becomes YOURS).
+- **YOURS** -- .said keeps your code here. Edit freely; it is preserved every time.
+
+(Everything is AI-built in a new project -- so the useful question isn't "who wrote it" but "will my edit
+survive". For an EXISTING codebase you scan in, .said also marks WAS-YOURS vs SAID-ADDED so you can review
+exactly what it changed.)
 
 ## Files
 
 ### [InvoiceController.cs](InvoiceController.v2.cs) -- Create Invoice (dotnet)
-| Section | What it does | Owner |
+| Section | What it does | Can I edit it? |
 |---|---|---|
-| [S1] accept-and-audit | take request, write audit row | Fully (free) |
-| [S2] idempotency | reject duplicate requests | AI (net-new) |
-| [S3] guards | validate required fields | Ignore (20%) |
-| [S4] dml | INSERT the invoice | Ignore (20%) |
-| [S5] response | shape the response object | Ignore (20%) |
-| [S6] envelope+return | wrap + audit + return | Fully (free) |
+| [S1] accept-and-audit | take request, write audit row | GENERATED -- no |
+| [S2] idempotency | reject duplicate requests | GENERATED -- no |
+| [S3] guards | validate required fields | YOURS -- yes |
+| [S4] save invoice | insert the invoice | YOURS -- yes |
+| [S5] response | shape the response object | YOURS -- yes |
+| [S6] wrap + return | wrap + audit + return | GENERATED -- no |
 
 ### [invoice.rs](invoice.rs) -- Create Invoice (rust, same canon)
-Same six sections, rendered in Rust from the SAME canon. Only the 20% slots differ.
+Same six sections, in Rust, from the SAME canon. Only the YOURS parts differ.
 
-## Audit total (this file)
-- Framework regenerated free (Fully): **2 / 6** sections
-- Real work (AI + Ignore): **4 / 6** sections
-- Old way: a human writes all 6 by hand, every entity. Here, 2 come free from canon -- and across N
-  entities those 2 are emitted N times for ~0 tokens.
+## How much you wrote (this file)
+- **You write 3 of 6 sections** (the YOURS parts: guards, save, response).
+- **.said generated the other 3** (accept-and-audit, idempotency, wrap+return) -- and generates them again
+  on every entity you create, so you never write them by hand.
 
 Change history: [said.log.md](said.log.md)

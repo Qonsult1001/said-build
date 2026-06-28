@@ -1,13 +1,16 @@
 // ============================================================================
-//  CANON: Create<Entity>   entity=Invoice   lang=dotnet
-//  Section map + audit:  said.index.md          <- Ctrl/Cmd-click this path (IDE auto-links bare paths)
-//  Sections run top-to-bottom; each is [Sn] ... [/Sn]. Class shown on the open tag.
-//    [S1] accept-and-audit   Fully    framework  (regenerated free)
-//    [S2] idempotency        AI       net-new    (AI wrote this)
-//    [S3] guards             Ignore   entity-20%
-//    [S4] dml                Ignore   entity-20%
-//    [S5] response           Ignore   entity-20%
-//    [S6] envelope+return    Fully    framework  (regenerated free)
+//  Create Invoice (dotnet)   |   full section map + how to edit:  said.index.md
+//  Each section is [Sn] ... [/Sn], in run order. The tag says if you may edit it:
+//    GENERATED = .said wrote it and re-writes it -> do NOT edit (your changes are lost).
+//                to change it: edit the canon, or run `said eject Sn` to take it over.
+//    YOURS     = .said keeps your code here -> edit freely.
+//
+//    [S1] accept-and-audit   GENERATED
+//    [S2] idempotency        GENERATED
+//    [S3] guards             YOURS
+//    [S4] save invoice       YOURS
+//    [S5] response           YOURS
+//    [S6] wrap + return      GENERATED
 // ============================================================================
 [ApiController]
 [Route("invoice")]
@@ -19,32 +22,32 @@ public class InvoiceController : ControllerBase
     [HttpPost]
     public IActionResult Create([FromBody] CreateInvoiceRequest req)
     {
-        // [S1] accept-and-audit  (Fully: framework)
+        // [S1] accept-and-audit  -- GENERATED (do not edit; `said eject S1` to take over)
         var responseId = Guid.NewGuid();
         _audit.Insert(req, responseId);
         // [/S1]
 
-        // [S2] idempotency  (AI: net-new)
+        // [S2] idempotency  -- GENERATED (do not edit)
         if (_seen.Contains(req.IdempotencyKey)) return Conflict();
         _seen.Add(req.IdempotencyKey);
         // [/S2]
 
-        // [S3] guards  (Ignore: entity-20%)
+        // [S3] guards  -- YOURS (edit freely; kept on regenerate)
         if (string.IsNullOrEmpty(req.Number))
             return BadRequest(Envelope.Error("Number is required"));
         // [/S3]
 
-        // [S4] dml  (Ignore: entity-20%)
+        // [S4] save invoice  -- YOURS (edit freely)
         var id = Guid.NewGuid();
         _db.Execute("INSERT INTO Invoice(Id,Number,Amount) VALUES(@id,@n,@a)",
             new { id, n = req.Number, a = req.Amount });
         // [/S4]
 
-        // [S5] response  (Ignore: entity-20%)
+        // [S5] response  -- YOURS (edit freely)
         var data = new { Id = id, req.Number, req.Amount };
         // [/S5]
 
-        // [S6] envelope+return  (Fully: framework)
+        // [S6] wrap + return  -- GENERATED (do not edit)
         var resp = Envelope.Ok(data, responseId);
         _audit.Update(responseId, 200, resp);
         return Ok(resp);
