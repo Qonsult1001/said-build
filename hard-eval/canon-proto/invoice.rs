@@ -1,41 +1,36 @@
-// @said-managed: Fully  region=header
-// =============================================
-// Endpoint:    POST /invoice   (Create<Entity>)
-// Rendered from canon[Create] -> rust/axum. SAME contract: Fully = framework-owned (regenerated),
-// Ignore slots = the 20% the agent fills from the Invoice schema. Same phase order as the dotnet render.
-// =============================================
-// @said-managed: end
-
+// Create Invoice (rust/axum). Sections: [Sn]..[/Sn] in run order. Map + how to edit: said.index.md
+// Tag = can you edit it?  GENERATED (no, .said rewrites it) | YOURS (yes, kept).
 async fn create_invoice(
     State(app): State<AppState>,
     Json(req): Json<CreateInvoiceReq>,
 ) -> impl IntoResponse {
-    // @said-managed: Fully  region=accept-and-audit
+    // [S1] accept-and-audit  GENERATED
     let response_id = Uuid::new_v4();
-    app.audit.insert(&req, response_id).await;        // framework: request audit row
-    // @said-managed: end
+    app.audit.insert(&req, response_id).await;
+    // [/S1]
 
-    // @said-managed: Ignore  slot=1_guards
-    if req.number.is_empty() {
-        return envelope_err("Number is required");
-    }
-    // @said-managed: end
+    // [S2] idempotency  GENERATED
+    if app.seen.contains(&req.idempotency_key) { return conflict(); }
+    app.seen.insert(req.idempotency_key.clone());
+    // [/S2]
 
-    // @said-managed: Ignore  slot=2_dml
+    // [S3] guards  YOURS
+    if req.number.is_empty() { return envelope_err("Number is required"); }
+    // [/S3]
+
+    // [S4] save  YOURS
     let id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO invoice(id, number, amount) VALUES($1, $2, $3)",
-        id, req.number, req.amount
-    ).execute(&app.pool).await?;
-    // @said-managed: end
+    sqlx::query!("INSERT INTO invoice(id,number,amount) VALUES($1,$2,$3)",
+        id, req.number, req.amount).execute(&app.pool).await?;
+    // [/S4]
 
-    // @said-managed: Ignore  slot=3_response
+    // [S5] response  YOURS
     let data = json!({ "id": id, "number": req.number, "amount": req.amount });
-    // @said-managed: end
+    // [/S5]
 
-    // @said-managed: Fully  region=envelope-wrap-and-return
-    let resp = envelope_ok(data, response_id);        // framework: response envelope
-    app.audit.update(response_id, 200, &resp).await;  // framework: response audit update
+    // [S6] wrap+return  GENERATED
+    let resp = envelope_ok(data, response_id);
+    app.audit.update(response_id, 200, &resp).await;
     Json(resp)
-    // @said-managed: end
+    // [/S6]
 }

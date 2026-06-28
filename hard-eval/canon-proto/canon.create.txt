@@ -1,10 +1,12 @@
-CANON shape=Create<Entity> (language-neutral, render in the active stack).
-PHASES (the 80%, ordered — keep this order in any language):
-  1. accept the request body for the entity
-  2. shred/parse the input fields from the payload
-  3. guard required fields -> return the framework error envelope if missing
-  4. write the primary row (the create/INSERT)
-  5. write child rows if any
-  6. project + return the response object in the framework's response shape
-SLOTS (the 20%, fill from the entity schema): [fields, dml_target, children, response_shape, business_rules]
-GUIDE: emit in the ACTIVE language/architecture; preserve the 6-phase order; only the SLOTS change per entity.
+CANON  shape=Create<Entity>   (language-neutral; the LLM renders it in the active stack)
+
+SECTIONS (run order). Each becomes [Sn]..[/Sn] in the rendered file. Class = can the user edit it?
+  S1 accept-and-audit   GENERATED  -- take request, write audit row (.said rewrites it)
+  S2 idempotency        GENERATED  -- reject duplicate requests
+  S3 guards             YOURS      -- validate the required fields (entity-specific)
+  S4 save               YOURS      -- insert the row (entity-specific)
+  S5 response           YOURS      -- shape the response object (entity-specific)
+  S6 wrap+return        GENERATED  -- wrap in the response envelope + audit + return
+
+GUIDE: render in the active language/architecture; keep the section order; the YOURS sections are
+filled from the entity schema; the GENERATED sections come from the canon and are regenerated.

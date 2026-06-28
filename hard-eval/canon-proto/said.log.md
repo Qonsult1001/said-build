@@ -7,6 +7,12 @@ spec: okf/1.0
 
 | File | S | Section | Class | Hash |
 |---|---|---|---|---|
+| invoice.rs | S1 | accept-and-audit | GENERATED | 62d85c0fec6a |
+| invoice.rs | S2 | idempotency | GENERATED | 78543c1201b3 |
+| invoice.rs | S3 | guards | YOURS | 9bb1090f5c7e |
+| invoice.rs | S4 | save | YOURS | 0a2155b1e26c |
+| invoice.rs | S5 | response | YOURS | 278692f34454 |
+| invoice.rs | S6 | wrap+return | GENERATED | c63b28e1c3a6 |
 | InvoiceController.v2.cs | S1 | accept-and-audit | GENERATED | bf8ebe4c6157 |
 | InvoiceController.v2.cs | S2 | idempotency | GENERATED | 4298950eb0a1 |
 | InvoiceController.v2.cs | S3 | guards | YOURS | 3c56cc0e946b |

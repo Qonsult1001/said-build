@@ -10,7 +10,17 @@ Library drill-down: project -> file -> section. Click a file to open the code. E
 says: **can I edit it?** GENERATED = .said rewrites it (don't edit). YOURS = .said keeps it (edit freely).
 How to change a GENERATED section, eject, review: see "Controls" at the bottom -- stated ONCE.
 
-## Files (2)
+## Files (3)
+
+### [invoice.rs](invoice.rs) -- 6 sections (3 YOURS / 3 GENERATED)
+| S | Section | Edit? |
+|---|---|---|
+| S1 | accept-and-audit | GENERATED -- no |
+| S2 | idempotency | GENERATED -- no |
+| S3 | guards | YOURS -- yes |
+| S4 | save | YOURS -- yes |
+| S5 | response | YOURS -- yes |
+| S6 | wrap+return | GENERATED -- no |
 
 ### [InvoiceController.v2.cs](InvoiceController.v2.cs) -- 6 sections (3 YOURS / 3 GENERATED)
 | S | Section | Edit? |
@@ -31,7 +41,7 @@ How to change a GENERATED section, eject, review: see "Controls" at the bottom -
 | S4 | wrap + return | GENERATED -- no |
 
 ## Totals
-Across 2 files: **you own 5** sections, **.said generates 5** (re-emitted free on every entity).
+Across 3 files: **you own 8** sections, **.said generates 8** (re-emitted free on every entity).
 
 ## Controls (stated once)
 - Change a GENERATED section: edit the **canon** (updates everywhere) or `said eject <file> <Sn>` (becomes YOURS).
