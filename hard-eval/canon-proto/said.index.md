@@ -6,36 +6,35 @@ project: said-demo
 
 # Said Canon Index (the wiki)
 
-Click a file to jump to its code. Each section is wrapped `[S1] ... [/S1]`. One tag tells you the only
-thing you need: **can I edit it?**
+Library drill-down: project -> file -> section. Click a file to open the code. Each section tag
+says: **can I edit it?** GENERATED = .said rewrites it (don't edit). YOURS = .said keeps it (edit freely).
+How to change a GENERATED section, eject, review: see "Controls" at the bottom -- stated ONCE.
 
-- **GENERATED** -- .said wrote it and re-writes it. Do NOT edit (your change is lost on the next render).
-  To change a GENERATED section: edit the **canon** (changes it everywhere), or run `said eject S1` to
-  take it over (it becomes YOURS).
-- **YOURS** -- .said keeps your code here. Edit freely; it is preserved every time.
+## Files (2)
 
-(Everything is AI-built in a new project -- so the useful question isn't "who wrote it" but "will my edit
-survive". For an EXISTING codebase you scan in, .said also marks WAS-YOURS vs SAID-ADDED so you can review
-exactly what it changed.)
-
-## Files
-
-### [InvoiceController.cs](InvoiceController.v2.cs) -- Create Invoice (dotnet)
-| Section | What it does | Can I edit it? |
+### [InvoiceController.v2.cs](InvoiceController.v2.cs) -- 6 sections (3 YOURS / 3 GENERATED)
+| S | Section | Edit? |
 |---|---|---|
-| [S1] accept-and-audit | take request, write audit row | GENERATED -- no |
-| [S2] idempotency | reject duplicate requests | GENERATED -- no |
-| [S3] guards | validate required fields | YOURS -- yes |
-| [S4] save invoice | insert the invoice | YOURS -- yes |
-| [S5] response | shape the response object | YOURS -- yes |
-| [S6] wrap + return | wrap + audit + return | GENERATED -- no |
+| S1 | accept-and-audit | GENERATED -- no |
+| S2 | idempotency | GENERATED -- no |
+| S3 | guards | YOURS -- yes |
+| S4 | save invoice | YOURS -- yes |
+| S5 | response | YOURS -- yes |
+| S6 | wrap + return | GENERATED -- no |
 
-### [invoice.rs](invoice.rs) -- Create Invoice (rust, same canon)
-Same six sections, in Rust, from the SAME canon. Only the YOURS parts differ.
+### [UpdateInvoice.cs](UpdateInvoice.cs) -- 4 sections (2 YOURS / 2 GENERATED)
+| S | Section | Edit? |
+|---|---|---|
+| S1 | accept-and-audit | GENERATED -- no |
+| S2 | guards | YOURS -- yes |
+| S3 | update row | YOURS -- yes |
+| S4 | wrap + return | GENERATED -- no |
 
-## How much you wrote (this file)
-- **You write 3 of 6 sections** (the YOURS parts: guards, save, response).
-- **.said generated the other 3** (accept-and-audit, idempotency, wrap+return) -- and generates them again
-  on every entity you create, so you never write them by hand.
+## Totals
+Across 2 files: **you own 5** sections, **.said generates 5** (re-emitted free on every entity).
 
-Change history: [said.log.md](said.log.md)
+## Controls (stated once)
+- Change a GENERATED section: edit the **canon** (updates everywhere) or `said eject <file> <Sn>` (becomes YOURS).
+- Review imported old code: `said diff` (WAS-YOURS vs SAID-ADDED).
+
+History: [said.log.md](said.log.md)
