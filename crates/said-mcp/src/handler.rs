@@ -41,6 +41,26 @@ pub struct SaidServerHandler {
 /// contains `head` followed by `tail` separated only by ASCII whitespace
 /// (spaces, tabs, newlines), optionally with `OR ALTER` between them.
 /// `haystack` is expected uppercase. Catches dialect quirks like
+/// Resolve candidate `said` CLI paths for tools that shell out (init / ingest / sync).
+/// PREFER siblings shipped next to this MCP exe (they match this build) under every name we
+/// ship the coding CLI as, BEFORE a bare `said` on PATH — which can be an older/feature-stripped
+/// build lacking subcommands like `init` (the live failure: "unrecognized subcommand 'init'").
+/// `SAID_CLI` env overrides everything.
+fn resolve_said_cli() -> Vec<std::ffi::OsString> {
+    let exe = |n: &str| if cfg!(windows) { format!("{n}.exe") } else { n.to_string() };
+    let mut paths: Vec<std::ffi::OsString> = Vec::new();
+    if let Ok(p) = std::env::var("SAID_CLI") {
+        if !p.trim().is_empty() { paths.push(p.into()); }
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        for n in ["said-coding", "said"] {
+            paths.push(dir.join(exe(&n)).into_os_string());
+        }
+    }
+    paths.push(std::ffi::OsString::from("said")); // last resort: PATH
+    paths
+}
+
 /// `CREATE   PROCEDURE` (multi-space), `CREATE\nFUNCTION` (newline-separated),
 /// and `CREATE OR ALTER PROCEDURE` in a single check.
 fn contains_sql_keyword_pair(haystack: &str, head: &str, tail: &str) -> bool {
@@ -2861,12 +2881,7 @@ field above shows 0, that is the truth â€” say 0, not a past value.
             args.push("--incremental".into());
         }
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
 
         // Run subprocess in the brain's directory â€” snapshot/.said-code output
         // lands there instead of inheriting Cursor's CWD.
@@ -2968,12 +2983,7 @@ Common fixes:
             args.push(check.clone());
         }
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
         let brain_dir = self.brain_dir();
 
         for exe in &cli_paths {
@@ -3046,12 +3056,7 @@ Common fixes:
             .to_string_lossy().to_string();
         args.push(abs_brain);
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
         let brain_dir = self.brain_dir();
 
         let mut response: Option<String> = None;
