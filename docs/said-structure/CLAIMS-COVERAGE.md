@@ -82,6 +82,17 @@ multi-hop bridge, update-latest-wins, legal discriminator (exact REF among 20 tw
 temporal, dedup, best-effort abstain, no cross-contamination. This is the "does it all hold together"
 test — separate green unit checks don't prove the system works on a complex query; this does.
 
+## LIVE MCP tool surface, end-to-end → `hard-eval/mcp_e2e.js`
+
+The full memory loop driven through the **running `said-mcp` server over JSON-RPC** — the real product
+surface a coding agent uses (not `claude --print`, which is slow/headless-flaky for iterate loops). One
+node client `initialize`s the server and calls the actual tools. **8/8 green, runs in seconds:**
+`learn_fix` save → `recall_fix` by PARAPHRASE returns the fix WITH its non-obvious invariant → PRECISION
+(an unrelated query does NOT recall it) → `prompts/get fix-template` returns the 10-section note →
+ACCURACY: the recalled invariant flips `h1_lru` COLD-RED → MEMORY-GREEN (node gate is the judge). This is
+the "world-class MCP, end-to-end" proof on the tool surface itself. Run:
+`node hard-eval/mcp_e2e.js`.
+
 ## Code bug-location (MCP) → `test_bug_location_e2e.rs`
 The "locate the bug, guide Claude" claim, measured on the two axes the MCP-for-coding research
 (MCP spec 2025-06-18; Anthropic tool-design; RepoCoder/SWE-bench/Lost-in-the-Middle; Serena/ast-grep
