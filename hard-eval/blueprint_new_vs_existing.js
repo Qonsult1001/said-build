@@ -90,7 +90,7 @@ function react(label, r) { console.log(`\n[${label}] MCP reaction:\n  ` + text(r
   console.log('  -> keep-first: the OLD blueprint still stands (a throwaway edit cannot silently become the standard).');
 
   console.log('\nThe user confirms: make this the NEW STANDARD. Agent promotes:');
-  react('B3 promote', await call(b, 'learn_blueprint', { shape: SHAPE, sections: SECTIONS_NEW, promote: true }));
+  react('B3 promote', await call(b, 'learn_blueprint', { shape: SHAPE, sections: SECTIONS_NEW, verified: true }));
   react('B3b recall (NEW supersedes)', await call(b, 'recall_blueprint', { shape: QUERY, min_score: 0.0 }));
   console.log('  -> NEW blueprint now reused for every future entity. OLD vs NEW resolved by an explicit promote.');
   b.srv.kill();

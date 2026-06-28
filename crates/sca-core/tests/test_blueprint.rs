@@ -37,7 +37,7 @@ fn learn_then_recall_roundtrip_and_keep_first_dedup() {
     // 1) learn a blueprint keyed by SHAPE
     let shape = "Create<Entity> REST endpoint";
     let v1 = r#"{"sections":["accept-and-audit","idempotency","guards","save","response","wrap+return"]}"#;
-    let id1 = sca_core::ask::learn_blueprint(&mut b, shape, v1, None, None);
+    let id1 = sca_core::ask::learn_blueprint(&mut b, shape, v1, None, None, false);
     assert!(id1.starts_with("shape::"), "doc_id should be shape::<hash>, got {}", id1);
 
     // round-trip: recall by a paraphrase of the shape returns it
@@ -48,7 +48,7 @@ fn learn_then_recall_roundtrip_and_keep_first_dedup() {
 
     // 2) KEEP-FIRST: re-learning the SAME shape with DIFFERENT sections is a no-op -> original stands.
     let v2 = r#"{"sections":["DIFFERENT","totally","replaced"]}"#;
-    let id2 = sca_core::ask::learn_blueprint(&mut b, shape, v2, None, None);
+    let id2 = sca_core::ask::learn_blueprint(&mut b, shape, v2, None, None, false);
     assert_eq!(id2, id1, "same shape must resolve to the same doc_id");
     let body = b.get(&id1).unwrap_or_default();
     assert!(body.contains("idempotency"), "keep-first: ORIGINAL sections must survive");
@@ -58,12 +58,28 @@ fn learn_then_recall_roundtrip_and_keep_first_dedup() {
 }
 
 #[test]
+fn verified_edit_auto_updates_the_blueprint() {
+    let _g = ENV_LOCK.lock().unwrap();
+    clear_scope();
+    let (mut b, p) = fresh("verified");
+    let shape = "Create<Entity> REST endpoint";
+    // first blueprint (unverified learn)
+    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["old"]}"#, None, None, false);
+    // structure edited + BUILD PASSED -> verified=true -> auto-update, no prompt.
+    let id = sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["better"]}"#, None, None, true);
+    let body = b.get(&id).unwrap_or_default();
+    assert!(body.contains("better"), "verified edit must auto-update the blueprint");
+    assert!(!body.contains("old"), "verified edit must supersede the old structure");
+    cleanup(&p);
+}
+
+#[test]
 fn promote_supersedes_the_blueprint() {
     let _g = ENV_LOCK.lock().unwrap();
     clear_scope();
     let (mut b, p) = fresh("promote");
     let shape = "Update<Entity> REST endpoint";
-    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["old-way"]}"#, None, None);
+    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["old-way"]}"#, None, None, false);
 
     // promote = the explicit "make this the new standard" (the exception to keep-first).
     let id = sca_core::ask::promote_blueprint(&mut b, shape, r#"{"sections":["my-preferred-way"]}"#, None, None);
@@ -82,9 +98,9 @@ fn recall_is_project_scoped_like_fixes() {
     let shape = "Create<Entity> REST endpoint";
 
     std::env::set_var("SAID_PROJECT", "said-build");
-    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["said-build flavour"]}"#, None, None);
+    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["said-build flavour"]}"#, None, None, false);
     std::env::set_var("SAID_PROJECT", "said-echo");
-    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["said-echo flavour"]}"#, None, None);
+    sca_core::ask::learn_blueprint(&mut b, shape, r#"{"sections":["said-echo flavour"]}"#, None, None, false);
     std::env::remove_var("SAID_PROJECT");
 
     let q = "create endpoint for an entity";

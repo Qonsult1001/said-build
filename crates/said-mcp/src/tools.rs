@@ -1169,11 +1169,12 @@ pub struct RecallBlueprintTool {
 
 #[mcp_tool(
     name = "learn_blueprint",
-    description = "CODING MEMORY (blueprint) — store the REUSABLE 80% structure for a SHAPE, \
-                   once. KEEP-FIRST: if a blueprint for this shape already exists this is a \
-                   no-op (the original stands) — set promote=true to make a new one the \
-                   standard (supersede). Stored in the native Procedural pillar, blake3-keyed \
-                   on the shape, byte-identical to `said learn-blueprint`. Pairs with learn_fix.",
+    description = "CODING MEMORY (blueprint) — store the REUSABLE 80% structure for a SHAPE. \
+                   KEEP-FIRST by default: if a blueprint for this shape already exists this is a \
+                   no-op (the original stands). Set verified=true ONLY after the edited structure's \
+                   build/test gate is GREEN — then .said AUTO-UPDATES the blueprint (supersede if it \
+                   changed); the green gate is the whole 'is it better' check. Stored in the native \
+                   Procedural pillar, blake3-keyed on the shape. Pairs with learn_fix.",
     destructive_hint = false
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -1188,9 +1189,10 @@ pub struct LearnBlueprintTool {
     /// Optional provenance breadcrumb. Never the lookup key.
     #[serde(default)]
     pub label: Option<String>,
-    /// Make this the new standard: replace the existing blueprint for the shape (supersede).
+    /// The structure was edited and the build/test PASSED -> auto-update the blueprint (supersede if it
+    /// changed). Omit/false = keep-first (no-op if the shape already has a blueprint).
     #[serde(default)]
-    pub promote: Option<bool>,
+    pub verified: Option<bool>,
 }
 
 // Generate the tool enum that the handler dispatches on. Feature-gated

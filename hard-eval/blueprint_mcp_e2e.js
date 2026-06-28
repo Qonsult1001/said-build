@@ -71,8 +71,8 @@ function check(name, cond, detail) {
   check('original survived keep-first', /idempotency/.test(text(recall2)) && !/DIFFERENT/.test(text(recall2)), text(recall2));
 
   const promote = await rpc('tools/call', { name: 'learn_blueprint', arguments: {
-    shape, sections: '{"sections":["my-preferred-way"]}', promote: true } });
-  check('promote supersedes', /promoted/.test(text(promote)), text(promote));
+    shape, sections: '{"sections":["my-preferred-way"]}', verified: true } });
+  check('verified edit auto-updates', /auto-updated/.test(text(promote)), text(promote));
 
   const recall3 = await rpc('tools/call', { name: 'recall_blueprint', arguments: { shape: 'create endpoint for an entity', min_score: 0.0 } });
   check('recall shows promoted sections', /my-preferred-way/.test(text(recall3)), text(recall3));

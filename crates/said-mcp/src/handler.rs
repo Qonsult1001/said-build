@@ -1528,23 +1528,20 @@ impl SaidServerHandler {
 
     fn handle_learn_blueprint(&self, t: LearnBlueprintTool) -> Result<CallToolResult, CallToolError> {
         let sections = t.sections.trim_start_matches('\u{feff}').trim();
-        let promote = t.promote.unwrap_or(false);
+        let verified = t.verified.unwrap_or(false);
         let mut brain = self.brain.lock().map_err(|e| {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
-        // The ONE shared writer: keep-first learn (no-op if the shape exists) or promote (supersede),
-        // byte-identical to `said learn-blueprint`.
-        let doc_id = if promote {
-            sca_core::ask::promote_blueprint(&mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref())
-        } else {
-            sca_core::ask::learn_blueprint(&mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref())
-        };
-        // keep-first feedback: learn is a no-op when the shape already exists (stored body won't contain
-        // the just-passed sections).
-        let kept_first = !promote && brain.read(&doc_id)
+        // The ONE shared writer: verified (build green) -> auto-update (supersede if changed); else
+        // keep-first (no-op if the shape exists). Byte-identical to `said learn-blueprint`.
+        let doc_id = sca_core::ask::learn_blueprint(
+            &mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref(), verified);
+        // keep-first feedback: an unverified learn is a no-op when the shape exists (stored body won't
+        // contain the just-passed sections).
+        let kept_first = !verified && brain.read(&doc_id)
             .map(|b| !b.contains(sections)).unwrap_or(false);
         brain.save().map_err(CallToolError::from_message)?;
-        let action = if promote { "promoted (new standard)" } else if kept_first { "kept-first (no-op; original stands)" } else { "learned" };
+        let action = if verified { "auto-updated (verified build -> new standard)" } else if kept_first { "kept-first (no-op; original stands)" } else { "learned" };
         Ok(CallToolResult::text_content(vec![TextContent::from(format!(
             "Blueprint {} {}. Stored in the Procedural pillar; future recall_blueprint reuses it.",
             doc_id, action,

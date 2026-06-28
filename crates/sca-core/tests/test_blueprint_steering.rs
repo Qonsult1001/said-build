@@ -27,7 +27,7 @@ fn prompt(b: &mut SaidFile, text: &str) -> HookDecision {
 fn build_intent_with_a_known_blueprint_injects_the_reuse_nudge() {
     let (mut b, p) = brain("hit");
     sca_core::ask::learn_blueprint(&mut b, "Create<Entity> REST endpoint",
-        r#"{"sections":["accept-and-audit","idempotency","guards","save","response"]}"#, None, None);
+        r#"{"sections":["accept-and-audit","idempotency","guards","save","response"]}"#, None, None, false);
 
     // The user asks to build a NEW endpoint -> the agent should be nudged to reuse the blueprint.
     let d = prompt(&mut b, "create a new invoice endpoint");
@@ -48,7 +48,7 @@ fn build_intent_with_a_known_blueprint_injects_the_reuse_nudge() {
 fn a_plain_question_is_not_treated_as_build_intent() {
     let (mut b, p) = brain("noverb");
     sca_core::ask::learn_blueprint(&mut b, "Create<Entity> REST endpoint",
-        r#"{"sections":["accept-and-audit","guards"]}"#, None, None);
+        r#"{"sections":["accept-and-audit","guards"]}"#, None, None, false);
 
     // Reading/understanding -- NOT build intent -> no blueprint nudge (we don't pester a reader).
     let d = prompt(&mut b, "how does the invoice endpoint validate input");

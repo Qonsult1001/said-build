@@ -1257,8 +1257,12 @@ fn blueprint_identity(shape: &str, project: &Option<String>) -> String {
     }
 }
 
-/// LEARN a blueprint — KEEP-FIRST: if the shape already has a blueprint, this is a NO-OP and the
-/// existing doc_id is returned unchanged (the original stands). Use `promote_blueprint` to replace.
+/// LEARN a blueprint. The rule is simple:
+///   * `verified == false` → KEEP-FIRST: if the shape already has a blueprint this is a NO-OP (the
+///     original stands). Safe, idempotent re-learns.
+///   * `verified == true` → the structure was edited AND the build/test passed, so AUTO-UPDATE: if the
+///     stored structure differs, supersede it (the green gate IS the "is it better" check). If it's the
+///     same, it's a harmless no-op. This is promote-on-verified-edit, with no prompt and no model tags.
 /// Returns the blueprint's doc_id (`shape::<hash>`). Shared by CLI `learn-blueprint` + MCP.
 pub fn learn_blueprint(
     brain: &mut SaidFile,
@@ -1266,16 +1270,17 @@ pub fn learn_blueprint(
     sections_json: &str,
     lang: Option<&str>,
     label: Option<&str>,
+    verified: bool,
 ) -> String {
     let project = std::env::var("SAID_PROJECT").ok()
         .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let id16 = fix_hash(&blueprint_identity(shape, &project));
     let doc_id = format!("{}{}", BLUEPRINT_SHAPE_PREFIX, id16);
 
-    // KEEP-FIRST: the one engine rule that differs from learn-fix. An existing blueprint for this
-    // shape is authoritative — a later learn of the same shape does NOT overwrite it (unlike a fix,
-    // where the latest verified solution supersedes). Re-learning is therefore safe + idempotent.
-    if brain.read(&doc_id).is_some() {
+    // KEEP-FIRST (unverified): an existing blueprint is authoritative — a later UNVERIFIED learn does
+    // NOT overwrite it. A VERIFIED learn (build green) falls through to auto-update below: if the new
+    // structure differs from the stored one, supersede; if identical, the rewrite is a no-op.
+    if !verified && brain.read(&doc_id).is_some() {
         return doc_id;
     }
 
@@ -1296,8 +1301,9 @@ pub fn learn_blueprint(
     doc_id
 }
 
-/// PROMOTE — the learn-from-edit "make this the new standard": REPLACE the blueprint for this shape
-/// (supersede, the deliberate exception to keep-first). Returns the doc_id.
+/// PROMOTE — auto-update the blueprint after a VERIFIED edit (build/test green). Thin wrapper over
+/// `learn_blueprint(..., verified=true)`: the green gate is the whole "is it better" check, so a changed
+/// structure supersedes and an identical one is a no-op. No prompt, no model tags.
 pub fn promote_blueprint(
     brain: &mut SaidFile,
     shape: &str,
@@ -1305,22 +1311,7 @@ pub fn promote_blueprint(
     lang: Option<&str>,
     label: Option<&str>,
 ) -> String {
-    let project = std::env::var("SAID_PROJECT").ok()
-        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let id16 = fix_hash(&blueprint_identity(shape, &project));
-    let doc_id = format!("{}{}", BLUEPRINT_SHAPE_PREFIX, id16);
-    let body = blueprint_body(shape, sections_json);
-    let mut tags = vec![FIX_PILLAR_TAG.to_string(), BLUEPRINT_KIND_TAG.to_string()];
-    if let Some(l) = label { if !l.trim().is_empty() { tags.push(format!("pr:{}", l.trim())); } }
-    if let Some(l) = lang { if !l.trim().is_empty() { tags.push(format!("lang:{}", l.trim().to_ascii_lowercase())); } }
-    if let Some(ref proj) = project { tags.push(format!("project:{}", proj)); }
-    // same doc_id -> put() tombstones the old frame (supersede), unlike keep-first learn.
-    brain.remember_with_pillar(
-        Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
-        crate::frames::Pillar::Procedural, tags,
-    );
-    let _ = brain.build_index();
-    doc_id
+    learn_blueprint(brain, shape, sections_json, lang, label, true)
 }
 
 /// RECALL TOP-K blueprints for a shape query, highest score first. Reuses the coding-fix semantic

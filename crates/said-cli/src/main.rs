@@ -285,9 +285,10 @@ enum Commands {
         /// Optional provenance breadcrumb.
         #[arg(long)]
         label: Option<String>,
-        /// Replace the existing blueprint for the shape instead of keep-first.
-        #[arg(long)]
-        promote: bool,
+        /// The structure was edited and the build/test PASSED -> auto-update the blueprint (supersede if
+        /// it changed). Without it, learn is keep-first (a no-op if the shape already has a blueprint).
+        #[arg(long, alias = "promote")]
+        verified: bool,
     },
     /// Recall the reusable structure (blueprint) for a shape.
     #[cfg(feature = "code")]
@@ -1393,9 +1394,9 @@ fn run() {
         #[cfg(feature = "code")]
         Commands::FixTemplate => { print!("{}", said_prompts::coding::ITERATION_TEMPLATE); Ok(()) }
         #[cfg(feature = "code")]
-        Commands::LearnBlueprint { ref shape, ref sections, ref sections_file, ref lang, ref label, promote } =>
+        Commands::LearnBlueprint { ref shape, ref sections, ref sections_file, ref lang, ref label, verified } =>
             cmd_blueprint_write(cli.path.as_deref(), shape, sections.as_deref(), sections_file.as_deref(),
-                lang.as_deref(), label.as_deref(), promote, cli.json),
+                lang.as_deref(), label.as_deref(), verified, cli.json),
         #[cfg(feature = "code")]
         Commands::RecallBlueprint { ref shape, min_similarity } =>
             cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, cli.json),
@@ -6999,7 +7000,7 @@ fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
 #[cfg(feature = "code")]
 fn cmd_blueprint_write(
     path: Option<&str>, shape: &str, sections: Option<&str>, sections_file: Option<&str>,
-    lang: Option<&str>, label: Option<&str>, promote: bool, json: bool,
+    lang: Option<&str>, label: Option<&str>, verified: bool, json: bool,
 ) -> Result<(), String> {
     let sections_json = match (sections, sections_file) {
         (Some(_), Some(_)) => return Err("pass only one of --sections / --sections-file".into()),
@@ -7009,21 +7010,18 @@ fn cmd_blueprint_write(
     };
     let sections_json = sections_json.trim_start_matches('\u{feff}').trim().to_string();
     let mut brain = open_brain(path)?;
-    let doc_id = if promote {
-        sca_core::ask::promote_blueprint(&mut brain, shape, &sections_json, lang, label)
-    } else {
-        sca_core::ask::learn_blueprint(&mut brain, shape, &sections_json, lang, label)
-    };
-    // keep-first feedback: learn_blueprint is a no-op when the shape already exists, so the stored body
-    // won't contain the sections we just passed. Read back to tell the user learned vs kept-first.
-    let kept_first = !promote && brain.read(&doc_id)
+    // verified (build green) -> auto-update; else keep-first.
+    let doc_id = sca_core::ask::learn_blueprint(&mut brain, shape, &sections_json, lang, label, verified);
+    // keep-first feedback: an UNVERIFIED learn is a no-op when the shape already exists, so the stored
+    // body won't contain the sections we just passed. Read back to report what happened.
+    let kept_first = !verified && brain.read(&doc_id)
         .map(|body| !body.contains(sections_json.trim())).unwrap_or(false);
     brain.save()?;
     if json {
         println!("{}", serde_json::json!({ "ok": true, "blueprint": doc_id,
-            "action": if promote { "promoted" } else if kept_first { "kept-first (no-op)" } else { "learned" } }));
-    } else if promote {
-        println!("Promoted blueprint {} (new standard for this shape)", doc_id);
+            "action": if verified { "auto-updated (verified)" } else if kept_first { "kept-first (no-op)" } else { "learned" } }));
+    } else if verified {
+        println!("Auto-updated blueprint {} (verified build -> new standard for this shape)", doc_id);
     } else if kept_first {
         println!("Kept-first: blueprint {} already exists for this shape (no-op)", doc_id);
     } else {
