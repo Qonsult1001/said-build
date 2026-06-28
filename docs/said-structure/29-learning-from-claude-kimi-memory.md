@@ -94,3 +94,33 @@ session-resume (point 2) then work on the imported memories automatically.
 or optional (facts-only, no LLM)? (b) do we auto-delete the source `.jsonl` or just report "safe to
 delete"? (recommend: report, never auto-delete — the user owns that). (c) Kimi's on-disk memory format
 needs the same disk-shape check we did for Claude before wiring its reader.
+
+## DECISION — pointer/breadcrumb FIRST, incremental sync for freshness (NOT a full copy)
+
+The owner weighed two models: (A) `.said` stores **breadcrumbs/pointers** to Claude's live files (recall
+points to the file, returns only what's needed; nothing Claude does changes) vs (B) **trigger live
+updates** that copy/distill Claude's writes into `.said`. Research settles it
+([incremental indexing](https://medium.com/@vasanthancomrads/incremental-indexing-strategies-for-large-rag-systems-e3e5a9e2ced7),
+[CocoIndex real-time code index](https://cocoindex.io/blogs/index-code-base-for-rag/),
+[LEANN live-data pointer model arXiv:2506.08276]):
+
+- **Primary = Design A (pointer).** `.said` stores a small **external pointer** per Claude memory file (a
+  distilled one-line "what's in here" + `external:uri=<path>`, `Pillar::External`, tagged `project:`).
+  Claude keeps writing to its files **unchanged** — clean integration, nothing existing changes. Recall
+  finds the breadcrumb by meaning and returns ONLY the pointed-to slice (max token economy + zero
+  staleness — the live file is the source of truth). `.said` already has this:
+  `remember_as_external_pointer` (used by `browser_ingest`).
+- **Freshness = Design B, the CHEAP half only.** A light watcher / `sync` re-points or re-distills a
+  breadcrumb **only when a file changes** (incremental, never a full re-copy) and **tombstones** it if the
+  file is deleted. `.said` already has this: incremental `build_index` + the `sync` reconcile/tombstone
+  path. Research's three invariants (stable ids, versioning, tombstones) are all already present
+  (blake3 ids, incremental index, tombstone deletes).
+- **NOT a full copy.** The bulk (111 MB of `.jsonl`) never enters `.said` — only the breadcrumb (and,
+  optionally, the point-3 tier-2 distilled session-episode). This satisfies safety + clean-integration +
+  token-economy simultaneously.
+
+**Net build = thin layer over existing primitives:** a `memory_import --watch`/`memory_link` that
+(1) writes one external pointer per Claude/Kimi memory file (project-tagged), (2) on change, incrementally
+re-points (the `sync` path), (3) at query time recall returns the breadcrumb → the agent opens the live
+file for the slice it needs. No core mechanism is new; it's wiring `remember_as_external_pointer` +
+`sync` + point-1 tagging + point-2 injection together.
