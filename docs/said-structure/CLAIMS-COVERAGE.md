@@ -58,6 +58,7 @@ Status legend: ✅ tested+passing · ⚠️ tested, KNOWN GAP (`#[ignore]` + not
 | Enterprise pointer: recall by summary         | row-36-external-pointer         | ✅      |
 | Enterprise mode refuses content ingest        | row-37                          | ✅      |
 | Scope-filtered recall returns ONLY scope      | 3.5                             | ✅      |
+| Per-project fix scope: `project:` tag isolates; `SAID_RECALL_PROJECT` filters; open by default for reuse | `test_project_scope.rs` (28) | ✅ (2026-06-28) |
 
 
 ## Edge cases / robustness → `test_recall_edge_cases.rs`

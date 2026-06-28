@@ -38,14 +38,26 @@ Reproduce: `crates/sca-core/tests/test_bug_location_e2e.rs` (the 345 vs 34,346 m
   (`said-cli/src/resolve.rs:12-44`): explicit `--path` → a single `*.said` in the cwd → a global default
   config. So if each project keeps its own `project.said`, it IS isolated; there is no automatic
   `project:said-build` tagging.
-- **The scope machinery EXISTS but isn't auto-populated.** `MemoryScope {Personal, Project, Organization,
-  Public}` (`frames.rs:88-102`) is stored per frame, but new memories default to `Personal` and the
-  CLI/MCP don't expose setting it. So memories aren't *blocked* across projects — they're just not tagged.
+- **Coding fixes ARE now project-tagged (built 2026-06-28).** `learn_coding_fix` writes a `project:<name>`
+  tag from `SAID_PROJECT` and folds the project into the fix identity; recall hard-filters on
+  `SAID_RECALL_PROJECT`. (The separate `MemoryScope {Personal,Project,Organization,Public}` enum in
+  `frames.rs:88-102` still defaults to `Personal` for generic `remember`s — a coarser axis than the
+  project tag, left as-is.)
 - **Cross-project reuse IS built — federation.** `said-orchestration::recall::best_iterations_federated`
   (`recall.rs:62-103`) queries a PRIMARY brain + mounted read-only **skill packs**, merges, dedups by
   BLAKE3 doc_id, ranks, returns top-k. Skill-pack discovery (`docs/18`): `--skills`, `$SAID_SKILLS_DIR`,
   `<repo>/.said/skills/*.said`, `~/.said/skills/*.said`. **Writes go only to the primary; packs stay
   read-only** (like Docker base layers).
+
+**UPDATE (built 2026-06-28): per-project scoping is now first-class.** `learn_coding_fix` reads
+`SAID_PROJECT` and (a) makes the project part of the fix's IDENTITY (so two projects can each hold their
+own fix for the SAME task shape — they no longer overwrite each other) and (b) writes a `project:<name>`
+tag. Recall hard-filters on `SAID_RECALL_PROJECT` (mirrors `SAID_RECALL_LANG`): set it → only that
+project's fixes (plus project-agnostic ones) come back; unset → cross-project reuse stays possible.
+Project-tagged delete (`delete {tag_filter:"project:said-build"}`) then removes exactly one project.
+Proven: `crates/sca-core/tests/test_project_scope.rs` (isolation when scoped, both visible when open).
+This closes the "set scope at ingest" + "delete by project" gaps below. The remaining wiring is to have
+the CLI/MCP/orchestrator auto-set `SAID_PROJECT` from the repo/cwd name (so it's automatic, not manual).
 
 **So your "reuse functions from SAID-ECHO/said-cgp-cs" scenario works today like this:**
 ```
@@ -63,17 +75,16 @@ nothing auto-tags `project:` for one-brain-many-projects. Both are small wiring 
 
 - **Delete by doc_id:** ✅ `said delete <doc_id>` (`main.rs:2931`), MCP `delete {doc_id}`.
 - **Batch delete by tag + time:** ✅ MCP `delete {older_than_days, before_date, tag_filter, dry_run}`
-  (`handler.rs:2317-2395`). So `delete {tag_filter:"project:said-build"}` works **once memories carry that
-  tag**.
-- **Delete by MemoryScope:** ❌ helper `doc_ids_by_scope()` exists (`frames.rs:1400`) but isn't wired to a
-  command.
-- **Bundled UI:** there's an admin surface (`row-43-admin-ui`), but a one-click "delete everything for
-  project X" needs (a) project auto-tagging at ingest + (b) the scope-delete wired up. Small, well-scoped.
+  (`handler.rs:2317-2395`). And coding fixes now carry `project:<name>`, so
+  `delete {tag_filter:"project:said-build"}` removes exactly one project's fixes — **live.**
+- **Bundled UI:** there's an admin surface (`row-43-admin-ui`); a one-click "delete everything for
+  project X" is now just that delete-by-tag wired to a button (the underlying tag + delete both exist).
 
-**Net:** the cleanest path to "isolate + reuse + delete per project" = **auto-tag every memory with
-`project:<name>` at ingest** (one change), then recall pre-filters by it (already works via
-`detect_scope_tag`), federation reuses across chosen projects (already works), and delete-by-tag removes a
-project (already works). One ingest-tagging change unlocks all three.
+**Net (now mostly built):** isolate + reuse + delete per project works: `learn_coding_fix` auto-tags
+`project:` from `SAID_PROJECT`, recall isolates via `SAID_RECALL_PROJECT` (or stays open for reuse), and
+delete-by-tag removes a project. Remaining wiring: auto-set `SAID_PROJECT` from the repo/cwd in the
+CLI/MCP/orchestrator entry points, and expose `--skills` federation on the CLI/MCP (orchestrator-only
+today). Both small.
 
 ## 4. rusqlite / bundled SQLite — size cost
 

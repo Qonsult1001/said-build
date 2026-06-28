@@ -26,6 +26,11 @@ It's split into twelve sections so pages stay focused and cross-linkable.
 18. [Memory injection — the nudge pattern](22-memory-injection-nudge-pattern.md) — **READ BEFORE TOUCHING INJECTION.** Inject recall as PLAIN FACTS, never an authority/imperative claim (verbatim from the cloned nudge source); the exact mistake + the measured 17→1 turn fix
 19. [Benchmark methodology](23-benchmark-methodology.md) — **READ BEFORE BENCHMARKING MEMORY.** Single-run pass@1 is WRONG; use pass@k + turns-to-converge on co-solved tasks + abstention-as-correct, partitioned into memory-only-solves / co-solved / neither. Research-cited.
 20. [Memory-benchmark session record](24-memory-benchmark-session-record.md) — the overview of the methodology-hardening + verify-docs fixes + save-template alignment (all 3 surfaces) + GATE 3 + the proven SAVE axis. Start here to recover the thread.
+21. [Agent-driven turns-to-fix method](25-agent-driven-turns-to-fix-method.md) — how to measure the moat end-to-end (the agent drives the loop; no flaky headless subprocess).
+22. [Project-scale savings](26-project-scale-savings.md) — build an HTML site cold vs with save-while-coding memory; the single-build mechanism + why the fair test is vs Claude-native + cross-session.
+23. [Lifecycle re-encounter](27-lifecycle-reencounter.md) — where the moat actually lives: `.said` durable recall beats Claude-native memory when a past-solved bug class recurs in a new file weeks later.
+24. [Token value, scoping, delete](28-token-value-and-scoping.md) — measured token savings (~16×/100×/930× fewer context tokens), per-project scoping (now first-class via `project:` tag), delete-by-project, sqlite size.
+25. [Learning from Claude/Kimi memory](29-learning-from-claude-kimi-memory.md) — what `.said` should adopt (per-project scoping, distilled facts) + the confirmed chat-history safety gap (111 MB plaintext transcripts) `.said` avoids.
 
 ## Maintenance rules
 

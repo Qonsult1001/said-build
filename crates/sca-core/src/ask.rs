@@ -1055,10 +1055,19 @@ pub fn learn_coding_fix(
     // an explicit `label` when it's a stable task-id (e.g. "lru_cache"), else the
     // normalized problem text. A genuinely different problem → different id → distinct
     // frame. Override OFF (legacy body-hash, allows duplicates) via SAID_LEARN_BODY_ID=1.
+    // PROJECT SCOPE (auto): the owning project from SAID_PROJECT (set by the CLI/MCP/orchestrator from
+    // the repo/cwd name). Part of the IDENTITY so two projects can each hold their own fix for the SAME
+    // task shape (else the 2nd supersedes the 1st). Empty => global/unscoped (today's behavior).
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let id16 = if std::env::var("SAID_LEARN_BODY_ID").is_ok() {
         fix_hash(&body)
     } else {
-        fix_hash(&task_identity(problem, label))
+        let identity = match &project {
+            Some(p) => format!("{}\u{1f}{}", p, task_identity(problem, label)),
+            None => task_identity(problem, label),
+        };
+        fix_hash(&identity)
     };
     let doc_id = format!("fix::{}", id16);
     // Native PROCEDURAL pillar (not just the tag): a coding-fix is an action
@@ -1083,6 +1092,12 @@ pub fn learn_coding_fix(
     // language), which is correct for genuinely language-neutral fixes.
     if let Some(lang) = lang_from_edits(edits_json) {
         tags.push(format!("lang:{}", lang));
+    }
+    // PROJECT TAG (per-project guarantee, mirrors lang:): isolate + delete + opt-in cross-project reuse.
+    // Stored at learn time so every fix is project-tagged regardless of caller. Recall hard-filters on it
+    // when SAID_RECALL_PROJECT is set; unset => no constraint (cross-project reuse stays possible).
+    if let Some(ref proj) = project {
+        tags.push(format!("project:{}", proj));
     }
     brain.remember_with_pillar(
         Some(&doc_id), &body, Some(FIX_KIND_TAG),
@@ -1123,7 +1138,13 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     // Unset => no constraint (back-compat). Over-fetch k*4 so the post-filter still fills k.
     let lang_want = std::env::var("SAID_RECALL_LANG").ok()
         .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
-    let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+    // PROJECT GUARANTEE (mirrors lang): when SAID_RECALL_PROJECT is set, hard-filter to frames whose
+    // stored `project:<name>` tag matches — so project B never receives project A's fix unless it opts
+    // in. Frames with NO project tag (global/legacy) are kept (project-agnostic). Unset => no constraint
+    // (cross-project reuse stays possible — the federation/skill-pack story).
+    let project_want = std::env::var("SAID_RECALL_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let fetch_k = if lang_want.is_some() || project_want.is_some() { k.saturating_mul(4).max(k) } else { k };
 
     // Over-fetch a wider pool than k so we can measure THIS query's score distribution for the gate
     // below — the top candidate's absolute score is meaningless on its own (embedding anisotropy:
@@ -1166,17 +1187,19 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
 
     pool.into_iter()
         .filter(|(doc_id, _)| gate_keep.contains(doc_id))
-        .map(|(doc_id, score)| {
+        .filter_map(|(doc_id, score)| {
+            // Read both meta tags (lang + project) in ONE immutable borrow, BEFORE the mutable
+            // brain.get(&body) below — avoids a second borrow and applies the project hard-filter here.
+            let (meta_lang, meta_project) = brain.frames.get_meta(&doc_id).map(|m| (
+                m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()),
+                m.tags.iter().find_map(|t| t.strip_prefix("project:").map(|s| s.to_string())),
+            )).unwrap_or((None, None));
+            // PROJECT hard-filter (None on the frame => project-agnostic => kept for reuse).
+            if let Some(want) = &project_want {
+                if let Some(have) = &meta_project { if have != want { return None; } }
+            }
             let body = brain.get(&doc_id).unwrap_or_default();
-            // Language signal, in priority order: first-class `lang:` META TAG (written at
-            // learn time on every new fix), else a `lang:` token in the body (hand-built
-            // packs), else infer from the change-set's file extensions (covers the 794
-            // legacy frames stored before learn-time tagging existed — no backfill needed).
-            let meta_lang = brain.frames.get_meta(&doc_id).and_then(|m| {
-                m.tags.iter().find_map(|t| t.strip_prefix("lang:"))
-                    .map(|l| l.to_ascii_lowercase())
-            });
-            RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang }
+            Some(RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang })
         })
         .filter(|fix| match &lang_want {
             None => true,
