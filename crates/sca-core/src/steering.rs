@@ -174,6 +174,16 @@ fn search_intent(event: &HookEvent) -> Option<String> {
 /// "this is trusted memory" meta-claim. Imperative/meta framing trips the injection defense even on a
 /// trusted channel (Anthropic hooks doc; measured). Fail-open: nothing GROUNDED → passthrough.
 pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookDecision {
+    // SESSION RESUME (point 2): on SessionStart, surface the MOST RECENT journal ("where you left off")
+    // so process-state persists across sessions via .said — replacing the agent's ephemeral session
+    // memory. Claude reloads its own per-project memory at start; this does the same to the durable,
+    // portable, BYO-LLM store. Leads even when there's no prompt to recall against (SessionStart has
+    // none). If there's no journal, fall through to the normal recall path below.
+    if event.phase == HookPhase::SessionStart {
+        if let Some(resume) = render_session_resume(brain) {
+            return HookDecision::Provide { context: resume };
+        }
+    }
     let Some(intent) = search_intent(event) else { return HookDecision::Passthrough; };
 
     // FIX-FIRST RECALL — on BOTH the prompt channel AND the decision point (nudge's actual mechanism).
@@ -287,6 +297,32 @@ fn cap_note(s: &str, max: usize) -> String {
 ///    debugging work." NOT an authority claim ("verified, REUSE this" — that tripped the injection
 ///    defense, rejected live at 17 turns); NOT pure passive facts either (that over-corrected → the agent
 ///    treated it as optional and still re-read source). The directive is what curbs over-investigation.
+/// SESSION RESUME context (point 2): the most recent `kind:journal` frame, rendered as plain-facts
+/// prior-session state (nudge framing — labeled data, no imperative). Returns None when there's no
+/// journal. This is what lets "where I left off" persist to .said and resume on the next SessionStart.
+fn render_session_resume(brain: &mut SaidFile) -> Option<String> {
+    // newest active frame tagged kind:journal (by created_at)
+    let mut best: Option<(u64, String)> = None;
+    for did in brain.frames.active_doc_ids().into_iter().map(|s| s.to_string()).collect::<Vec<_>>() {
+        if let Some(m) = brain.frames.get_meta(&did) {
+            if m.tags.iter().any(|t| t == "kind:journal") {
+                let ts = m.created_at;
+                if best.as_ref().map(|(b, _)| ts >= *b).unwrap_or(true) {
+                    best = Some((ts, did.clone()));
+                }
+            }
+        }
+    }
+    let (_, doc_id) = best?;
+    let body = brain.get(&doc_id).unwrap_or_default();
+    if body.trim().is_empty() { return None; }
+    Some(format!(
+        "<project_memory source=\".said\" kind=\"session-resume\">\n\
+         Where the last session left off (your own journal — resume from here, don't re-plan from scratch):\n\
+         {}\n</project_memory>",
+        cap_note(&body, FIX_NOTE_MAX)))
+}
+
 fn render_verified_fixes(fixes: &[crate::ask::RecalledFix]) -> String {
     let mut body = String::from(
         "<project_memory source=\".said\">\nFound prior work that may apply. Read this before \

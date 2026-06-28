@@ -149,6 +149,19 @@ token-critical workflows that accept the occasional extra round-trip for guarant
 fail-open lexical-grounding gate makes BLOCK safer than a naive block — it only denies when `.said`
 has a GROUNDED hit; an off-topic search passes through (never blocked) in BOTH modes.
 
+## Session resume — process-state persists to `.said`, not the agent's ephemeral memory (built 2026-06-28)
+
+Claude reloads its OWN per-project memory at session start; the agent's "where am I in this task" (its
+TodoWrite/step-state) otherwise lives only in the session + the throwaway plaintext transcript (see
+doc 29: 111 MB of `.jsonl` for one project). `.said` now does the durable, portable version:
+on **SessionStart**, `decide()` surfaces the **most recent `kind:journal`** frame as plain-facts resume
+context — *"Where the last session left off (your own journal — resume from here)"* — via the same trusted
+injection channel as recall (`steering::render_session_resume`). So the wanted/decided/built/blockers/NEXT
+state the agent journaled (or the SessionEnd backstop wrote) is re-injected next session, and the agent
+resumes from `.said` instead of re-planning. Proven: `crates/sca-core/tests/test_session_resume.rs`.
+This closes the write→read loop: the SessionEnd backstop WRITES the journal; SessionStart now READS it
+back. BYO-LLM and model-agnostic — the resume works for any agent, not just Claude.
+
 ## Why this is the right design
 - **Removal-safe** — the user's hard requirement; nothing in committed git, never CLAUDE.md.
 - **Faithful to nudge** — hook-shells-out-to-binary returning allow/deny+context; Apache-2.0 permits
