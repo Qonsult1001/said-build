@@ -35,16 +35,17 @@ editor or LSP.
 Write the moment you conclude something a future session would pay to know — not every step. You decide \
 what is worth keeping, like an engineer's notes:
   • learned about the code (a verified fix, a root cause, a non-obvious invariant, an architectural \
-decision + its why) → `learn_fix` AFTER the gate is green. Write it as the SAME structured iteration \
-note the orchestrator stores: problem; files/functions touched; errors+corrections (approaches that \
-FAILED, so they're never retried); the non-obvious INVARIANT a textbook version gets wrong; key result. \
-Plus the verified change-set. A one-line label gets out-ranked by the source it summarizes — store the \
-whole story.
+decision + its why) → `learn_fix` AFTER the gate is green. Store the whole story (problem; files; \
+errors+corrections that FAILED; the non-obvious INVARIANT a textbook gets wrong; the verified \
+change-set), not a one-line label that gets out-ranked by the source it summarizes.
+  • the REUSABLE structure for a shape (sections that repeat across every entity, e.g. a Create \
+endpoint) → `learn_blueprint` (keep-first); before building one, `recall_blueprint` and render it in the \
+active language — write only the entity-specific 20%.
   • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
 would (\"remember to revisit this fn\").
   • closing out work → `journal`: wanted, decided, built, blockers, next.
-Distil, don't dump. Skip the obvious and the unverified. .said dedupes. Rule of thumb: learned about the \
-CODE → learn_fix; the USER asked to keep something → remember.";
+Distil, don't dump. Skip the obvious and the unverified. .said dedupes. Rule of thumb: learned about \
+CODE → learn_fix; reusable STRUCTURE → learn_blueprint; USER asked to keep something → remember.";
 
 /// The bundled `said` SKILL body (`.claude/skills/said/SKILL.md`) written by `said setup`. Bootstrap
 /// guidance lives HERE, never in CLAUDE.md — so removing `.said` leaves no committed trace. The leading
@@ -83,12 +84,17 @@ the problem; the files/functions touched and why; errors+corrections (approaches
 are never retried); the non-obvious INVARIANT a textbook version gets wrong; the key result — plus the \
 verified change-set. Get the exact 10-section template via `prompts/get name=\"fix-template\"` (CLI: \
 `said fix-template`) and pass it to learn_fix.
+  • the REUSABLE structure for a shape (the sections that repeat across every entity of that shape, e.g. \
+a Create endpoint) → `learn_blueprint` (keep-first: a no-op if the shape already has one). Before \
+building such a shape, `recall_blueprint` first and RENDER its sections in the active language — write \
+only the entity-specific 20%, don't recreate the 80%. learn_fix is the specific fix; learn_blueprint is \
+the reusable structure.
   • a user fact, or the user said \"remember …\" → `remember`: one distilled fact, used as an end user \
 would (\"remember to revisit this fn\", \"remember my mom's birthday\").
   • closing out work → `journal`: wanted, decided, built, blockers, next.
 
-Distil, don't dump. Skip the obvious and the unverified. `.said` dedupes. Rule of thumb: did I learn \
-something about the CODE? `learn_fix`. Did the USER ask me to \
+Distil, don't dump. Skip the obvious and the unverified. `.said` dedupes. Rule of thumb: learned about \
+the CODE? `learn_fix`. A reusable STRUCTURE? `learn_blueprint`. Did the USER ask me to \
 keep something (coding or not)? remember.";
 
 /// One-line summary used by `said setup` output / `said plugin list`.
@@ -107,7 +113,7 @@ mod tests {
     fn mcp_instructions_aligned_and_bounded() {
         // Substantive, and under Claude Code's 2KB server-instruction truncation.
         assert!(MCP_INSTRUCTIONS.len() > 200, "instructions must be substantive");
-        assert!(MCP_INSTRUCTIONS.len() < 2048, "must stay under the 2KB MCP-instruction limit");
+        assert!(MCP_INSTRUCTIONS.len() < 2048, "must stay under the 2KB MCP-instruction limit (actual={})", MCP_INSTRUCTIONS.len());
         // FUNCTIONAL: the QUERY tool must be named (the read half can't bind to no tool — the bug we fixed).
         assert!(MCP_INSTRUCTIONS.contains("`ask`"), "must name the query tool `ask`");
         // All three write verbs named, split by domain.
