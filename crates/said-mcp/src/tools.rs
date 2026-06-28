@@ -1195,6 +1195,22 @@ pub struct LearnBlueprintTool {
     pub verified: Option<bool>,
 }
 
+#[mcp_tool(
+    name = "harvest_blueprints",
+    description = "CODING MEMORY (blueprint) — scan an existing repo and AUTO-LEARN blueprints from \
+                   REPEATED structures. A function structure becomes a blueprint only if it repeats \
+                   (support>=2, clone-mining standard); one-offs are skipped. Keep-first, so re-running \
+                   never clobbers a hand-tuned blueprint. Use ONCE when onboarding .said onto an \
+                   existing codebase so future entities reuse what's already there.",
+    destructive_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct HarvestBlueprintsTool {
+    /// The repo directory to scan. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
@@ -1203,7 +1219,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool]);
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
@@ -1211,7 +1227,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,

@@ -558,6 +558,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::OpenTool(t) => self.handle_open(t),
             SaidTools::CreateTool(t) => self.handle_create(t),
             SaidTools::InitTool(t) => self.handle_init(t),
+            SaidTools::HarvestBlueprintsTool(t) => self.handle_harvest_blueprints(t),
             SaidTools::SyncTool(t) => self.handle_sync(t),
             SaidTools::JournalTool(t) => self.handle_journal(t),
             SaidTools::OverviewTool(t) => self.handle_overview(t),
@@ -1546,6 +1547,37 @@ impl SaidServerHandler {
             "Blueprint {} {}. Stored in the Procedural pillar; future recall_blueprint reuses it.",
             doc_id, action,
         ))]))
+    }
+
+    fn handle_harvest_blueprints(&self, t: HarvestBlueprintsTool) -> Result<CallToolResult, CallToolError> {
+        // Shell to `said harvest` (same pattern as init/ingest): the CLI owns the gitignore-aware walk +
+        // the harvest engine, and writing via a subprocess avoids holding our brain lock during the scan.
+        let dir = t.dir.unwrap_or_else(|| ".".to_string());
+        let said_path = self.current_path();
+        let abs_brain = std::fs::canonicalize(&said_path)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&said_path)).to_string_lossy().to_string();
+        let args = vec!["harvest".to_string(), dir, "--path".to_string(), abs_brain];
+        let brain_dir = self.brain_dir();
+        for exe in &resolve_said_cli() {
+            if let Ok(r) = std::process::Command::new(exe).args(&args).current_dir(&brain_dir).output() {
+                let out = String::from_utf8_lossy(&r.stdout).to_string();
+                let err = String::from_utf8_lossy(&r.stderr).to_string();
+                if r.status.success() {
+                    // reload mmap so subsequent recall_blueprint sees the harvested blueprints.
+                    if let Ok(mut brain) = self.brain.lock() {
+                        if let Ok(fresh) = sca_core::said_file::SaidFile::open(&said_path) { *brain = fresh; }
+                    }
+                    self.mark_populated();
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(
+                        if out.trim().is_empty() { "Harvest complete.".to_string() } else { out })]));
+                }
+                // non-zero exit: surface stderr and stop (don't try the next candidate on a real failure).
+                if !err.trim().is_empty() {
+                    return Err(CallToolError::from_message(format!("harvest failed: {}", err.trim())));
+                }
+            }
+        }
+        Err(CallToolError::from_message("harvest: could not run the said CLI (set SAID_CLI?)".to_string()))
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

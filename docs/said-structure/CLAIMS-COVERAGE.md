@@ -105,6 +105,17 @@ exposes both → learn → recall → keep-first no-op → original survives →
 (`said learn-blueprint`/`recall-blueprint`) proven as a real binary. All three surfaces call the ONE
 shared `sca_core::ask` engine (byte-identical). Run: `node hard-eval/blueprint_mcp_e2e.js`.
 
+## Harvest-at-init → `test_harvest.rs` + `hard-eval/blueprint_harvest_e2e.js`
+
+`said harvest <dir>` / MCP `harvest_blueprints` scans an existing repo and auto-learns blueprints from
+structures that ALREADY repeat — clone-mining thresholds (support>=2, size floor, similarity gate; named
+constants, not magic numbers). One-offs skipped; keep-first so re-runs never clobber. Core
+(`test_harvest.rs`, 2 green): a repeated structure (>=2) harvests one blueprint with the common skeleton,
+a one-off is skipped; re-harvest is keep-first (doesn't overwrite a promoted blueprint). Proven on REAL
+repos: sca-core/src (42 files, ~1012 fns → ~11 blueprints) and the OrchestrationFactory C# app (93 files,
+1117 fns → 8). MCP live (`blueprint_harvest_e2e.js`): scan through the running server → harvested
+blueprint recallable. Run: `node hard-eval/blueprint_harvest_e2e.js`.
+
 ## Code bug-location (MCP) → `test_bug_location_e2e.rs`
 The "locate the bug, guide Claude" claim, measured on the two axes the MCP-for-coding research
 (MCP spec 2025-06-18; Anthropic tool-design; RepoCoder/SWE-bench/Lost-in-the-Middle; Serena/ast-grep
