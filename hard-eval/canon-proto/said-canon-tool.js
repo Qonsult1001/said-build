@@ -37,7 +37,14 @@ function genWiki(){
     idx+=`\n`;
   }
   idx+=`## Totals\nAcross ${files.length} files: **you own ${totY}** sections, **.said generates ${totG}** (re-emitted free on every entity).\n\n`;
-  idx+=`## Controls (stated once)\n- Change a GENERATED section: edit the **canon** (updates everywhere) or \`said eject <file> <Sn>\` (becomes YOURS).\n- Review imported old code: \`said diff\` (WAS-YOURS vs SAID-ADDED).\n\nHistory: [said.log.md](said.log.md)\n`;
+  idx+=`## If you edit a GENERATED section (stated once)\n`;
+  idx+=`GENERATED sections are written by .said from a saved template and get rebuilt. If you change one,\n`;
+  idx+=`.said asks before rebuilding over it:\n`;
+  idx+=`- **Keep my change** -- stop auto-generating just that one section.\n`;
+  idx+=`- **Discard my change** -- restore the generated version.\n`;
+  idx+=`- **Take ownership** -- that section becomes yours forever; .said never regenerates it.\n`;
+  idx+=`To change a GENERATED section everywhere at once, change the saved template it comes from.\n\n`;
+  idx+=`History: [said.log.md](said.log.md)\n`;
   fs.writeFileSync(path.join(DIR,'said.index.md'),idx);
   // log
   let log=`---\ntype: said.canon.log\nspec: okf/1.0\n---\n\n# Said Canon Log\n\n| File | S | Section | Class | Hash |\n|---|---|---|---|---|\n`;
@@ -59,8 +66,14 @@ function driftCheck(bypass){
   }
   if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections — safe to regenerate.');return;}
   for(const c of conflicts){
-    if(bypass) console.log(`DRIFT [${c.key}]: edited but BYPASS set (Claude permission standard) -> overwrite silently.`);
-    else console.log(`DRIFT [${c.key}]: you edited a GENERATED section. PROMPT -> [k]eep your version / [o]verwrite with canon / [e]ject (make it YOURS)?`);
+    // user-facing prompt: PLAIN words only (no canon/overwrite/eject jargon).
+    if(bypass) console.log(`[${c.key}] changed but bypass is on -> rebuilding over it (Claude permission standard).`);
+    else {
+      console.log(`\nYou changed an AUTO-GENERATED section (${c.key}). If .said rebuilds this file, your change here is lost.`);
+      console.log(`  [1] Keep my change       (stop auto-generating just this section)`);
+      console.log(`  [2] Discard my change    (restore the generated version)`);
+      console.log(`  [3] Take ownership       (this section is yours forever -- never regenerated)`);
+    }
   }
 }
 
