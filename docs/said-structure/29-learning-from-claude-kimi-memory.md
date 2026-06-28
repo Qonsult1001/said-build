@@ -95,7 +95,54 @@ or optional (facts-only, no LLM)? (b) do we auto-delete the source `.jsonl` or j
 delete"? (recommend: report, never auto-delete — the user owns that). (c) Kimi's on-disk memory format
 needs the same disk-shape check we did for Claude before wiring its reader.
 
-## DECISION — pointer/breadcrumb FIRST, incremental sync for freshness (NOT a full copy)
+## STRATEGY (locked) — `.said` OWNS the knowledge; mirror Claude, clean per-project, carry learnings forward
+
+The product thesis (owner): the moat is **`.said` as a portable brain that OWNS distilled knowledge**, not
+an index over someone else's files. "If I only point to existing data, anyone can build an index and the
+value lives in their files." So:
+
+1. **Mirror everything Claude saves on a project INTO `.said`** (owned copy, not a pointer) — `.said`
+   becomes a complete, portable copy of that project's memory.
+2. **Per-project, with a clean-when-done option** — finish a project → wipe its raw/episodic memory…
+3. **…but the LEARNINGS carry forward** — distilled fixes/invariants/decisions (the 80%-replicated reuse)
+   survive the cleanup and seed the next project.
+4. **The moat = owned memory done undeniably best** (`learn_fix` + journal + cross-project + lifecycle
+   compounding) — where `.said` beats Claude/Kimi start to finish.
+
+**Prerequisite the owner named:** we must first understand EXACTLY what Claude saves, when, and how
+(especially when a new project starts) before we can mirror it. **Pointer-first is the LEARNING vehicle**
+(observe Claude's writes) → graduate to OWNING/duplicating them. Map below.
+
+## What Claude saves per project (mapped from disk — the mirror target)
+
+Claude's per-project memory lives under `~/.claude/projects/<slug>/` where `<slug>` is the project's
+absolute path with `/` `:` → `-` (so a NEW project = a new slug dir the moment Claude touches it). FIVE
+distinct stores:
+
+| # | Store | Path | Content | Mirror priority |
+|---|---|---|---|---|
+| 1 | **Distilled facts** | `<slug>/memory/MEMORY.md` + per-fact `*.md` | the index + frontmatter facts (Why/How) | **HIGHEST** — this is the learning that carries forward |
+| 2 | **Raw transcripts** | `<slug>/*.jsonl` | every turn + tools + file content (111 MB here) | distill to ONE episode/session; the raw is disposable |
+| 3 | **Plans** | `~/.claude/plans/*.md` | plan-mode artifacts | medium — decisions/approach |
+| 4 | **File-history** | `<slug>/file-history/` | snapshots of changed files | low — what changed (episodic) |
+| 5 | **Global prefs** | `~/.claude/CLAUDE.md`, `settings.json` | cross-project preferences | cross-project tier |
+
+Each frontmatter fact already carries `name`/`description`/`metadata.type`/`originSessionId` — a clean map
+to `.said` `remember`/`learn_fix` (tier-1 facts) + Episodic (tier-2 distilled session). The slug → our
+`project:<name>` tag (point 1), so mirror + per-project clean + carry-forward all work via existing tags.
+**Open: Kimi's on-disk layout must be mapped the same way before wiring its reader.**
+
+## DECISION (revised by strategy) — OWN by default; pointers are the LEARNING step, not the product
+
+Given "`.said` owns the knowledge", the earlier pointer-first lean is **demoted to a means, not the end**:
+- **OWN (default):** mirror Claude's tier-1 facts + a distilled tier-2 session episode INTO `.said`
+  (self-contained, portable, survives deleting Claude). This is the asset companies buy.
+- **POINTER (learning/bulk only):** use `remember_as_external_pointer` to (a) cheaply OBSERVE what Claude
+  writes while we learn its format, and (b) reference bulk we deliberately don't copy. Not the moat.
+- The original pointer+sync analysis below is retained as the freshness/observation mechanism — we reuse
+  its `sync`/incremental/tombstone machinery to keep the OWNED mirror current.
+
+### (retained) pointer/breadcrumb + incremental sync — now the freshness/observation layer
 
 The owner weighed two models: (A) `.said` stores **breadcrumbs/pointers** to Claude's live files (recall
 points to the file, returns only what's needed; nothing Claude does changes) vs (B) **trigger live
