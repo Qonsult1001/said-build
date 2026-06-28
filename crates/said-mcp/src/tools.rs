@@ -1148,6 +1148,51 @@ pub struct LearnFixTool {
     pub label: Option<String>,
 }
 
+#[mcp_tool(
+    name = "recall_blueprint",
+    description = "CODING MEMORY (blueprint) — recall the REUSABLE 80% structure for a SHAPE \
+                   WITHOUT calling an LLM. Describe the shape (e.g. 'Create<Entity> REST \
+                   endpoint'); .said returns the language-neutral sections to RENDER in the \
+                   active language, so you write only the entity-specific 20%. No match below \
+                   the threshold → derive it, then store with learn_blueprint. Pairs with \
+                   recall_fix (the specific 20%).",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct RecallBlueprintTool {
+    /// The shape in plain words (the recall key).
+    pub shape: String,
+    /// Minimum match confidence (default 0.45). Below it: no match.
+    #[serde(default)]
+    pub min_score: Option<f32>,
+}
+
+#[mcp_tool(
+    name = "learn_blueprint",
+    description = "CODING MEMORY (blueprint) — store the REUSABLE 80% structure for a SHAPE, \
+                   once. KEEP-FIRST: if a blueprint for this shape already exists this is a \
+                   no-op (the original stands) — set promote=true to make a new one the \
+                   standard (supersede). Stored in the native Procedural pillar, blake3-keyed \
+                   on the shape, byte-identical to `said learn-blueprint`. Pairs with learn_fix.",
+    destructive_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct LearnBlueprintTool {
+    /// The shape this blueprint covers, in plain words (the recall key).
+    pub shape: String,
+    /// The sections payload (JSON) — the language-neutral structure the LLM renders per language.
+    pub sections: String,
+    /// Optional language tag (e.g. "csharp"). Omit for a language-neutral blueprint.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Optional provenance breadcrumb. Never the lookup key.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Make this the new standard: replace the existing blueprint for the shape (supersede).
+    #[serde(default)]
+    pub promote: Option<bool>,
+}
+
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
 #[cfg(not(feature = "forge"))]
@@ -1156,7 +1201,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool]);
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
@@ -1164,7 +1209,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,

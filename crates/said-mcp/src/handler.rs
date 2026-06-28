@@ -575,6 +575,8 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::LspSymbolsTool(t) => self.handle_lsp_symbols(t),
             SaidTools::RecallFixTool(t) => self.handle_recall_fix(t),
             SaidTools::LearnFixTool(t) => self.handle_learn_fix(t),
+            SaidTools::RecallBlueprintTool(t) => self.handle_recall_blueprint(t),
+            SaidTools::LearnBlueprintTool(t) => self.handle_learn_blueprint(t),
             #[cfg(feature = "forge")]
             SaidTools::ForgeListTool(t) => self.handle_forge_list(t),
             #[cfg(feature = "forge")]
@@ -1499,6 +1501,53 @@ impl SaidServerHandler {
             "Learned fix {} (provenance: {}). Stored in the Procedural pillar; future \
              recall_fix / orchestrator runs can reuse it.",
             doc_id, t.label.as_deref().unwrap_or("-"),
+        ))]))
+    }
+
+    fn handle_recall_blueprint(&self, t: RecallBlueprintTool) -> Result<CallToolResult, CallToolError> {
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let min = t.min_score.unwrap_or(0.45);
+        match sca_core::ask::recall_blueprints(&mut brain, &t.shape, 1, min).into_iter().next() {
+            Some(hit) => {
+                let body = format!(
+                    "Blueprint ({:.2}) {}  shape={}\n\nRender these sections in the active \
+                     language; write only the entity-specific slots.\n\n## Sections\n{}",
+                    hit.score, hit.doc_id, hit.shape, hit.sections_json,
+                );
+                Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+            }
+            None => Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                "No known blueprint above score {:.2} for \"{}\" — derive the structure, then \
+                 store it with learn_blueprint.",
+                min, t.shape,
+            ))])),
+        }
+    }
+
+    fn handle_learn_blueprint(&self, t: LearnBlueprintTool) -> Result<CallToolResult, CallToolError> {
+        let sections = t.sections.trim_start_matches('\u{feff}').trim();
+        let promote = t.promote.unwrap_or(false);
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        // The ONE shared writer: keep-first learn (no-op if the shape exists) or promote (supersede),
+        // byte-identical to `said learn-blueprint`.
+        let doc_id = if promote {
+            sca_core::ask::promote_blueprint(&mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref())
+        } else {
+            sca_core::ask::learn_blueprint(&mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref())
+        };
+        // keep-first feedback: learn is a no-op when the shape already exists (stored body won't contain
+        // the just-passed sections).
+        let kept_first = !promote && brain.read(&doc_id)
+            .map(|b| !b.contains(sections)).unwrap_or(false);
+        brain.save().map_err(CallToolError::from_message)?;
+        let action = if promote { "promoted (new standard)" } else if kept_first { "kept-first (no-op; original stands)" } else { "learned" };
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "Blueprint {} {}. Stored in the Procedural pillar; future recall_blueprint reuses it.",
+            doc_id, action,
         ))]))
     }
 
