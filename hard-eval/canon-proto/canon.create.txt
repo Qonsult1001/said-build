@@ -1,0 +1,10 @@
+CANON shape=Create<Entity> (language-neutral, render in the active stack).
+PHASES (the 80%, ordered — keep this order in any language):
+  1. accept the request body for the entity
+  2. shred/parse the input fields from the payload
+  3. guard required fields -> return the framework error envelope if missing
+  4. write the primary row (the create/INSERT)
+  5. write child rows if any
+  6. project + return the response object in the framework's response shape
+SLOTS (the 20%, fill from the entity schema): [fields, dml_target, children, response_shape, business_rules]
+GUIDE: emit in the ACTIVE language/architecture; preserve the 6-phase order; only the SLOTS change per entity.
