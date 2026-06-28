@@ -19,6 +19,11 @@ const MIN_SUPPORT: usize = 2;
 /// Size floor (in call-skeleton steps): skip trivial functions (getters, one-liners) that have too
 /// little structure to be a meaningful blueprint. Mirrors clone tools' min-clone-size (~5-10 lines).
 const MIN_SKELETON_STEPS: usize = 2;
+/// Quality floor on the COMMON skeleton a cluster produces. The intersection of two functions can
+/// collapse to one or two trivial shared calls (noise like ["request","ce"]); a blueprint is only worth
+/// storing if the shared structure is substantial. Higher than MIN_SKELETON_STEPS on purpose: an
+/// individual function may be small, but a STORED pattern must carry real reusable structure.
+const MIN_COMMON_STEPS: usize = 3;
 /// Structural similarity gate (Jaccard over the call-skeleton sets). ~0.70 == clone detection's standard
 /// "dissimilarity <= 30%". Two functions in the same cluster must share at least this fraction of steps.
 const SIM_GATE: f32 = 0.70;
@@ -72,6 +77,12 @@ fn leading_verb(name: &str) -> String {
         .unwrap_or_else(|| name.to_ascii_lowercase())
 }
 
+/// Is this a real call-skeleton step (a meaningful identifier), not a parser fragment? Drops <=2-char
+/// tokens ("ce", "x") and anything not starting with a letter — these are extraction noise, not steps.
+fn is_real_step(s: &str) -> bool {
+    s.len() >= 3 && s.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+}
+
 /// Jaccard similarity of two call-skeletons (set overlap). The clone-detection structural-similarity
 /// signal, deterministic — no encoder.
 fn skeleton_sim(a: &[String], b: &[String]) -> f32 {
@@ -110,8 +121,11 @@ where
             let k = chunk.kind.to_ascii_lowercase();
             if !(k.contains("function") || k.contains("method")) { continue; }
             report.functions_seen += 1;
-            if chunk.calls.len() < MIN_SKELETON_STEPS { continue; } // size floor
-            sigs.push(FnSig { name: chunk.name, lang: lang.clone(), skeleton: chunk.calls });
+            // clean the call-skeleton: drop short/junk fragments (e.g. "ce") that aren't real call
+            // targets, so blueprint sections are meaningful identifiers, not parser noise.
+            let skeleton: Vec<String> = chunk.calls.into_iter().filter(|c| is_real_step(c)).collect();
+            if skeleton.len() < MIN_SKELETON_STEPS { continue; } // size floor
+            sigs.push(FnSig { name: chunk.name, lang: lang.clone(), skeleton });
         }
     }
 
@@ -134,7 +148,9 @@ where
         // the blueprint's sections = the COMMON ordered steps across the cluster (intersection, in the
         // representative's order) — what every entity of this shape reproduces.
         let common = common_skeleton(&members.iter().map(|&j| &sigs[j].skeleton).collect::<Vec<_>>());
-        if common.len() < MIN_SKELETON_STEPS { continue; }
+        // QUALITY GATE: drop thin/noisy common skeletons (e.g. ["request","ce"]) — a stored blueprint
+        // must carry substantial shared structure, else it's noise that pollutes recall.
+        if common.len() < MIN_COMMON_STEPS { continue; }
 
         let shape = derive_shape_name(&sigs[members[0]].name, members.len());
         let sections_json = serde_json::json!({ "sections": common }).to_string();
