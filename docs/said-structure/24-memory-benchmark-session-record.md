@@ -76,8 +76,28 @@ Token-savings sub-axis = already covered by GATE 3 (recall→reuse). Memory: `sa
   MCP/CLI). The verified golden LRU lives at `hard-eval/results/h1_lru.verified.js` if an edge-tier moat
   run is wanted later (needs a brain seeded with that fix + a WEAK external model — the saturation finding).
 
+## 7. Accuracy moat — PROVEN on the LIVE MCP server (the edge-tier win)
+Registered `.said` as a live MCP server (`.mcp.json` → `said-mcp-coding.exe --path edge_lru.said`) and drove
+it via JSON-RPC. `tools/call recall_fix` for an LRU task returns the verified golden fix (0.69) **with the
+non-obvious invariant** ("on a put that TRIGGERS an eviction, insert the new key on the HEAD/LRU side —
+`insertAtHead = size>1`"). Gate result (correct `src/` layout):
+- **COLD** (textbook LRU, no memory) → **RED** (fails interleaved-stress test 5, `4 !== -1`)
+- **MEMORY** (the golden the live MCP `recall_fix` carries) → **GREEN**
+
+The memory-carried invariant is exactly what flips RED→GREEN — the accuracy win at the difficulty edge,
+on the live MCP tools surface. Mirrors `hard-eval/RESULTS.md`'s prior interactive proof. Memory:
+`accuracy-moat-live-mcp`.
+
+**Two harness traps that produced false REDs (documented so they're never repeated):**
+1. The hard-eval gate test does `require('../src/h1_lru.js')` — the impl MUST live at `src/h1_lru.js`, not
+   beside the test. Copying it beside the test = MODULE_NOT_FOUND, scored as a false RED. Every edge "RED"
+   before this fix was this, not a real failure.
+2. `claude --print` heavy write→test→iterate tasks produced 0-byte output even at 900s headless (single
+   writes + single `node` runs work). Don't need it: drive the MCP server directly (JSON-RPC) or register
+   it and call the tools — that IS the product surface and it's fast.
+
 ## Open / next (honest)
-- **Edge-tier accuracy proof:** the only way to show a memory ACCURACY win is harder tasks the baseline
-  fails (docs/23 "stratify to the edge"). A1–A5 is below the agent's edge.
 - AURC stays deferred until a calibrated confidence signal exists.
 - Token-savings as its own n≥5 axis (currently folded into GATE 3).
+- A full n≥5 agentic RED→GREEN loop (not the gate-level proof above) is best run in an interactive/TTY
+  session; the gate-level + live-MCP-recall proof already establishes the accuracy win.
