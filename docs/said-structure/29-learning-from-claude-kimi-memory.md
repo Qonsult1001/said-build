@@ -48,8 +48,49 @@ artifact you didn't explicitly choose to keep.
 
 ## Net recommendation (small, high-value)
 1. Auto-tag `project:<name>` at ingest → unlocks isolation + per-project delete + opt-in federation.
+   **DONE 2026-06-28** (doc 28 §2; `test_project_scope.rs`).
 2. Offer a "import Claude/Kimi memory" connector (their `MEMORY.md`/fact files → `.said` distilled
-   pointers) so `.said` becomes the durable, model-agnostic, single-file store — and the 31 MB plaintext
-   transcripts become disposable.
+   pointers) so `.said` becomes the durable, model-agnostic, single-file store — and the 111 MB plaintext
+   transcripts become disposable. **Design below.**
 3. Keep enforcing distil-not-dump (already the design) — it's both the recall-quality moat AND the privacy
    answer to the chat-history concern.
+
+## The import connector — design (research-grounded, the "ingest then discard the source" model)
+
+The owner's framing: **treat a Claude/Kimi session as a DOCUMENT I import once, then discard the source** —
+so the *questions and discussions* (not just the final notes) become durable context in `.said`, and the
+raw transcript can be deleted. Research on what to extract (2025 agent-memory state of the art):
+
+- **Mem0** — a two-stage pipeline: an LLM **extracts salient memory candidates** from the conversation,
+  then **consolidates** (add/update/delete by semantic similarity) to cut redundancy at the source. ⇒ the
+  connector must *distill + dedup*, not dump turns.
+- **Episodic vs semantic** (Zep/Letta) — store BOTH: the *episode* (what happened this session: decisions,
+  Q&A, file changes) AND the *semantic* fact (the durable invariant). ⇒ map to `.said` pillars: Episodic
+  for the session story, Procedural/Semantic for the distilled fix/decision.
+- **A-Mem / Zettelkasten** — each memory is a note with links to related notes (evolving graph). ⇒ reuse
+  `.said`'s `[[wikilink]]`/concept edges so an imported decision links to the code/fix it concerns.
+- **MemoryBank / forgetting** — strength decays unless reinforced. ⇒ imported episodes can decay; the
+  distilled facts persist (already `.said`'s decay/reconsolidate model).
+
+**What a Claude session actually contains (verified on disk):** the `.jsonl` has structured records —
+`user` (questions), `assistant` (answers/decisions), `attachment`, `file-history-snapshot` (what changed),
+`ai-title`, plus the distilled `MEMORY.md` facts. So there are THREE tiers to import, richest-first:
+1. **Distilled facts** (`MEMORY.md` + per-fact `.md`) → `remember`/`learn_fix`, tagged `project:<name>`.
+   Cheapest, highest-signal, no LLM.
+2. **Session episode** (the user↔assistant decisions + file-history) → ONE distilled Episodic note per
+   session ("wanted/decided/built/blockers/next" — the same journal shape point 2 resumes), via a BYO-LLM
+   extract+consolidate pass (Mem0 two-stage). This is the "questions & discussions become context" the
+   owner wants.
+3. **Raw transcript** → NOT stored. After 1+2, the `.jsonl` is **disposable** (the safety win).
+
+**Mechanism (reuses what exists, no new core):** generalize `browser_ingest` (external-pointer ingest) into
+a `memory_import` that reads a source dir (Claude `.claude/projects/<proj>/`, Kimi equiv), runs the
+distill pass (BYO-LLM, outside `.said` — same as the LoCoMo oracle / dream v3 pattern), writes Episodic +
+distilled frames tagged `project:<name>` + `source:claude|kimi` + `session:<id>`, then reports which source
+files are now safe to delete. Dedup via the existing `dedup_check`. Per-project delete (point 1) and
+session-resume (point 2) then work on the imported memories automatically.
+
+**Open questions for the build (decide before coding):** (a) is the distill pass mandatory (needs BYO-LLM)
+or optional (facts-only, no LLM)? (b) do we auto-delete the source `.jsonl` or just report "safe to
+delete"? (recommend: report, never auto-delete — the user owns that). (c) Kimi's on-disk memory format
+needs the same disk-shape check we did for Claude before wiring its reader.
