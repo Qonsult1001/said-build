@@ -17,6 +17,7 @@ Nothing here is marketing. Every claim in the **Shipped** section has either a m
 - [14.7 — Retrieval-time graph reconstruction (Layer 6)](14.7-layer6-graph.md)
 - [14.8 — Matryoshka sign-bit binarization preserves 1.0 on long-context MTEB](14.8-matryoshka-signbit.md)
 - [14.14 — Byte-exact tombstone restore with BLAKE3-chained audit](14.14-byte-exact-restore.md) — the retention + verification moat
+- [14.15 — Canon memory (the 80/20 split, stored once, rendered per language)](14.15-canon-memory.md) — store the 80% framework canon as language-neutral structured-NL intent; recall guides the LLM to render it in the active language. The structural-reuse moat: one canon → every language, agent writes only the 20%.
 
 ### Horizon (designed, mathematically grounded, not yet shipped)
 
