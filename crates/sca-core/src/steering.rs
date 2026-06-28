@@ -218,6 +218,22 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
         };
     }
 
+    // BLUEPRINT-FIRST TRIGGER (the reuse-the-80% nudge). When the prompt expresses INTENT TO BUILD a
+    // shape ("create/add/implement a ... endpoint/handler/service/...") AND `.said` already holds a
+    // blueprint for that shape, surface it on the trusted prompt channel as FACTUAL data: "you have a
+    // reusable structure for this — recall_blueprint and render it, write only the 20%." This is what
+    // makes the agent REUSE instead of recreate, without being told. Prompt-channel only (it's about
+    // what to build next, not a tool the agent is mid-using); fail-open when there's no build intent or
+    // no matching blueprint. Same factual, non-imperative framing the channel requires.
+    if matches!(event.phase, HookPhase::UserPromptSubmit | HookPhase::SessionStart)
+        && looks_like_build_intent(&intent)
+    {
+        let bps = crate::ask::recall_blueprints(brain, &intent, 1, 0.40);
+        if let Some(bp) = bps.into_iter().next() {
+            return HookDecision::Provide { context: render_blueprint_nudge(&bp) };
+        }
+    }
+
     let (cands, keywords) = crate::ask::ask(brain, &intent, 5, false, None);
     if cands.is_empty() { return HookDecision::Passthrough; }
     // FAIL-OPEN guard. For a literal GREP pattern (tool channels) we require LEXICAL GROUNDING (the
@@ -338,6 +354,33 @@ fn render_verified_fixes(fixes: &[crate::ask::RecalledFix]) -> String {
     }
     body.push_str("</project_memory>");
     body
+}
+
+/// Does the prompt express intent to BUILD a new shape (so a blueprint would help)? A verb of creation
+/// plus a structural noun. Deliberately conservative — a question ("how does X work") is NOT build
+/// intent, so we never nudge a blueprint at someone who's just reading. No hardcoded shape list; these
+/// are generic creation/structure words, not entity names.
+fn looks_like_build_intent(prompt: &str) -> bool {
+    let p = prompt.to_lowercase();
+    const VERBS: [&str; 6] = ["create", "add", "implement", "build", "scaffold", "write"];
+    const NOUNS: [&str; 9] = ["endpoint", "handler", "controller", "service", "route",
+                              "api", "resource", "command", "crud"];
+    VERBS.iter().any(|v| p.contains(v)) && NOUNS.iter().any(|n| p.contains(n))
+}
+
+/// Factual blueprint nudge for the trusted prompt channel — NOT an imperative against grep, just "you
+/// already have this structure; recall + render it." Carries the shape + the sections so the model can
+/// act without a second round-trip, and names the tool so it can pull the authoritative copy.
+fn render_blueprint_nudge(bp: &crate::ask::RecalledBlueprint) -> String {
+    format!(
+        "<project_memory source=\".said\" kind=\"blueprint\">\n\
+         You have a reusable structure for this shape from earlier work: \"{}\". Render these sections \
+         in the active language and write only the entity-specific parts — don't recreate the structure. \
+         Call recall_blueprint for the authoritative copy.\n\
+         Sections: {}\n\
+         </project_memory>",
+        bp.shape, cap_note(&bp.sections_json, FIX_NOTE_MAX),
+    )
 }
 
 /// Compact factual lines for the legacy (tool-adjacent) channels.
