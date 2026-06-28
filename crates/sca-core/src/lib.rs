@@ -38,6 +38,8 @@ pub mod plugin;
 pub mod code_search;
 #[cfg(feature = "code")]
 pub mod grammars;
+#[cfg(feature = "code")]
+pub mod harvest;
 pub mod crystalline;
 pub mod edit;
 pub mod frames;

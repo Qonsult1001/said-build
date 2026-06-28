@@ -290,6 +290,15 @@ enum Commands {
         #[arg(long, alias = "promote")]
         verified: bool,
     },
+    /// Scan an existing repo and auto-learn blueprints from REPEATED structures (support>=2). One-off
+    /// functions are skipped (clone-mining research: a pattern must repeat). Keep-first, so re-running
+    /// never clobbers a hand-tuned blueprint.
+    #[cfg(feature = "code")]
+    Harvest {
+        /// The repo directory to scan. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        dir: String,
+    },
     /// Recall the reusable structure (blueprint) for a shape.
     #[cfg(feature = "code")]
     RecallBlueprint {
@@ -1397,6 +1406,8 @@ fn run() {
         Commands::LearnBlueprint { ref shape, ref sections, ref sections_file, ref lang, ref label, verified } =>
             cmd_blueprint_write(cli.path.as_deref(), shape, sections.as_deref(), sections_file.as_deref(),
                 lang.as_deref(), label.as_deref(), verified, cli.json),
+        #[cfg(feature = "code")]
+        Commands::Harvest { ref dir } => cmd_harvest(cli.path.as_deref(), dir, cli.json),
         #[cfg(feature = "code")]
         Commands::RecallBlueprint { ref shape, min_similarity } =>
             cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, cli.json),
@@ -7026,6 +7037,43 @@ fn cmd_blueprint_write(
         println!("Kept-first: blueprint {} already exists for this shape (no-op)", doc_id);
     } else {
         println!("Learned blueprint {}", doc_id);
+    }
+    Ok(())
+}
+
+/// `said harvest <dir>` — scan an existing repo and auto-learn blueprints from REPEATED structures.
+/// Reuses the gitignore-aware walk; the core harvest engine (support>=2, size + similarity gates) does
+/// the clustering. Keep-first: re-running never clobbers a hand-tuned blueprint.
+#[cfg(feature = "code")]
+fn cmd_harvest(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> {
+    let root = Path::new(dir).canonicalize().map_err(|e| format!("resolve '{}': {}", dir, e))?;
+    if !root.is_dir() { return Err(format!("not a directory: {}", dir)); }
+    let patterns = load_gitignore(&root);
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_dir_gitignore(&root, &root, &patterns, &mut files);
+
+    let mut brain = open_brain(path)?;
+    let report = sca_core::harvest::harvest_blueprints(
+        &mut brain, files, |p| std::fs::read_to_string(p).ok());
+    brain.save()?;
+
+    if json {
+        let bps: Vec<_> = report.blueprints.iter()
+            .map(|(shape, support, id)| serde_json::json!({ "shape": shape, "support": support, "doc_id": id }))
+            .collect();
+        println!("{}", serde_json::json!({
+            "ok": true, "files_scanned": report.files_scanned, "functions_seen": report.functions_seen,
+            "blueprints_learned": report.clusters_found, "blueprints": bps,
+        }));
+    } else {
+        println!("Harvested {} blueprint(s) from {} files ({} functions scanned):",
+            report.clusters_found, report.files_scanned, report.functions_seen);
+        for (shape, support, id) in &report.blueprints {
+            println!("  {}  (seen {}x)  {}", shape, support, id);
+        }
+        if report.clusters_found == 0 {
+            println!("  (no structure repeated >=2x -- nothing to harvest)");
+        }
     }
     Ok(())
 }
