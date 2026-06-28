@@ -44,11 +44,11 @@ How to change a GENERATED section, eject, review: see "Controls" at the bottom -
 Across 3 files: **you own 8** sections, **.said generates 8** (re-emitted free on every entity).
 
 ## If you edit a GENERATED section (stated once)
-GENERATED sections are written by .said from a saved template and get rebuilt. If you change one,
-.said asks before rebuilding over it:
-- **Keep my change** -- stop auto-generating just that one section.
-- **Discard my change** -- restore the generated version.
-- **Take ownership** -- that section becomes yours forever; .said never regenerates it.
-To change a GENERATED section everywhere at once, change the saved template it comes from.
+GENERATED sections come from a saved template (the canon) so the same pattern is reused, not
+recreated. If you edit one because you prefer a different way, .said treats it as feedback and asks:
+- **Make this my new standard** -- update the canon; every future one is built your way (you stop
+  re-fixing the same thing).
+- **Just this once** -- keep your edit local; the canon is unchanged.
+(Keeping/reverting the edit itself is your editor's diff + git -- .said doesn't touch that.)
 
 History: [said.log.md](said.log.md)

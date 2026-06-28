@@ -7,7 +7,7 @@ spec: okf/1.0
 
 | File | S | Section | Class | Hash |
 |---|---|---|---|---|
-| invoice.rs | S1 | accept-and-audit | GENERATED | 9ebe8f38929d |
+| invoice.rs | S1 | accept-and-audit | GENERATED | 62d85c0fec6a |
 | invoice.rs | S2 | idempotency | GENERATED | 78543c1201b3 |
 | invoice.rs | S3 | guards | YOURS | 9bb1090f5c7e |
 | invoice.rs | S4 | save | YOURS | 0a2155b1e26c |

@@ -38,12 +38,12 @@ function genWiki(){
   }
   idx+=`## Totals\nAcross ${files.length} files: **you own ${totY}** sections, **.said generates ${totG}** (re-emitted free on every entity).\n\n`;
   idx+=`## If you edit a GENERATED section (stated once)\n`;
-  idx+=`GENERATED sections are written by .said from a saved template and get rebuilt. If you change one,\n`;
-  idx+=`.said asks before rebuilding over it:\n`;
-  idx+=`- **Keep my change** -- stop auto-generating just that one section.\n`;
-  idx+=`- **Discard my change** -- restore the generated version.\n`;
-  idx+=`- **Take ownership** -- that section becomes yours forever; .said never regenerates it.\n`;
-  idx+=`To change a GENERATED section everywhere at once, change the saved template it comes from.\n\n`;
+  idx+=`GENERATED sections come from a saved template (the canon) so the same pattern is reused, not\n`;
+  idx+=`recreated. If you edit one because you prefer a different way, .said treats it as feedback and asks:\n`;
+  idx+=`- **Make this my new standard** -- update the canon; every future one is built your way (you stop\n`;
+  idx+=`  re-fixing the same thing).\n`;
+  idx+=`- **Just this once** -- keep your edit local; the canon is unchanged.\n`;
+  idx+=`(Keeping/reverting the edit itself is your editor's diff + git -- .said doesn't touch that.)\n\n`;
   idx+=`History: [said.log.md](said.log.md)\n`;
   fs.writeFileSync(path.join(DIR,'said.index.md'),idx);
   // log
@@ -53,27 +53,30 @@ function genWiki(){
   console.log(`WIKI: regenerated said.index.md + said.log.md across ${files.length} files (${totY} YOURS / ${totG} GENERATED).`);
 }
 
-// (2) DRIFT WARNING — NOT a merge UI. Decision (14.15): don't reinvent keep/reject; lean on the host's
-// diff + git like Cursor/Claude. .said's job is only to WARN that a rebuild rewrites GENERATED sections
-// (YOURS are left untouched) and let the editor/git show the diff. `said eject <Sn>` is the explicit
-// "make this mine permanently" lever; there is no per-rebuild interactive menu.
-function driftCheck(bypass){
+// (2) LEARN FROM EDITS — the real feature (14.15). An edit to a GENERATED section is FEEDBACK: the user
+// prefers a different way. .said asks whether to PROMOTE it to the canon (the new standard for every
+// future entity) or keep it local — gated so a throwaway edit can't pollute the standard. (Keep/discard
+// of the edit itself is the host's diff+git job; we don't reinvent that.)
+function learnFromEdits(bypass){
   const logPath=path.join(DIR,'said.log.md');
   const prior={}; if(fs.existsSync(logPath)) for(const l of fs.readFileSync(logPath,'utf8').split('\n')){const m=l.match(/\| (\S+) \| S(\d+) .* \| (GENERATED|YOURS) \| (\w+) \|/);if(m)prior[`${m[1]}#S${m[2]}`]=m[4];}
-  let conflicts=[];
+  let edited=[];
   for(const f of files) for(const x of parse(f)){
-    if(x.klass!=='GENERATED')continue;             // only GENERATED can conflict (YOURS is preserved anyway)
+    if(x.klass!=='GENERATED')continue;             // a changed GENERATED section = a preference signal
     const key=`${f}#S${x.n}`, was=prior[key];
-    if(was && was!==x.hash) conflicts.push(key);
+    if(was && was!==x.hash) edited.push(key);
   }
-  if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections -- safe to rebuild (YOURS sections are always kept).');return;}
-  if(bypass){ console.log(`Rebuilding over edited GENERATED section(s): ${conflicts.join(', ')} (bypass on -- Claude permission standard). Review with git diff.`); return; }
-  console.log(`Heads up: rebuild will regenerate these GENERATED section(s) you edited: ${conflicts.join(', ')}.`);
-  console.log(`Your YOURS sections are untouched. Review the change as a normal diff (your editor / git diff) and keep or revert there.`);
-  console.log(`To make one of these yours permanently: said eject <file> <Sn>.`);
+  if(!edited.length){console.log('No edited GENERATED sections — canon unchanged.');return;}
+  for(const key of edited){
+    if(bypass){ console.log(`${key}: edited (bypass on) — promoting to the canon as the new standard.`); continue; }
+    console.log(`\nYou changed how ${key.split('#')[1]} works (in ${key.split('#')[0]}).`);
+    console.log(`  [1] Make this my new standard  -> update the canon; every future one is built your way.`);
+    console.log(`  [2] Just this once             -> keep your edit local; canon unchanged.`);
+    console.log(`  (review/keep the edit itself in your editor or git diff -- .said doesn't touch that.)`);
+  }
 }
 
 const cmd=process.argv[2];
 if(cmd==='wiki') genWiki();
-else if(cmd==='drift') driftCheck(process.argv.includes('--bypass'));
-else console.log('usage: said-canon-tool.js wiki | drift [--bypass]');
+else if(cmd==='learn') learnFromEdits(process.argv.includes('--bypass'));   // "promote my edits to the canon?"
+else console.log('usage: said-canon-tool.js wiki | learn [--bypass]');
