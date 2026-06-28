@@ -53,8 +53,9 @@ function genWiki(){
   console.log(`WIKI: regenerated said.index.md + said.log.md across ${files.length} files (${totY} YOURS / ${totG} GENERATED).`);
 }
 
-// (2) DRIFT GUARD — would .said overwrite a user-edited GENERATED section?
-function driftCheck(bypass){
+// (2) DRIFT GUARD — would .said overwrite a user-edited GENERATED section? INTERACTIVE: reads your choice.
+function ask(q){return new Promise(res=>{const rl=require('readline').createInterface({input:process.stdin,output:process.stdout});rl.question(q,a=>{rl.close();res((a||'').trim());});});}
+async function driftCheck(bypass){
   // simulate: the log has the LAST-rendered hashes; compare to current on-disk
   const logPath=path.join(DIR,'said.log.md');
   const prior={}; if(fs.existsSync(logPath)) for(const l of fs.readFileSync(logPath,'utf8').split('\n')){const m=l.match(/\| (\S+) \| S(\d+) .* \| (GENERATED|YOURS) \| (\w+) \|/);if(m)prior[`${m[1]}#S${m[2]}`]=m[4];}
@@ -64,20 +65,25 @@ function driftCheck(bypass){
     const key=`${f}#S${x.n}`, was=prior[key];
     if(was && was!==x.hash) conflicts.push({key, was, now:x.hash});
   }
-  if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections — safe to regenerate.');return;}
+  if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections -- safe to regenerate.');return;}
   for(const c of conflicts){
     // user-facing prompt: PLAIN words only (no canon/overwrite/eject jargon).
-    if(bypass) console.log(`[${c.key}] changed but bypass is on -> rebuilding over it (Claude permission standard).`);
-    else {
-      console.log(`\nYou changed an AUTO-GENERATED section (${c.key}). If .said rebuilds this file, your change here is lost.`);
-      console.log(`  [1] Keep my change       (stop auto-generating just this section)`);
-      console.log(`  [2] Discard my change    (restore the generated version)`);
-      console.log(`  [3] Take ownership       (this section is yours forever -- never regenerated)`);
-    }
+    if(bypass){ console.log(`[${c.key}] changed but bypass is on -> rebuilding over it (Claude permission standard).`); continue; }
+    console.log(`\nYou changed an AUTO-GENERATED section (${c.key}). If .said rebuilds this file, your change here is lost.`);
+    console.log(`  [1] Keep my change       (stop auto-generating just this section)`);
+    console.log(`  [2] Discard my change    (restore the generated version)`);
+    console.log(`  [3] Take ownership       (this section is yours forever -- never regenerated)`);
+    const choice = await ask('  choose 1 / 2 / 3: ');
+    if(choice==='1')      console.log(`  -> KEEP: ${c.key} stays as you wrote it; .said will not regenerate just this section.`);
+    else if(choice==='2') console.log(`  -> DISCARD: .said will restore the generated version of ${c.key} on next build.`);
+    else if(choice==='3') console.log(`  -> OWNED: ${c.key} is yours now; .said will never regenerate it.`);
+    else                  console.log(`  -> (no valid choice; left as-is, will ask again next build.)`);
   }
 }
 
 const cmd=process.argv[2];
-if(cmd==='wiki') genWiki();
-else if(cmd==='drift') driftCheck(process.argv.includes('--bypass'));
-else console.log('usage: said-canon-tool.js wiki | drift [--bypass]');
+(async()=>{
+  if(cmd==='wiki') genWiki();
+  else if(cmd==='drift') await driftCheck(process.argv.includes('--bypass'));
+  else console.log('usage: said-canon-tool.js wiki | drift [--bypass]');
+})();
