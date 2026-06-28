@@ -94,6 +94,17 @@ ACCURACY: the recalled invariant flips `h1_lru` COLD-RED → MEMORY-GREEN (node 
 the "world-class MCP, end-to-end" proof on the tool surface itself. Run:
 `node hard-eval/mcp_e2e.js`.
 
+## Blueprint (canon) memory → `test_blueprint.rs` + `hard-eval/blueprint_mcp_e2e.js`
+
+The reusable-80% channel (public name **blueprint**, internal **canon**): store a shape's structure once,
+reuse it instead of recreating it. Core (`crates/sca-core/tests/test_blueprint.rs`, 3 green): learn →
+recall-by-paraphrase round-trip; **KEEP-FIRST** dedup (a 2nd learn of the same shape is a no-op, the
+original stands — the one rule that differs from learn-fix's supersede); `promote` supersedes; project
+isolation. MCP (`hard-eval/blueprint_mcp_e2e.js`, 8/8 green as a separate JSON-RPC process): `tools/list`
+exposes both → learn → recall → keep-first no-op → original survives → `promote=true` supersedes. CLI
+(`said learn-blueprint`/`recall-blueprint`) proven as a real binary. All three surfaces call the ONE
+shared `sca_core::ask` engine (byte-identical). Run: `node hard-eval/blueprint_mcp_e2e.js`.
+
 ## Code bug-location (MCP) → `test_bug_location_e2e.rs`
 The "locate the bug, guide Claude" claim, measured on the two axes the MCP-for-coding research
 (MCP spec 2025-06-18; Anthropic tool-design; RepoCoder/SWE-bench/Lost-in-the-Middle; Serena/ast-grep
