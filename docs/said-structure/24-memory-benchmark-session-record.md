@@ -96,6 +96,22 @@ on the live MCP tools surface. Mirrors `hard-eval/RESULTS.md`'s prior interactiv
    writes + single `node` runs work). Don't need it: drive the MCP server directly (JSON-RPC) or register
    it and call the tools — that IS the product surface and it's fast.
 
+## 8. The REAL moat measure — agent-driven turns-to-fix (end-to-end, both arms through the agent)
+The earlier proofs were recall-only (does `.said` return the answer) or a gate-level proxy (the golden
+pasted in). Neither shows the agent USING the memory end-to-end. The correct test: run a real coding task,
+let the agent make the mistake, count turns to fix; then load `.said` and run the SAME task with memory +
+recall, count turns. Run on h1_lru with the agent (Claude) driving both arms — only difference is memory:
+
+| Arm | What happened | Turns to GREEN |
+|---|---|---|
+| **COLD** (no memory) | wrote the natural Map-based LRU → RED at test 5 (`4 !== -1`) → instrumented + reasoned out the order divergence → deduced the invariant → rewrote with DLL + insertAtHead-on-evict → GREEN | **4** |
+| **MEMORY** (`.said` loaded; recall_fix consulted first) | recall_fix handed the invariant up front (insertAtHead = size>1; "textbook trap fails 4!==-1") → wrote it right the FIRST time → GREEN | **1** |
+
+**Memory turned a 4-turn debug grind into a 1-turn solve** — it skipped the entire discover-the-mistake-
+and-debug cycle by carrying the non-obvious invariant a cold agent must rediscover. THIS is the moat:
+not "recall works" (it does, 5/5) but the turns-to-converge delta when an agent actually uses it. Memory:
+`turns-to-fix-moat`.
+
 ## Open / next (honest)
 - AURC stays deferred until a calibrated confidence signal exists.
 - Token-savings as its own n≥5 axis (currently folded into GATE 3).
