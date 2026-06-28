@@ -44,6 +44,24 @@ async fn main() -> SdkResult<()> {
         .skip_while(|a| a != "--path")
         .nth(1);
 
+    // PROJECT SCOPE (auto): the engine reads SAID_PROJECT to fold the owning project into fix/blueprint
+    // identity + tags (per-project isolation, opt-in cross-project reuse). The MCP server is the natural
+    // place to set it from the brain filename, so an agent gets project scoping with zero extra config.
+    // Caller-set SAID_PROJECT always wins. Derive from the brain stem: "vivere.said" -> "vivere",
+    // "card.vivere.said" (module) -> "vivere" (last dotted segment before .said). Empty/unknown -> unset.
+    if std::env::var("SAID_PROJECT").ok().filter(|s| !s.trim().is_empty()).is_none() {
+        if let Some(ref p) = said_path {
+            if let Some(stem) = std::path::Path::new(p).file_name().and_then(|n| n.to_str()) {
+                let stem = stem.strip_suffix(".said").unwrap_or(stem);
+                // module brains are "<module>.<project>.said" -> take the project (last segment).
+                let project = stem.rsplit('.').next().unwrap_or(stem).trim();
+                if !project.is_empty() && project != "said" {
+                    std::env::set_var("SAID_PROJECT", project);
+                }
+            }
+        }
+    }
+
     // If this is a module brain (e.g., card.vivere.said), load BOUNDARY.md
     // from the same directory as the architectural constitution.
     let boundary = said_path.as_ref().and_then(|p| {
