@@ -1,17 +1,5 @@
-// ============================================================================
-//  Create Invoice (dotnet)   |   full section map + how to edit:  said.index.md
-//  Each section is [Sn] ... [/Sn], in run order. The tag says if you may edit it:
-//    GENERATED = .said wrote it and re-writes it -> do NOT edit (your changes are lost).
-//                to change it: edit the canon, or run `said eject Sn` to take it over.
-//    YOURS     = .said keeps your code here -> edit freely.
-//
-//    [S1] accept-and-audit   GENERATED
-//    [S2] idempotency        GENERATED
-//    [S3] guards             YOURS
-//    [S4] save invoice       YOURS
-//    [S5] response           YOURS
-//    [S6] wrap + return      GENERATED
-// ============================================================================
+// Create Invoice (dotnet).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it) | YOURS (yes, kept).
 [ApiController]
 [Route("invoice")]
 public class InvoiceController : ControllerBase
@@ -22,32 +10,32 @@ public class InvoiceController : ControllerBase
     [HttpPost]
     public IActionResult Create([FromBody] CreateInvoiceRequest req)
     {
-        // [S1] accept-and-audit  -- GENERATED (do not edit; `said eject S1` to take over)
+        // [S1] accept-and-audit  GENERATED
         var responseId = Guid.NewGuid();
         _audit.Insert(req, responseId);
         // [/S1]
 
-        // [S2] idempotency  -- GENERATED (do not edit)
+        // [S2] idempotency  GENERATED
         if (_seen.Contains(req.IdempotencyKey)) return Conflict();
         _seen.Add(req.IdempotencyKey);
         // [/S2]
 
-        // [S3] guards  -- YOURS (edit freely; kept on regenerate)
+        // [S3] guards  YOURS
         if (string.IsNullOrEmpty(req.Number))
             return BadRequest(Envelope.Error("Number is required"));
         // [/S3]
 
-        // [S4] save invoice  -- YOURS (edit freely)
+        // [S4] save invoice  YOURS
         var id = Guid.NewGuid();
         _db.Execute("INSERT INTO Invoice(Id,Number,Amount) VALUES(@id,@n,@a)",
             new { id, n = req.Number, a = req.Amount });
         // [/S4]
 
-        // [S5] response  -- YOURS (edit freely)
+        // [S5] response  YOURS
         var data = new { Id = id, req.Number, req.Amount };
         // [/S5]
 
-        // [S6] wrap + return  -- GENERATED (do not edit)
+        // [S6] wrap + return  GENERATED
         var resp = Envelope.Ok(data, responseId);
         _audit.Update(responseId, 200, resp);
         return Ok(resp);
