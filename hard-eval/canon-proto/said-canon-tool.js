@@ -53,37 +53,27 @@ function genWiki(){
   console.log(`WIKI: regenerated said.index.md + said.log.md across ${files.length} files (${totY} YOURS / ${totG} GENERATED).`);
 }
 
-// (2) DRIFT GUARD — would .said overwrite a user-edited GENERATED section? INTERACTIVE: reads your choice.
-function ask(q){return new Promise(res=>{const rl=require('readline').createInterface({input:process.stdin,output:process.stdout});rl.question(q,a=>{rl.close();res((a||'').trim());});});}
-async function driftCheck(bypass){
-  // simulate: the log has the LAST-rendered hashes; compare to current on-disk
+// (2) DRIFT WARNING — NOT a merge UI. Decision (14.15): don't reinvent keep/reject; lean on the host's
+// diff + git like Cursor/Claude. .said's job is only to WARN that a rebuild rewrites GENERATED sections
+// (YOURS are left untouched) and let the editor/git show the diff. `said eject <Sn>` is the explicit
+// "make this mine permanently" lever; there is no per-rebuild interactive menu.
+function driftCheck(bypass){
   const logPath=path.join(DIR,'said.log.md');
   const prior={}; if(fs.existsSync(logPath)) for(const l of fs.readFileSync(logPath,'utf8').split('\n')){const m=l.match(/\| (\S+) \| S(\d+) .* \| (GENERATED|YOURS) \| (\w+) \|/);if(m)prior[`${m[1]}#S${m[2]}`]=m[4];}
   let conflicts=[];
   for(const f of files) for(const x of parse(f)){
     if(x.klass!=='GENERATED')continue;             // only GENERATED can conflict (YOURS is preserved anyway)
     const key=`${f}#S${x.n}`, was=prior[key];
-    if(was && was!==x.hash) conflicts.push({key, was, now:x.hash});
+    if(was && was!==x.hash) conflicts.push(key);
   }
-  if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections -- safe to regenerate.');return;}
-  for(const c of conflicts){
-    // user-facing prompt: PLAIN words only (no canon/overwrite/eject jargon).
-    if(bypass){ console.log(`[${c.key}] changed but bypass is on -> rebuilding over it (Claude permission standard).`); continue; }
-    console.log(`\nYou changed an AUTO-GENERATED section (${c.key}). If .said rebuilds this file, your change here is lost.`);
-    console.log(`  [1] Keep my change       (stop auto-generating just this section)`);
-    console.log(`  [2] Discard my change    (restore the generated version)`);
-    console.log(`  [3] Take ownership       (this section is yours forever -- never regenerated)`);
-    const choice = await ask('  choose 1 / 2 / 3: ');
-    if(choice==='1')      console.log(`  -> KEEP: ${c.key} stays as you wrote it; .said will not regenerate just this section.`);
-    else if(choice==='2') console.log(`  -> DISCARD: .said will restore the generated version of ${c.key} on next build.`);
-    else if(choice==='3') console.log(`  -> OWNED: ${c.key} is yours now; .said will never regenerate it.`);
-    else                  console.log(`  -> (no valid choice; left as-is, will ask again next build.)`);
-  }
+  if(!conflicts.length){console.log('DRIFT: no edited GENERATED sections -- safe to rebuild (YOURS sections are always kept).');return;}
+  if(bypass){ console.log(`Rebuilding over edited GENERATED section(s): ${conflicts.join(', ')} (bypass on -- Claude permission standard). Review with git diff.`); return; }
+  console.log(`Heads up: rebuild will regenerate these GENERATED section(s) you edited: ${conflicts.join(', ')}.`);
+  console.log(`Your YOURS sections are untouched. Review the change as a normal diff (your editor / git diff) and keep or revert there.`);
+  console.log(`To make one of these yours permanently: said eject <file> <Sn>.`);
 }
 
 const cmd=process.argv[2];
-(async()=>{
-  if(cmd==='wiki') genWiki();
-  else if(cmd==='drift') await driftCheck(process.argv.includes('--bypass'));
-  else console.log('usage: said-canon-tool.js wiki | drift [--bypass]');
-})();
+if(cmd==='wiki') genWiki();
+else if(cmd==='drift') driftCheck(process.argv.includes('--bypass'));
+else console.log('usage: said-canon-tool.js wiki | drift [--bypass]');
