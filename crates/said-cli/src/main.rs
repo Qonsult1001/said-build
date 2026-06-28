@@ -267,6 +267,38 @@ enum Commands {
     /// orchestrator stores, so the saved memory recalls well (not a one-line label).
     #[cfg(feature = "code")]
     FixTemplate,
+    /// Learn the reusable structure (blueprint) for a shape, once. Keep-first.
+    #[cfg(feature = "code")]
+    LearnBlueprint {
+        /// The shape this blueprint covers (the recall key).
+        #[arg(long)]
+        shape: String,
+        /// The sections payload as JSON.
+        #[arg(long)]
+        sections: Option<String>,
+        /// Read the sections payload from a file instead of --sections.
+        #[arg(long)]
+        sections_file: Option<String>,
+        /// Optional language tag.
+        #[arg(long)]
+        lang: Option<String>,
+        /// Optional provenance breadcrumb.
+        #[arg(long)]
+        label: Option<String>,
+        /// Replace the existing blueprint for the shape instead of keep-first.
+        #[arg(long)]
+        promote: bool,
+    },
+    /// Recall the reusable structure (blueprint) for a shape.
+    #[cfg(feature = "code")]
+    RecallBlueprint {
+        /// The shape to find a blueprint for.
+        #[arg(long)]
+        shape: String,
+        /// Minimum match score.
+        #[arg(long, default_value_t = 0.55)]
+        min_similarity: f32,
+    },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
     /// path, so an autonomous caller cannot delete the rest of a file.
@@ -1301,6 +1333,21 @@ fn open_brain(path: Option<&str>) -> Result<SaidFile, String> {
 }
 
 fn main() {
+    // The clap-derive help/parse builder for this large command enum is deeply recursive and can
+    // overflow the default 1MB main-thread stack on Windows (manifests as "thread 'main' has
+    // overflowed its stack" even on `--help`). Run the whole CLI on a worker thread with an 8MB
+    // stack so adding subcommands never re-triggers it.
+    let join = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn said main worker");
+    match join.join() {
+        Ok(()) => {}
+        Err(_) => std::process::exit(101),
+    }
+}
+
+fn run() {
     let cli = Cli::parse();
 
     let result = match cli.command {
@@ -1345,6 +1392,13 @@ fn main() {
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
         #[cfg(feature = "code")]
         Commands::FixTemplate => { print!("{}", said_prompts::coding::ITERATION_TEMPLATE); Ok(()) }
+        #[cfg(feature = "code")]
+        Commands::LearnBlueprint { ref shape, ref sections, ref sections_file, ref lang, ref label, promote } =>
+            cmd_blueprint_write(cli.path.as_deref(), shape, sections.as_deref(), sections_file.as_deref(),
+                lang.as_deref(), label.as_deref(), promote, cli.json),
+        #[cfg(feature = "code")]
+        Commands::RecallBlueprint { ref shape, min_similarity } =>
+            cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, cli.json),
         #[cfg(feature = "code")]
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
@@ -6934,6 +6988,75 @@ fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
         println!("{}", serde_json::json!({ "ok": true, "fix": serde_json::Value::Null }));
     } else {
         println!("No known fix above score {:.2} — fall through to the LLM.", min_similarity);
+    }
+    Ok(())
+}
+
+// BLUEPRINT (canon) handlers — same open-brain + JSON-output style as the fix handlers. The frame
+// format, keep-first dedup, and hashing live in the ONE shared writer in sca_core::ask
+// (learn_blueprint / promote_blueprint / recall_blueprints) so CLI + MCP never drift.
+#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "code")]
+fn cmd_blueprint_write(
+    path: Option<&str>, shape: &str, sections: Option<&str>, sections_file: Option<&str>,
+    lang: Option<&str>, label: Option<&str>, promote: bool, json: bool,
+) -> Result<(), String> {
+    let sections_json = match (sections, sections_file) {
+        (Some(_), Some(_)) => return Err("pass only one of --sections / --sections-file".into()),
+        (Some(s), None) => s.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| format!("read --sections-file {}: {}", f, e))?,
+        (None, None) => return Err("missing --sections or --sections-file".into()),
+    };
+    let sections_json = sections_json.trim_start_matches('\u{feff}').trim().to_string();
+    let mut brain = open_brain(path)?;
+    let doc_id = if promote {
+        sca_core::ask::promote_blueprint(&mut brain, shape, &sections_json, lang, label)
+    } else {
+        sca_core::ask::learn_blueprint(&mut brain, shape, &sections_json, lang, label)
+    };
+    // keep-first feedback: learn_blueprint is a no-op when the shape already exists, so the stored body
+    // won't contain the sections we just passed. Read back to tell the user learned vs kept-first.
+    let kept_first = !promote && brain.read(&doc_id)
+        .map(|body| !body.contains(sections_json.trim())).unwrap_or(false);
+    brain.save()?;
+    if json {
+        println!("{}", serde_json::json!({ "ok": true, "blueprint": doc_id,
+            "action": if promote { "promoted" } else if kept_first { "kept-first (no-op)" } else { "learned" } }));
+    } else if promote {
+        println!("Promoted blueprint {} (new standard for this shape)", doc_id);
+    } else if kept_first {
+        println!("Kept-first: blueprint {} already exists for this shape (no-op)", doc_id);
+    } else {
+        println!("Learned blueprint {}", doc_id);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "code")]
+fn cmd_recall_blueprint(path: Option<&str>, shape: &str, min_similarity: f32, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    match sca_core::ask::recall_blueprints(&mut brain, shape, 1, min_similarity).into_iter().next() {
+        Some(hit) => {
+            if json {
+                let sections: serde_json::Value = serde_json::from_str(&hit.sections_json)
+                    .unwrap_or(serde_json::Value::String(hit.sections_json.clone()));
+                println!("{}", serde_json::json!({ "ok": true, "blueprint": {
+                    "score": hit.score, "doc_id": hit.doc_id, "shape": hit.shape,
+                    "lang": hit.lang, "sections": sections,
+                    "note": "render these sections in the active language; write only the entity-specific slots",
+                }}));
+            } else {
+                println!("Blueprint ({:.2}) {}  shape={}", hit.score, hit.doc_id, hit.shape);
+                println!("  sections: {}", hit.sections_json);
+            }
+        }
+        None => {
+            if json {
+                println!("{}", serde_json::json!({ "ok": true, "blueprint": serde_json::Value::Null }));
+            } else {
+                println!("No known blueprint above score {:.2} — fall through to the LLM.", min_similarity);
+            }
+        }
     }
     Ok(())
 }
