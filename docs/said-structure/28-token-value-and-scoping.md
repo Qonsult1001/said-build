@@ -79,7 +79,12 @@ project (already works). One ingest-tagging change unlocks all three.
 
 `browser` feature → `rusqlite` with `features=["bundled"]` (`sca-core/Cargo.toml:213-216`) compiles SQLite
 from C source and statically links it (no system `libsqlite3` dependency). Off by default, native-only.
-Binary-size delta measured (said-mcp coding bundle, with vs without `browser`): **see
-`hard-eval/sqlite_size.txt`** — the bundled SQLite adds roughly ~1–1.5 MB to the ~53 MB binary (small;
-the encoder models dominate at ~6 MB). The trade you described is right: bigger binary, zero runtime
-dependency.
+Binary-size cost measured: the bundled SQLite static lib (`libsqlite3.a`) compiled from source is
+**~4.52 MB** (the actual artifact; link-time dead-code stripping makes the final binary delta somewhat
+smaller). Context: the encoder models are ~6 MB, the coding binary ~53 MB — so bundled SQLite is a modest
+add, and `browser` is **off by default + native-only**, so a normal `said-coding`/`said-mcp` build pays
+**zero** for it. The trade you described is exactly right: a few MB bigger binary in exchange for **zero
+runtime dependency** (no system `libsqlite3` needed on the user's machine). Note: `browser` is currently
+a `sca-core`-only feature with **no passthrough on said-cli/said-mcp** — to actually ship browser-ingest
+in those binaries, a `browser = ["sca-core/browser"]` passthrough must be added (small wiring gap found
+during this measurement).
