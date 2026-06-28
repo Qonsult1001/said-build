@@ -957,6 +957,15 @@ pub const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
 const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
 const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 
+/// Marker strings for stored BLUEPRINT frames (public name) = canon (internal): the reusable 80%
+/// structure, keyed by SHAPE, learned once and rendered per language. Parallel to the coding-fix
+/// markers above so the CLI/MCP write byte-compatible frames into the same Procedural store. The
+/// distinction from a fix: a fix is the specific 20% (problem -> solution); a blueprint is the
+/// reusable 80% (shape -> sections), with KEEP-FIRST dedup (re-learning the same shape is a no-op).
+pub const BLUEPRINT_KIND_TAG: &str = "blueprint";
+pub const BLUEPRINT_SHAPE_PREFIX: &str = "shape::";
+const BLUEPRINT_SECTIONS_SEP: &str = "\n<<<SAID-BP-SECTIONS>>>\n";
+
 /// A recalled verified coding-fix: the full human-readable note (the story an LLM
 /// reloads), the verified change-set JSON, and the match score.
 pub struct RecalledFix {
@@ -1215,6 +1224,166 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
         })
         .take(k.max(1))
         .collect()
+}
+
+// ===========================================================================================
+// BLUEPRINT memory (public name) = canon (internal): the reusable 80% structure.
+// Mirrors the coding-fix engine (same Procedural store, same scorer, same lang/project scoping)
+// with ONE deliberate rule change: KEEP-FIRST dedup. learn_blueprint of an existing shape is a
+// no-op (the original stands); promote_blueprint is the explicit "new standard" supersede.
+// ===========================================================================================
+
+/// A recalled blueprint: the shape it covers, its sections payload (the language-neutral
+/// structure the LLM renders in the active language), and the match score.
+pub struct RecalledBlueprint {
+    pub doc_id: String,
+    pub score: f32,
+    /// The shape line (e.g. "Create<Entity> REST endpoint") — the human-readable key.
+    pub shape: String,
+    /// The stored sections payload (JSON the LLM renders per language).
+    pub sections_json: String,
+    /// The blueprint's language from its `lang:` meta tag, if any (None = language-neutral).
+    pub lang: Option<String>,
+}
+
+/// Stable identity for a blueprint = its SHAPE (folded with SAID_PROJECT, mirroring fixes), so two
+/// projects can each hold their own blueprint for the same shape. The doc_id is `shape::<blake3-16>`.
+fn blueprint_identity(shape: &str, project: &Option<String>) -> String {
+    let base = shape.trim().to_ascii_lowercase();
+    let base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    match project {
+        Some(p) => format!("{}\u{1f}{}", p, base),
+        None => base,
+    }
+}
+
+/// LEARN a blueprint — KEEP-FIRST: if the shape already has a blueprint, this is a NO-OP and the
+/// existing doc_id is returned unchanged (the original stands). Use `promote_blueprint` to replace.
+/// Returns the blueprint's doc_id (`shape::<hash>`). Shared by CLI `learn-blueprint` + MCP.
+pub fn learn_blueprint(
+    brain: &mut SaidFile,
+    shape: &str,
+    sections_json: &str,
+    lang: Option<&str>,
+    label: Option<&str>,
+) -> String {
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let id16 = fix_hash(&blueprint_identity(shape, &project));
+    let doc_id = format!("{}{}", BLUEPRINT_SHAPE_PREFIX, id16);
+
+    // KEEP-FIRST: the one engine rule that differs from learn-fix. An existing blueprint for this
+    // shape is authoritative — a later learn of the same shape does NOT overwrite it (unlike a fix,
+    // where the latest verified solution supersedes). Re-learning is therefore safe + idempotent.
+    if brain.read(&doc_id).is_some() {
+        return doc_id;
+    }
+
+    let body = blueprint_body(shape, sections_json);
+    let mut tags = vec![
+        FIX_PILLAR_TAG.to_string(),
+        BLUEPRINT_KIND_TAG.to_string(),
+    ];
+    if let Some(l) = label { if !l.trim().is_empty() { tags.push(format!("pr:{}", l.trim())); } }
+    if let Some(l) = lang { if !l.trim().is_empty() { tags.push(format!("lang:{}", l.trim().to_ascii_lowercase())); } }
+    if let Some(ref proj) = project { tags.push(format!("project:{}", proj)); }
+
+    brain.remember_with_pillar(
+        Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
+        crate::frames::Pillar::Procedural, tags,
+    );
+    let _ = brain.build_index();
+    doc_id
+}
+
+/// PROMOTE — the learn-from-edit "make this the new standard": REPLACE the blueprint for this shape
+/// (supersede, the deliberate exception to keep-first). Returns the doc_id.
+pub fn promote_blueprint(
+    brain: &mut SaidFile,
+    shape: &str,
+    sections_json: &str,
+    lang: Option<&str>,
+    label: Option<&str>,
+) -> String {
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let id16 = fix_hash(&blueprint_identity(shape, &project));
+    let doc_id = format!("{}{}", BLUEPRINT_SHAPE_PREFIX, id16);
+    let body = blueprint_body(shape, sections_json);
+    let mut tags = vec![FIX_PILLAR_TAG.to_string(), BLUEPRINT_KIND_TAG.to_string()];
+    if let Some(l) = label { if !l.trim().is_empty() { tags.push(format!("pr:{}", l.trim())); } }
+    if let Some(l) = lang { if !l.trim().is_empty() { tags.push(format!("lang:{}", l.trim().to_ascii_lowercase())); } }
+    if let Some(ref proj) = project { tags.push(format!("project:{}", proj)); }
+    // same doc_id -> put() tombstones the old frame (supersede), unlike keep-first learn.
+    brain.remember_with_pillar(
+        Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
+        crate::frames::Pillar::Procedural, tags,
+    );
+    let _ = brain.build_index();
+    doc_id
+}
+
+/// RECALL TOP-K blueprints for a shape query, highest score first. Reuses the coding-fix semantic
+/// scorer, filtered to BLUEPRINT_KIND_TAG, with the same SAID_RECALL_LANG/SAID_RECALL_PROJECT
+/// hard-filters as fixes.
+pub fn recall_blueprints(brain: &mut SaidFile, shape: &str, k: usize, min_score: f32) -> Vec<RecalledBlueprint> {
+    let lang_want = std::env::var("SAID_RECALL_LANG").ok()
+        .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    let project_want = std::env::var("SAID_RECALL_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let fetch_k = if lang_want.is_some() || project_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+
+    let pool = best_blueprints(brain, shape, fetch_k.max(8));
+    pool.into_iter()
+        .filter(|(_, score)| *score >= min_score)
+        .filter_map(|(doc_id, score)| {
+            // Read lang + project meta tags in one immutable borrow before the mutable get() (mirrors
+            // recall_coding_fixes). project hard-filter: keep matching project, or untagged (agnostic).
+            let (meta_lang, meta_project) = brain.frames.get_meta(&doc_id).map(|m| (
+                m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()),
+                m.tags.iter().find_map(|t| t.strip_prefix("project:")).map(|s| s.to_string()),
+            )).unwrap_or((None, None));
+            if let Some(want) = &project_want {
+                if let Some(have) = &meta_project { if have != want { return None; } }
+            }
+            let body = brain.get(&doc_id).unwrap_or_default();
+            Some(RecalledBlueprint {
+                shape: blueprint_shape(&body),
+                sections_json: blueprint_sections(&body),
+                doc_id, score, lang: meta_lang,
+            })
+        })
+        .filter(|bp| match &lang_want {
+            None => true,
+            Some(want) => match bp.lang.clone() { Some(have) => &have == want, None => true },
+        })
+        .take(k.max(1))
+        .collect()
+}
+
+/// Blueprint scorer — coding-fix fusion path, filtered to blueprint frames.
+fn best_blueprints(brain: &mut SaidFile, shape: &str, k: usize) -> Vec<(String, f32)> {
+    let fetch = k.saturating_mul(4).max(16);
+    let (cands, _) = ask(brain, shape, fetch, true, None);
+    let mut scored: Vec<(String, f32)> = cands.into_iter()
+        .filter(|c| brain.frames.get_meta(&c.doc_id)
+            .map(|m| m.tags.iter().any(|t| t == BLUEPRINT_KIND_TAG)).unwrap_or(false))
+        .map(|c| (c.doc_id, c.confidence))
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k.max(1));
+    scored
+}
+
+fn blueprint_body(shape: &str, sections_json: &str) -> String {
+    format!("SHAPE: {}{}{}", shape.trim(), BLUEPRINT_SECTIONS_SEP, sections_json.trim())
+}
+fn blueprint_shape(body: &str) -> String {
+    let head = body.split(BLUEPRINT_SECTIONS_SEP).next().unwrap_or("");
+    head.strip_prefix("SHAPE: ").unwrap_or(head).trim().to_string()
+}
+fn blueprint_sections(body: &str) -> String {
+    body.split(BLUEPRINT_SECTIONS_SEP).nth(1).unwrap_or("").trim().to_string()
 }
 
 /// Parse the stored `lang:<x>` token from a coding-fix frame body (e.g. a curated FILES
