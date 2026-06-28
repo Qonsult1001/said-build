@@ -964,6 +964,10 @@ const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
 /// reusable 80% (shape -> sections), with KEEP-FIRST dedup (re-learning the same shape is a no-op).
 pub const BLUEPRINT_KIND_TAG: &str = "blueprint";
 pub const BLUEPRINT_SHAPE_PREFIX: &str = "shape::";
+/// Companion action-residue frame prefix for a blueprint — mirrors FIX_ACTION_ID_PREFIX. Its content is
+/// ONLY the shape's action residue, so its fingerprint reflects the INTENT (what shape this is), letting
+/// recall_blueprints score intent the same way recall_fix does (separates "create" from "list" etc).
+pub const BP_ACTION_ID_PREFIX: &str = "bpaction::";
 const BLUEPRINT_SECTIONS_SEP: &str = "\n<<<SAID-BP-SECTIONS>>>\n";
 
 /// A recalled verified coding-fix: the full human-readable note (the story an LLM
@@ -1297,6 +1301,18 @@ pub fn learn_blueprint(
         Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
         crate::frames::Pillar::Procedural, tags,
     );
+    // Action-residue companion (mirrors learn_coding_fix's fixaction:: frame): content is ONLY the
+    // shape's intent residue, so its fingerprint reflects WHAT SHAPE this is (create/list/...), which
+    // recall scores as the intent term. This is what makes a natural-language query recall the blueprint
+    // the same way recall_fix recalls a fix from a paraphrase — the doc's "shape = intent key".
+    let action = action_residue(shape);
+    if !action.is_empty() {
+        let action_id = format!("{}{}", BP_ACTION_ID_PREFIX, id16);
+        brain.remember_with_pillar(
+            Some(&action_id), &action, Some(BLUEPRINT_KIND_TAG),
+            crate::frames::Pillar::Procedural, vec![BLUEPRINT_KIND_TAG.to_string()],
+        );
+    }
     let _ = brain.build_index();
     doc_id
 }
@@ -1352,15 +1368,49 @@ pub fn recall_blueprints(brain: &mut SaidFile, shape: &str, k: usize, min_score:
         .collect()
 }
 
-/// Blueprint scorer — coding-fix fusion path, filtered to blueprint frames.
-fn best_blueprints(brain: &mut SaidFile, shape: &str, k: usize) -> Vec<(String, f32)> {
-    let fetch = k.saturating_mul(4).max(16);
-    let (cands, _) = ask(brain, shape, fetch, true, None);
-    let mut scored: Vec<(String, f32)> = cands.into_iter()
+/// Blueprint scorer — MIRRORS best_coding_fixes exactly (rel_conf spine + semantic fingerprint of the
+/// full query + action-isolated INTENT fingerprint against the bpaction:: companion), so a natural-language
+/// query recalls a blueprint by INTENT the way recall_fix does — not by lexical name overlap. This is the
+/// doc's "shape = intent key, fingerprinted like recall_fix" (14.15).
+fn best_blueprints(brain: &mut SaidFile, query: &str, k: usize) -> Vec<(String, f32)> {
+    use std::collections::HashMap;
+    let n = brain.frames.active_count();
+    let fetch = (n / 2).clamp(50, 1000);
+
+    let (fusion_cands, _kw) = ask(brain, query, fetch, true, None);
+    // Real blueprint frames only (shape::...), NOT the bpaction:: companions (also blueprint-tagged).
+    let ranked: Vec<(String, f32)> = fusion_cands.iter()
+        .filter(|c| c.doc_id.starts_with(BLUEPRINT_SHAPE_PREFIX))
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == BLUEPRINT_KIND_TAG)).unwrap_or(false))
-        .map(|c| (c.doc_id, c.confidence))
+        .map(|c| (c.doc_id.clone(), c.confidence))
         .collect();
+    if ranked.is_empty() { return Vec::new(); }
+    let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
+
+    // SEMANTIC: pure-semantic 1-bit fingerprint of the full query against every frame.
+    let sem_fp: HashMap<String, f32> = brain.rank_by_fingerprint(query, fetch).into_iter().collect();
+    // INTENT: action-isolated fingerprint against the bpaction:: companions (what SHAPE is being asked for).
+    let q_action = action_residue(query);
+    let action_fp: HashMap<String, f32> = if q_action.is_empty() {
+        HashMap::new()
+    } else {
+        brain.rank_by_fingerprint(&q_action, fetch).into_iter()
+            .filter_map(|(d, s)| d.strip_prefix(BP_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
+            .collect()
+    };
+
+    let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
+        let id16 = doc_id.strip_prefix(BLUEPRINT_SHAPE_PREFIX).unwrap_or(doc_id);
+        let intent = action_fp.get(id16).copied().unwrap_or(0.0);
+        let semantic = sem_fp.get(doc_id).copied()
+            .or_else(|| sem_fp.get(&format!("{}{}", BP_ACTION_ID_PREFIX, id16)).copied())
+            .unwrap_or(0.0);
+        let ask_spine = conf / top_conf;
+        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) };
+        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
+        (doc_id.clone(), score)
+    }).collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(k.max(1));
     scored

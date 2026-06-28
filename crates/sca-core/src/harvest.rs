@@ -178,7 +178,9 @@ fn common_skeleton(members: &[&Vec<String>]) -> Vec<String> {
         .fold(Vec::new(), |mut acc, s| { if !acc.contains(&s) { acc.push(s); } acc }) // dedup, keep order
 }
 
-/// A human-readable shape name from the representative function name. "create_invoice" -> "create<Entity>".
+/// A human-readable shape name = the intent KEY (clean), not a place to stuff the skeleton. "create_invoice"
+/// -> "create<Entity>". Recall keys on the intent FINGERPRINT (like recall_fix's action residue), NOT on
+/// lexical name content — so the key stays clean and the skeleton lives in the sections (the payload).
 fn derive_shape_name(rep_name: &str, support: usize) -> String {
     format!("{}<Entity> (harvested, {}x)", leading_verb(rep_name), support)
 }
