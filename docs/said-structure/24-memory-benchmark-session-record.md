@@ -112,6 +112,24 @@ and-debug cycle by carrying the non-obvious invariant a cold agent must rediscov
 not "recall works" (it does, 5/5) but the turns-to-converge delta when an agent actually uses it. Memory:
 `turns-to-fix-moat`.
 
+### Multi-task version (4 tasks, both arms, MCP-native — recall_fix consulted, no claude --print)
+Extended to all 4 hard tasks, agent-driven, memory delivered through the live `.said` recall (goldens
+pre-loaded, recall 0.73-0.83). turns-to-GREEN (gate = node test, the judge):
+
+| Task | COLD turns | MEMORY turns | note |
+|---|---|---|---|
+| h1_lru (hidden invariant) | **4** (write→RED→probe→reason→fix) | **1** | recall handed the invariant up front |
+| h2_intervals (bugs are commented) | 1 | 1 | tie — solved cold first try |
+| h3_store (TTL) | 1 | 1 | tie |
+| h4_ratelimiter (token bucket) | 1 | 1 | tie |
+| **Total** | **7** | **4** | **−43% total; −75% on the edge task** |
+
+pass@1 = 4/4 both arms. **The win is 100% on the one task with a non-obvious trap (h1).** On tasks a
+capable agent already nails cold (1 turn), memory cannot beat 1 — the documented "base agent saturates"
+case. Honest caveat: a STRONG agent (Claude here) only has headroom on 1 of 4; a WEAKER model (the
+RESULTS.md gpt-oss case) fails more tasks cold, so the memory gap widens — that is where the moat is
+largest. Either way the mechanism is the same: recall delivers the gotcha BEFORE the agent falls into it.
+
 ## Open / next (honest)
 - AURC stays deferred until a calibrated confidence signal exists.
 - Token-savings as its own n≥5 axis (currently folded into GATE 3).
