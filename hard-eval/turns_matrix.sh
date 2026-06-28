@@ -50,10 +50,12 @@ setup_dir () { # idx dir
 run_one () { # arm idx sample -> "turns pass valid"
   local arm="$1" idx="$2" s="$3"
   local tid="${TID[$idx]}"
-  local d="$ROOT/${arm}_${tid}_s${s}"; setup_dir "$idx" "$d"
-  if [ "$arm" = "memory" ]; then cp "$MB" "$d/code.said"; ( cd "$d" && "$SAID" --path "$d/code.said" setup >/dev/null 2>&1 ); fi
+  local d="$ROOT/${arm}_${tid}_s${s}"
   local f="$OUT/${arm}_${tid}_s${s}.json" attempt=0
   while [ "$attempt" -le "$RETRIES" ]; do
+    # fresh stub each attempt (a prior timed-out attempt may have left partial edits)
+    setup_dir "$idx" "$d"
+    if [ "$arm" = "memory" ]; then cp "$MB" "$d/code.said"; ( cd "$d" && "$SAID" --path "$d/code.said" setup >/dev/null 2>&1 ); fi
     ( cd "$d" && timeout "$TIMEOUT_S" claude --print --permission-mode bypassPermissions --output-format json "${TASK[$idx]}" </dev/null >"$f" 2>/dev/null )
     [ -s "$f" ] && grep -q '"result":"' "$f" 2>/dev/null && break
     attempt=$((attempt+1))

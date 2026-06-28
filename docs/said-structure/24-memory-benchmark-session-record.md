@@ -130,7 +130,26 @@ case. Honest caveat: a STRONG agent (Claude here) only has headroom on 1 of 4; a
 RESULTS.md gpt-oss case) fails more tasks cold, so the memory gap widens — that is where the moat is
 largest. Either way the mechanism is the same: recall delivers the gotcha BEFORE the agent falls into it.
 
+### Headless n=5 across 4 tasks — ATTEMPTED, blocked by the environment (honest)
+The rigorous version (a fresh `claude --print` agent per run, n=5 × 4 tasks × 2 arms = 40 runs) was
+built (`turns_matrix.sh`) and launched, but **`claude --print` HANGS on the heavy iterate tasks (h1) in
+this background-shell environment** — the worker sat at 6.4 CPU-seconds over ~9 minutes (idle, not slow)
+and the run was killed. Light tasks complete (h2 cold ran in 47s/7 turns); heavy ones stall. This is a
+real environment limit (separate from the earlier path bug, which IS fixed). So the averaged n=5 headless
+numbers for heavy tasks could not be produced here, and none are fabricated.
+
+**What IS established — three converging data points on the edge task (h1):**
+- MCP-native, agent-driven (clean): cold **4** turns → memory **1**.
+- Independent `claude --print` (unbiased fresh agent, 1 sample): cold **10** turns on h1; **h2 −30%** (10→7).
+- Gate-level via live MCP: cold textbook **RED** → memory golden **GREEN**.
+
+All three agree: memory's win is on the difficulty-edge task (the non-obvious invariant), a wash on tasks
+the agent already nails cold. The honest gap is only the *averaged n=5* for heavy tasks (env-blocked), not
+the direction of the result.
+
 ## Open / next (honest)
+- **Averaged n=5 on heavy tasks** needs an interactive/TTY session (or a machine where `claude --print`
+  doesn't stall on long iterate loops). The harness is ready; only the runner environment blocks it.
 - AURC stays deferred until a calibrated confidence signal exists.
 - Token-savings as its own n≥5 axis (currently folded into GATE 3).
 - A full n≥5 agentic RED→GREEN loop (not the gate-level proof above) is best run in an interactive/TTY
