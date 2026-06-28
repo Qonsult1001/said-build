@@ -1,0 +1,5 @@
+experiment|arm|turns|note
+single-build|cold-no-memory|6|5 fixes + 1 wasted on round-at-END trap
+single-build|.said-recall|1|all 5 invariants recalled, one informed pass
+lifecycle-reencounter|claude-native-memory|2|old note decayed over lifecycle; rediscovered round-at-END
+lifecycle-reencounter|.said-recall|1|recalled round-at-END from a DIFFERENT feature, cross-session
