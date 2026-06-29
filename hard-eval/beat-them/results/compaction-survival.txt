@@ -1,0 +1,18 @@
+COMPACTION SURVIVAL e2e (real said.exe)
+
+WITHOUT .said: exact detail lost on compaction (agent goes stupid).
+WITH .said: re-grounded verbatim.
+
+<work_state source=".said" kind="resume-after-compaction">
+Resume EXACTLY here (the host compacted; this is the lost detail, verbatim):
+TASK: building compaction-survival in said-vault
+NEXT: wire SessionStart re-ground, then run the beat-them e2e
+PLAN: step 2 of 3 (work-state continuity)
+DECISIONS: OWN not pointer | NL intent phases not call-tokens
+EXACT: idempotency threshold = size > 1, NOT >= 1 | MIN_COMMON_STEPS = 3 | recall score = rel_conf*(0.3 + 0.4*sem + 0.3*intent)  (ask.rs:1542) | last good commit = fd2bf9e
+FILES: crates/said-vault/src/workstate.rs
+RULED OUT (don't retry): Soft-ZCA whitening (tested negative, recall@3 stayed 1/3)
+</work_state>
+
+
+PASS -- .said re-grounds the EXACT work-state after compaction; the host loses it, .said does not.
