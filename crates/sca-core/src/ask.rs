@@ -1301,15 +1301,11 @@ pub fn learn_blueprint(
         Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
         crate::frames::Pillar::Procedural, tags,
     );
-    // Action-residue companion (mirrors learn_coding_fix's fixaction:: frame): its fingerprint reflects
-    // the shape's intent so recall scores intent the way recall_fix does. The signal is the shape name
-    // PLUS the de-camel'd section terms (the skeleton = what the shape DOES). Two recall modes, BOTH
-    // covered by this: (a) an AUTHORED blueprint with a rich shape ("Create<Entity> REST endpoint")
-    // recalls from natural-language prose; (b) a HARVESTED blueprint (shape = bare verb, skeleton =
-    // implementation calls) recalls from the CODE VOCABULARY the agent is actually writing (the function
-    // + the calls it's making) — which shares the skeleton's terms. Harvested ≠ NL-prose recall; that's
-    // by design (the steering hook fires on real code, not abstract questions). See 14.15.
-    let action = action_residue(&format!("{} {}", shape, sections_words(sections_json)));
+    // Action-residue companion — BYTE-IDENTICAL to learn_coding_fix's fixaction:: frame: content is the
+    // action residue of the INTENT KEY (the shape), so recall scores intent exactly as recall_fix does.
+    // 14.15: "the shape is the intent key, fingerprinted like recall_fix." We do NOT mix the sections
+    // (the payload) into the key — that would diverge from the proven engine.
+    let action = action_residue(shape);
     if !action.is_empty() {
         let action_id = format!("{}{}", BP_ACTION_ID_PREFIX, id16);
         brain.remember_with_pillar(
@@ -1404,31 +1400,25 @@ fn best_blueprints(brain: &mut SaidFile, query: &str, k: usize) -> Vec<(String, 
             .collect()
     };
 
-    // STRUCTURE: research (arXiv:2507.02107 + structure-aware re-rankers) is clear that pure embedding
-    // mis-ranks structural TEMPLATES — the fix is a structure score (Jaccard over structural tokens)
-    // blended with semantics, which beats embedding-alone by up to 57% F1. A query carrying a shape's
-    // own vocabulary structurally overlaps THAT shape's skeleton, not a generically-central one. We read
-    // each blueprint's stored skeleton tokens and Jaccard them against the query's tokens.
-    let q_tokens = token_set(query);
+    // Scoring is BYTE-IDENTICAL to best_coding_fixes (the proven engine 14.15 mandates reusing — "Recall
+    // = the existing engine, pointed at structure. No new retrieval mechanism."): rel_conf spine +
+    // semantic fingerprint of the query + action-isolated INTENT against the bpaction:: companion. The
+    // only differences from the fix path are the doc_id prefix (shape:: vs fix::) and the companion prefix
+    // (bpaction:: vs fixaction::) — NOT the formula. Recall-ranking weakness is therefore a SHARED
+    // property of recall_fix, documented as a known limit, never patched as a blueprint-only divergence.
     let dbg = std::env::var("SAID_BP_SCORE_DEBUG").is_ok();
-
     let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
         let id16 = doc_id.strip_prefix(BLUEPRINT_SHAPE_PREFIX).unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
         let semantic = sem_fp.get(doc_id).copied()
             .or_else(|| sem_fp.get(&format!("{}{}", BP_ACTION_ID_PREFIX, id16)).copied())
             .unwrap_or(0.0);
-        // structural overlap of the query terms with this blueprint's skeleton (its sections).
-        let body = brain.read(doc_id).unwrap_or_default();
-        let structure = jaccard(&q_tokens, &token_set(&blueprint_sections(&body)));
         let ask_spine = conf / top_conf;
-        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine).max(structure) };
-        // weights: semantic + intent + STRUCTURE (the research-backed template-match signal). Structure
-        // breaks the near-ties that semantic centrality alone gets wrong.
-        let score = rel_conf * (0.25 + 0.30 * semantic + 0.20 * intent + 0.25 * structure);
+        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) };
+        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
         if dbg {
-            eprintln!("[bp-score] {} ask={:.3} rel={:.3} sem={:.3} intent={:.3} struct={:.3} -> {:.3}",
-                doc_id, conf, rel_conf, semantic, intent, structure, score);
+            eprintln!("[bp-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
+                doc_id, conf, rel_conf, semantic, intent, score);
         }
         (doc_id.clone(), score)
     }).collect();
@@ -1437,41 +1427,10 @@ fn best_blueprints(brain: &mut SaidFile, query: &str, k: usize) -> Vec<(String, 
     scored
 }
 
-/// Lowercase de-camel'd token SET of a string (for the structural Jaccard). "HttpRequestMessage" ->
-/// {http, request, message}; "parse_args" -> {parse, args}. 1-2 char tokens dropped as noise.
-fn token_set(s: &str) -> std::collections::HashSet<String> {
-    sections_words(s).split_whitespace().filter(|w| w.len() >= 3).map(|w| w.to_string()).collect()
-}
-/// Jaccard similarity of two token sets — the structure score the re-ranker research recommends.
-fn jaccard(a: &std::collections::HashSet<String>, b: &std::collections::HashSet<String>) -> f32 {
-    if a.is_empty() || b.is_empty() { return 0.0; }
-    let inter = a.intersection(b).count() as f32;
-    let union = a.union(b).count() as f32;
-    if union == 0.0 { 0.0 } else { inter / union }
-}
-
 fn blueprint_body(shape: &str, sections_json: &str) -> String {
     format!("SHAPE: {}{}{}", shape.trim(), BLUEPRINT_SECTIONS_SEP, sections_json.trim())
 }
 
-/// De-camel/snake the section identifiers into natural words for the intent companion, so the shape's
-/// fingerprint reflects what it DOES. "HttpRequestMessage" -> "http request message"; "parse_page" ->
-/// "parse page". Drops JSON punctuation. The sections are the richest signal of a shape's intent.
-fn sections_words(sections_json: &str) -> String {
-    let mut out = String::new();
-    let mut prev_alnum_lower = false;
-    for c in sections_json.chars() {
-        if c.is_alphanumeric() {
-            if c.is_uppercase() && prev_alnum_lower { out.push(' '); }
-            out.push(c.to_ascii_lowercase());
-            prev_alnum_lower = c.is_lowercase() || c.is_ascii_digit();
-        } else {
-            out.push(' ');
-            prev_alnum_lower = false;
-        }
-    }
-    out.split_whitespace().filter(|w| *w != "sections").collect::<Vec<_>>().join(" ")
-}
 fn blueprint_shape(body: &str) -> String {
     let head = body.split(BLUEPRINT_SECTIONS_SEP).next().unwrap_or("");
     head.strip_prefix("SHAPE: ").unwrap_or(head).trim().to_string()
