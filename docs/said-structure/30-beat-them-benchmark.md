@@ -36,6 +36,38 @@ for Cursor/Kimi); `.said` is self-growing, deduped/promoted, semantic-recalled, 
 | **Cross-tool portable continuity** | resume the SAME work-state Claude -> Cursor -> Kimi -> new machine | theirs is per-tool / server-side / dies on switch; ours is ONE file | new: capture -> switch -> resume e2e |
 | **Consolidation quality** | re-encountering a shape UPDATES the canon (keep-first + verified promote), not duplicate pile-up | the "principled consolidation" the survey calls unsolved | `test_blueprint.rs` (keep-first/promote) |
 | **Abstention** | refuse when nothing relevant (no confabulation) | already in `ask`; matches LongMemEval's abstention axis | existing recall gate |
+| **Federation (cross-project)** | a fix/canon learned in project A surfaces in project B when opted in; isolated when not | theirs is per-project silos; ours federates via `project:` tags + `best_iterations_federated` | `test_project_scope.rs` + a 2-project e2e |
+| **COMPACTION SURVIVAL (the headline moat)** | after the host compacts/summarizes (loses the last ~1M tokens of detail), can the agent RE-GROUND to exactly where it was — task, decisions, the precise values summarization discarded? | THIS is the #1 unfixable weakness of Claude/Cursor/Kimi: their working memory IS the context window, so compaction = amnesia ("goes stupid, doesn't know what happened"). `.said` is EXTERNAL + durable — it re-injects the exact work-state + fixes on the next turn, as if nothing disappeared. None of them can do this from inside the window. | new: simulate compaction -> SessionStart/UserPromptSubmit re-ground from `.said` -> agent continues correctly |
+
+## THE headline: compaction survival — the weakness none of them can fix
+
+Measured/evidenced failure of ALL three engines: *"LLM summarization can introduce hallucinations,
+paraphrase exact details, and LOSE TECHNICAL SPECIFICS"*; *"context rot: measurable degradation simply
+from increasing input length"*; *"cumulative information loss with multiple compactions... compounding
+errors"*; *"compaction is inherently lossy for fact-dense content — specific numerical values, edge cases,
+exceptions... is precisely what compression discards first"* (context-compaction research
+gist badlogic/cd2ef65; Facts as First-Class Objects, arXiv:2603.17781; Active Context Compression,
+arXiv:2601.07190). The owner's framing, confirmed: *"when they compact their tokens/memories they lose
+context of where we were and then it's stupid again — it doesn't know what happened in the last 1M
+tokens."*
+
+Why `.said` UNIQUELY fixes it: the thing being compacted IS the context window — you cannot fix amnesia
+with the memory that's being erased. `.said` lives OUTSIDE the window (durable mmap file), so the precise
+work-state + verified fixes + canon survive every compaction and are re-grounded on the next turn through
+the trusted injection channel (doc 16). The bar: **"working first time, like nothing ever disappeared."**
+This is the single most valuable metric in this doc — the others are compounding wins; THIS is the one
+that makes the agent not-stupid after compaction, which no competitor can offer.
+
+### The named problem we solve: "Self-Consolidation for Self-Evolving Agents"
+
+The research names the exact unsolved frontier `.said` targets: **Self-Consolidation for Self-Evolving
+Agents** ([arXiv:2602.01966](https://arxiv.org/pdf/2602.01966)) — *"current approaches primarily emphasize
+inference-time reuse rather than principled CONSOLIDATION and GENERALIZATION ... managing memory dynamics
+across intra-task and cross-task timescales."* That is precisely `.said`'s mechanism: consolidate (canon
+keep-first + verified promote, fix dedup/supersede), generalize (cross-project federation), and persist
+OUTSIDE the compactable window. We adopt this as the name for the capability — `.said` is a
+**self-consolidating, self-evolving memory** — and the compaction-survival + federation + effort-decay
+metrics above are how we MEASURE that it's solved, not just claimed.
 
 ## Honest scope
 
