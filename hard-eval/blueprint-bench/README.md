@@ -52,6 +52,22 @@ Learnings: save fix / recall-by-paraphrase / update-when-better (verified) / rec
 
 **~94% fewer chars (tokens), ~80% reusable skeleton, warm recall ~10-25ms.**
 
+## What arXiv says about these results (specific, not generic)
+
+- **The 80/20 token saving is the documented target.** *"Tokens carrying zero value (structural
+  boilerplate, ceremonial syntax) are pure waste... none [of existing RAG] proactively neutralize
+  tokenization overhead, and none enforce structural discipline before retrieval"* (**Beyond
+  Human-Readable**, arXiv:2604.07502). Blueprints strip exactly that boilerplate from the token cost — and
+  the paper confirms existing retrieval does NOT. (Also: context degrades past ~40% utilization, so the
+  saving is quality, not just cost.)
+- **The cross-language render is the right design.** *"Natural language consistently emerges as the most
+  effective intermediate representation across all target languages; no universally effective formal
+  intermediate language exists"* (arXiv:2407.05411; **NL in the Middle**, arXiv:2507.08627). The canon is
+  stored as structured-NL and rendered per language — on the right side of the literature.
+- **The recall-ranking limit is "anisotropy," with a CHEAP published fix** (Soft-ZCA whitening on the
+  existing vectors; arXiv:2411.17538) — not a new encoder. See 14.15 "Known limit" for the ordered fix
+  experiments.
+
 ## Honest caveats (read these)
 
 - **Tokens are the defensible metric.** Build *wall-time* depends on the BYO-LLM, not `.said` — so we report
