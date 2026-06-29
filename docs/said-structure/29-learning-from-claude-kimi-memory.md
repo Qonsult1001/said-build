@@ -55,6 +55,32 @@ artifact you didn't explicitly choose to keep.
 3. Keep enforcing distil-not-dump (already the design) — it's both the recall-quality moat AND the privacy
    answer to the chat-history concern.
 
+## STEP 2 REFRAME (owner) — the core is WORK-STATE CONTINUITY, not just fact-import
+
+This doc originally framed transcripts only as a SAFETY/disposal problem (the 31 MB `.jsonl`). That missed
+the actual reason Claude/Cursor/Kimi carry conversations forward: **so the model REMEMBERS WHAT IT WAS
+WORKING ON mid-task** — "you were building X, you did Y, the next step is Z, blocker is W." That work-state
+continuity is the day-to-day value to BEAT them at, and `.said` should OWN it portably.
+
+What exists vs the gap (audited):
+- HAVE: `.said` already carries work-state across its OWN sessions — on `SessionStart`, `steering::decide`
+  injects the most-recent `kind:journal` frame ("where you left off"), proven in `test_session_resume.rs`
+  (see doc 16 "Session resume"). The mechanism is real.
+- GAP 1 (framing): this doc treated that capability as transcript-disposal, not as the headline feature.
+  Fixed here.
+- GAP 2 (import their live state): `.said` resumes from ITS OWN journals, but nothing IMPORTS Claude's/
+  Cursor's in-progress work-state (their plans/file-history/recent session) so a switch mid-task carries
+  over. The Claude/Cursor adapter (still DESIGNED-ONLY — no code) must capture this, not only distilled facts.
+- GAP 3 (cross-TOOL + proof): the win is **portable** continuity — resume the same work-state in Claude OR
+  Cursor OR Kimi from one `.said` file. Their native carry-forward is per-tool and dies when you switch
+  tools/machines. Not yet built, not measured.
+
+So STEP 2 = **portable work-state continuity**: (a) capture richer mid-task work-state into `.said`
+(current task / files touched / decisions / next step / blockers — beyond the SessionEnd journal backstop);
+(b) IMPORT Claude/Cursor's in-progress state via the adapter; (c) resume it on SessionStart in ANY host
+tool; (d) PROVE it beats per-tool carry (survives tool switch + machine move + Claude deletion). The
+fact-import connector (below) is the bulk/learning half; work-state continuity is the half that wins daily.
+
 ## The import connector — design (research-grounded, the "ingest then discard the source" model)
 
 The owner's framing: **treat a Claude/Kimi session as a DOCUMENT I import once, then discard the source** —
