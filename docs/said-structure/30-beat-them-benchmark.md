@@ -58,6 +58,23 @@ the trusted injection channel (doc 16). The bar: **"working first time, like not
 This is the single most valuable metric in this doc — the others are compounding wins; THIS is the one
 that makes the agent not-stupid after compaction, which no competitor can offer.
 
+### The work-state schema (what MUST survive compaction)
+
+A work-state frame captures exactly the fact-dense detail summarization discards first (arXiv: "specific
+numerical values, edge cases, exceptions"). Stored in the vault for exact (lossless) recall, re-grounded
+after compaction:
+
+- **task** — what I'm doing right now ("building compaction-survival in said-vault").
+- **next_step** — the immediate next action (the thing the agent forgets after compaction).
+- **decisions** — choices made + their exact form ("chose Postgres"; "threshold = size > 1, NOT >= 1").
+- **exact_values** — the lossy detail: thresholds, IDs, flags, file:line, commit hashes, numbers.
+- **files** — the working set (what was being edited).
+- **blockers / ruled_out** — what's stuck + dead ends already tried (don't repeat them).
+- **plan_status** — where in the plan we are (the bit Claude/Cursor lose on resume).
+
+The proof gate: after a simulated compaction (drop this detail from context), `.said` re-injects these
+**byte-exact** (assert exact values, not paraphrases) — that's the "like nothing ever disappeared" bar.
+
 ### The named problem we solve: "Self-Consolidation for Self-Evolving Agents"
 
 The research names the exact unsolved frontier `.said` targets: **Self-Consolidation for Self-Evolving
