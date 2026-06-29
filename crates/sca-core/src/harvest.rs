@@ -46,18 +46,6 @@ struct FnSig {
     skeleton: Vec<String>,
 }
 
-/// Normalize a function name to its SHAPE intent, dropping the entity noun so `create_invoice` and
-/// `create_order` collapse to the same shape key "create". Uses the action residue (strips CamelCase /
-/// snake entity tokens) plus the leading verb.
-fn shape_key(name: &str, skeleton: &[String]) -> String {
-    // plus the action residue of the skeleton (intent words, entity nouns stripped).
-    let residue = crate::ask::action_residue(&skeleton.join(" "));
-    let mut toks: Vec<&str> = residue.split_whitespace().collect();
-    toks.sort_unstable();
-    toks.dedup();
-    format!("{}|{}", leading_verb(name), toks.join(" "))
-}
-
 /// The leading VERB of a function name as a clean shape hint. Splits camelCase + snake_case, then takes
 /// the first ALPHABETIC token of length >= 3 (so single-letter fragments like "x"/"h"/"1" and prefixes
 /// from camelCase splitting don't become garbage shape names like "et<Entity>"). Falls back to the whole
@@ -129,21 +117,28 @@ where
         }
     }
 
-    // Greedy clustering by shape_key first (cheap bucket), then split buckets by the skeleton sim gate.
-    use std::collections::HashMap;
-    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, s) in sigs.iter().enumerate() {
-        buckets.entry(shape_key(&s.name, &s.skeleton)).or_default().push(i);
+    // Cluster by SKELETON SIMILARITY directly (greedy). The shape is what a function DOES (its
+    // call-skeleton), NOT its name — two methods named Get/Lookup can be the same shape, and two named
+    // Run can differ. So we group by structural Jaccard >= SIM_GATE, never by the name's verb. (Earlier
+    // verb-bucketing was the bug: Get/Lookup never clustered; the name only NAMES the result, below.)
+    let mut used = vec![false; sigs.len()];
+    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    for i in 0..sigs.len() {
+        if used[i] { continue; }
+        let mut members = vec![i];
+        used[i] = true;
+        for j in (i + 1)..sigs.len() {
+            if used[j] { continue; }
+            if skeleton_sim(&sigs[i].skeleton, &sigs[j].skeleton) >= SIM_GATE {
+                members.push(j);
+                used[j] = true;
+            }
+        }
+        clusters.push(members);
     }
 
-    for (_key, idxs) in buckets {
-        if idxs.len() < MIN_SUPPORT { continue; } // not a repeated structure -> skip
-        // verify the members are actually similar (sim gate), not just same verb by luck.
-        let rep = &sigs[idxs[0]];
-        let members: Vec<usize> = idxs.iter().cloned()
-            .filter(|&j| skeleton_sim(&rep.skeleton, &sigs[j].skeleton) >= SIM_GATE)
-            .collect();
-        if members.len() < MIN_SUPPORT { continue; }
+    for members in clusters {
+        if members.len() < MIN_SUPPORT { continue; } // not a repeated structure -> skip
 
         // the blueprint's sections = the COMMON ordered steps across the cluster (intersection, in the
         // representative's order) — what every entity of this shape reproduces.
