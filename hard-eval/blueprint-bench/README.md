@@ -59,13 +59,13 @@ Learnings: save fix / recall-by-paraphrase / update-when-better (verified) / rec
 - **The "without" output cost** assumes the agent re-emits the full structure each time; an agent that
   copy-pastes from an open file pays less — but still pays the **read** cost and gets no cross-language /
   cross-project reuse, no auto-update, no portability.
-- **Recall RANKING among harvested blueprints is weak** — and it is the ENCODER, not the scorer.
-  `best_blueprints` is byte-identical to the proven `best_coding_fixes` (per 14.15: recall reuses the
-  existing engine, no new mechanism). The weakness is the static Model2Vec encoder's isotropy on short
-  code skeletons — diagnosed + solved in `SAID-ECHO/research/MinishLab` (`code_encoder_compare.md`:
-  potion-code-16M ranks the right item #1 where the text encoder ranks >10; `02_semhash.md`: a 5-signal
-  rerank). Confirmed at scale (42 blueprints), so it is not merely a tiny-corpus artifact. Fix path = the
-  code encoder + semble rerank in the SHARED engine. What works today: harvest, exact-shape recall,
-  cross-language render, the 80/20 saving, learnings. Each arm queries with the shape it builds; the
-  learnings arm recalls by exact shape. See 14.15 "Known limit".
+- **Recall RANKING among harvested blueprints is weak — an OPEN limit, not a known fix.** It is the
+  encoder, not the scorer (`best_blueprints` is byte-identical to `best_coding_fixes`, per 14.15). MEASURED
+  CORRECTION: the embedded encoder is ALREADY `said-lam-static-4M`, **128-dim** (verified live:
+  `encode_query -> 128 dims`), not the 64-dim model the older MinishLab research tested. The weakness was
+  measured ON the 128-dim encoder at scale (42 blueprints) — so doubling general-text dims (64→128) did NOT
+  fix short-code separation. The untested lever is a code-SPECIALIZED encoder or the semble rerank
+  (`MinishLab/02_semhash.md`), NOT "more dimensions." Honest OPEN question until measured on a real brain.
+  What works today: harvest, exact-shape recall, cross-language render, the 80/20 saving, learnings. Each
+  arm queries with the shape it builds; the learnings arm recalls by exact shape. See 14.15 "Known limit".
 - Char counts are deterministic; warm recall ms varies a few ms per run (machine load).
