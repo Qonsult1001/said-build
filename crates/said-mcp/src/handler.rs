@@ -1510,21 +1510,33 @@ impl SaidServerHandler {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
         let min = t.min_score.unwrap_or(0.45);
-        match sca_core::ask::recall_blueprints(&mut brain, &t.shape, 1, min).into_iter().next() {
-            Some(hit) => {
-                let body = format!(
-                    "Blueprint ({:.2}) {}  shape={}\n\nRender these sections in the active \
-                     language; write only the entity-specific slots.\n\n## Sections\n{}",
-                    hit.score, hit.doc_id, hit.shape, hit.sections_json,
-                );
-                Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
-            }
-            None => Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+        // TOP-K, let the LLM decide (the proven recall_fix pattern — its hook injects top-3 and lets the
+        // model PICK). Fingerprint ranking on short skeletons can put the right shape at rank 2-3, not
+        // always #1; returning several candidates and letting the model choose the one that fits the task
+        // is FAR more robust than chasing rank@1. Default k=3 (== HOOK_FIX_TOPK).
+        let k = (t.top_k.unwrap_or(3).max(1)) as usize;
+        let hits = sca_core::ask::recall_blueprints(&mut brain, &t.shape, k, min);
+        if hits.is_empty() {
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
                 "No known blueprint above score {:.2} for \"{}\" — derive the structure, then \
-                 store it with learn_blueprint.",
-                min, t.shape,
-            ))])),
+                 store it with learn_blueprint.", min, t.shape,
+            ))]));
         }
+        let mut body = String::new();
+        if hits.len() > 1 {
+            body.push_str(&format!(
+                "{} candidate blueprints for \"{}\", most relevant first. PICK the one whose sections \
+                 match what you're building, render it in the active language, and write only the \
+                 entity-specific slots:\n", hits.len(), t.shape));
+        } else {
+            body.push_str("Render these sections in the active language; write only the entity-specific slots.\n");
+        }
+        for (i, hit) in hits.iter().enumerate() {
+            if hits.len() > 1 { body.push_str(&format!("\n--- candidate {} ---\n", i + 1)); }
+            body.push_str(&format!("Blueprint ({:.2}) {}  shape={}\n## Sections\n{}\n",
+                hit.score, hit.doc_id, hit.shape, hit.sections_json));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
     }
 
     fn handle_learn_blueprint(&self, t: LearnBlueprintTool) -> Result<CallToolResult, CallToolError> {

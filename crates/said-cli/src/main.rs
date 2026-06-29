@@ -308,6 +308,9 @@ enum Commands {
         /// Minimum match score.
         #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
+        /// How many candidates to return (default 3) so the model picks the fitting one.
+        #[arg(long, default_value_t = 3)]
+        top_k: usize,
     },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
@@ -1409,8 +1412,8 @@ fn run() {
         #[cfg(feature = "code")]
         Commands::Harvest { ref dir } => cmd_harvest(cli.path.as_deref(), dir, cli.json),
         #[cfg(feature = "code")]
-        Commands::RecallBlueprint { ref shape, min_similarity } =>
-            cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, cli.json),
+        Commands::RecallBlueprint { ref shape, min_similarity, top_k } =>
+            cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, top_k, cli.json),
         #[cfg(feature = "code")]
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
@@ -7079,29 +7082,29 @@ fn cmd_harvest(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
 }
 
 #[cfg(feature = "code")]
-fn cmd_recall_blueprint(path: Option<&str>, shape: &str, min_similarity: f32, json: bool) -> Result<(), String> {
+fn cmd_recall_blueprint(path: Option<&str>, shape: &str, min_similarity: f32, top_k: usize, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
-    match sca_core::ask::recall_blueprints(&mut brain, shape, 1, min_similarity).into_iter().next() {
-        Some(hit) => {
-            if json {
-                let sections: serde_json::Value = serde_json::from_str(&hit.sections_json)
-                    .unwrap_or(serde_json::Value::String(hit.sections_json.clone()));
-                println!("{}", serde_json::json!({ "ok": true, "blueprint": {
-                    "score": hit.score, "doc_id": hit.doc_id, "shape": hit.shape,
-                    "lang": hit.lang, "sections": sections,
-                    "note": "render these sections in the active language; write only the entity-specific slots",
-                }}));
-            } else {
-                println!("Blueprint ({:.2}) {}  shape={}", hit.score, hit.doc_id, hit.shape);
-                println!("  sections: {}", hit.sections_json);
-            }
-        }
-        None => {
-            if json {
-                println!("{}", serde_json::json!({ "ok": true, "blueprint": serde_json::Value::Null }));
-            } else {
-                println!("No known blueprint above score {:.2} — fall through to the LLM.", min_similarity);
-            }
+    // TOP-K, let the LLM decide (the recall_fix top-K pattern): the right shape isn't always rank #1 on
+    // short skeletons, so return several candidates for the model to pick the one that fits.
+    let k = top_k.max(1);
+    let hits = sca_core::ask::recall_blueprints(&mut brain, shape, k, min_similarity);
+    if hits.is_empty() {
+        if json { println!("{}", serde_json::json!({ "ok": true, "blueprints": [] })); }
+        else { println!("No known blueprint above score {:.2} — fall through to the LLM.", min_similarity); }
+        return Ok(());
+    }
+    if json {
+        let arr: Vec<_> = hits.iter().map(|h| {
+            let sections: serde_json::Value = serde_json::from_str(&h.sections_json)
+                .unwrap_or(serde_json::Value::String(h.sections_json.clone()));
+            serde_json::json!({ "score": h.score, "doc_id": h.doc_id, "shape": h.shape, "lang": h.lang, "sections": sections })
+        }).collect();
+        println!("{}", serde_json::json!({ "ok": true, "blueprints": arr,
+            "note": "pick the candidate whose sections fit the task; render in the active language; write only the 20%" }));
+    } else {
+        for (i, h) in hits.iter().enumerate() {
+            println!("[{}] Blueprint ({:.2}) {}  shape={}", i + 1, h.score, h.doc_id, h.shape);
+            println!("    sections: {}", h.sections_json);
         }
     }
     Ok(())

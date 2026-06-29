@@ -1152,10 +1152,11 @@ pub struct LearnFixTool {
     name = "recall_blueprint",
     description = "CODING MEMORY (blueprint) — recall the REUSABLE 80% structure for a SHAPE \
                    WITHOUT calling an LLM. Describe the shape (e.g. 'Create<Entity> REST \
-                   endpoint'); .said returns the language-neutral sections to RENDER in the \
-                   active language, so you write only the entity-specific 20%. No match below \
-                   the threshold → derive it, then store with learn_blueprint. Pairs with \
-                   recall_fix (the specific 20%).",
+                   endpoint'); .said returns the TOP candidate blueprints (default 3, most \
+                   relevant first) — YOU pick the one whose sections fit the task (the right \
+                   shape isn't always rank #1 on short skeletons), render it in the active \
+                   language, and write only the entity-specific 20%. No match → derive it, then \
+                   store with learn_blueprint. Pairs with recall_fix (the specific 20%).",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -1165,6 +1166,10 @@ pub struct RecallBlueprintTool {
     /// Minimum match confidence (default 0.45). Below it: no match.
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// How many candidate blueprints to return (default 3). Several are returned so YOU pick the one
+    /// whose sections fit the task — the right shape isn't always rank #1 on short skeletons.
+    #[serde(default)]
+    pub top_k: Option<u32>,
 }
 
 #[mcp_tool(
