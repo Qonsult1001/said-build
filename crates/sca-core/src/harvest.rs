@@ -44,6 +44,30 @@ struct FnSig {
     lang: Option<String>,
     /// The ordered call-skeleton — what the function DOES, step by step. The blueprint sections.
     skeleton: Vec<String>,
+    /// Where it came from + a sample, so the host agent can read intent when naming phases.
+    file: String,
+    sample: String,
+}
+
+/// A clustered repeated structure handed to the HOST AGENT to name into NL intent phases. `.said` produces
+/// this deterministically (the mechanism); the agent supplies the naming (the intelligence) — keeping
+/// `.said` LLM-free while producing the 14.15-mandated NL-phase blueprint via `learn_blueprint`.
+#[derive(Debug, Clone)]
+pub struct HarvestCluster {
+    /// A rough verb hint from the member names (e.g. "create") — NOT the final shape; the agent renames.
+    pub shape_hint: String,
+    /// How many functions share this structure (support; >= MIN_SUPPORT).
+    pub support: usize,
+    /// The language (from the first member's file extension).
+    pub lang: Option<String>,
+    /// The common ordered CALL-skeleton (implementation tokens) — the agent maps these to NL intent phases.
+    pub calls: Vec<String>,
+    /// Member function names (for the agent's context).
+    pub members: Vec<String>,
+    /// A representative source snippet so the agent can read the INTENT, not just the call names.
+    pub sample_code: String,
+    /// Source file of the representative member.
+    pub sample_file: String,
 }
 
 /// The leading VERB of a function name as a clean shape hint. Splits camelCase + snake_case, then takes
@@ -95,67 +119,85 @@ where
     W: IntoIterator<Item = std::path::PathBuf>,
     R: Fn(&std::path::Path) -> Option<String>,
 {
-    let mut sigs: Vec<FnSig> = Vec::new();
     let mut report = HarvestReport::default();
+    let clusters = harvest_scan(files, read, &mut report.files_scanned, &mut report.functions_seen);
+    for c in clusters {
+        // FALLBACK form only (headless / no agent): store the raw call-skeleton as sections. This is the
+        // form 14.15 flags as suboptimal (call-tokens, not NL intent phases) -- preferred path is
+        // agent-in-the-loop: `harvest_scan` -> host agent names NL phases -> learn_blueprint. See 14.15.
+        let shape = derive_shape_name(&c.shape_hint, c.support);
+        let sections_json = serde_json::json!({ "sections": c.calls }).to_string();
+        let doc_id = crate::ask::learn_blueprint(brain, &shape, &sections_json, c.lang.as_deref(), Some("harvest"), false);
+        report.clusters_found += 1;
+        report.blueprints.push((shape, c.support, doc_id));
+    }
+    report
+}
 
+/// HARVEST SCAN — the deterministic half of agent-in-the-loop harvest. Walk the files, extract function
+/// call-skeletons, cluster the repeated ones (support>=2, sim gate, quality floor), and RETURN the clusters
+/// (calls + sample code) for the HOST AGENT to name into NL intent phases. Does NOT learn anything: the
+/// agent calls `learn_blueprint` with the NL phases (the 14.15-mandated form). `.said` stays LLM-free.
+pub fn harvest_scan<W, R>(
+    files: W,
+    read: R,
+    files_scanned: &mut usize,
+    functions_seen: &mut usize,
+) -> Vec<HarvestCluster>
+where
+    W: IntoIterator<Item = std::path::PathBuf>,
+    R: Fn(&std::path::Path) -> Option<String>,
+{
+    let mut sigs: Vec<FnSig> = Vec::new();
     for path in files {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if crate::ask::ext_to_lang(ext).is_none() { continue; }
         let Some(src) = read(&path) else { continue };
-        report.files_scanned += 1;
+        *files_scanned += 1;
         let lang = crate::ask::ext_to_lang(ext).map(|s| s.to_string());
+        let file = path.to_string_lossy().replace('\\', "/");
         for chunk in crate::code_search::ast_chunk(&src, ext) {
-            // only functions/methods carry a reusable call-skeleton; skip types/structs/enums.
             let k = chunk.kind.to_ascii_lowercase();
             if !(k.contains("function") || k.contains("method")) { continue; }
-            report.functions_seen += 1;
-            // clean the call-skeleton: drop short/junk fragments (e.g. "ce") that aren't real call
-            // targets, so blueprint sections are meaningful identifiers, not parser noise.
+            *functions_seen += 1;
             let skeleton: Vec<String> = chunk.calls.into_iter().filter(|c| is_real_step(c)).collect();
-            if skeleton.len() < MIN_SKELETON_STEPS { continue; } // size floor
-            sigs.push(FnSig { name: chunk.name, lang: lang.clone(), skeleton });
+            if skeleton.len() < MIN_SKELETON_STEPS { continue; }
+            // keep a trimmed sample of the function body so the agent can read its INTENT.
+            let sample: String = chunk.content.lines().take(30).collect::<Vec<_>>().join("\n");
+            sigs.push(FnSig { name: chunk.name, lang: lang.clone(), skeleton, file: file.clone(), sample });
         }
     }
 
-    // Cluster by SKELETON SIMILARITY directly (greedy). The shape is what a function DOES (its
-    // call-skeleton), NOT its name — two methods named Get/Lookup can be the same shape, and two named
-    // Run can differ. So we group by structural Jaccard >= SIM_GATE, never by the name's verb. (Earlier
-    // verb-bucketing was the bug: Get/Lookup never clustered; the name only NAMES the result, below.)
+    // Greedy clustering by SKELETON SIMILARITY (structural Jaccard >= SIM_GATE), never by the name's verb.
     let mut used = vec![false; sigs.len()];
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
     for i in 0..sigs.len() {
         if used[i] { continue; }
-        let mut members = vec![i];
-        used[i] = true;
+        let mut members = vec![i]; used[i] = true;
         for j in (i + 1)..sigs.len() {
             if used[j] { continue; }
-            if skeleton_sim(&sigs[i].skeleton, &sigs[j].skeleton) >= SIM_GATE {
-                members.push(j);
-                used[j] = true;
-            }
+            if skeleton_sim(&sigs[i].skeleton, &sigs[j].skeleton) >= SIM_GATE { members.push(j); used[j] = true; }
         }
-        clusters.push(members);
+        groups.push(members);
     }
 
-    for members in clusters {
-        if members.len() < MIN_SUPPORT { continue; } // not a repeated structure -> skip
-
-        // the blueprint's sections = the COMMON ordered steps across the cluster (intersection, in the
-        // representative's order) — what every entity of this shape reproduces.
+    let mut out = Vec::new();
+    for members in groups {
+        if members.len() < MIN_SUPPORT { continue; }
         let common = common_skeleton(&members.iter().map(|&j| &sigs[j].skeleton).collect::<Vec<_>>());
-        // QUALITY GATE: drop thin/noisy common skeletons (e.g. ["request","ce"]) — a stored blueprint
-        // must carry substantial shared structure, else it's noise that pollutes recall.
         if common.len() < MIN_COMMON_STEPS { continue; }
-
-        let shape = derive_shape_name(&sigs[members[0]].name, members.len());
-        let sections_json = serde_json::json!({ "sections": common }).to_string();
-        let lang = sigs[members[0]].lang.as_deref();
-        // keep-first: harvest never overwrites an existing (possibly hand-promoted) blueprint.
-        let doc_id = crate::ask::learn_blueprint(brain, &shape, &sections_json, lang, Some("harvest"), false);
-        report.clusters_found += 1;
-        report.blueprints.push((shape, members.len(), doc_id));
+        let rep = &sigs[members[0]];
+        out.push(HarvestCluster {
+            shape_hint: leading_verb(&rep.name),
+            support: members.len(),
+            lang: rep.lang.clone(),
+            calls: common,
+            members: members.iter().map(|&j| sigs[j].name.clone()).collect(),
+            sample_code: rep.sample.clone(),
+            sample_file: rep.file.clone(),
+        });
     }
-    report
+    out
 }
 
 /// Steps present in ALL cluster members, kept in the first member's order (the common skeleton).

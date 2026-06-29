@@ -299,6 +299,14 @@ enum Commands {
         #[arg(default_value = ".")]
         dir: String,
     },
+    /// Scan a repo and PRINT the repeated structures (clusters) for the coding agent to name into NL
+    /// intent phases -- step 1 of agent-in-the-loop harvest. Does NOT learn anything (use --json).
+    #[cfg(feature = "code")]
+    HarvestScan {
+        /// The repo directory to scan. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        dir: String,
+    },
     /// Recall the reusable structure (blueprint) for a shape.
     #[cfg(feature = "code")]
     RecallBlueprint {
@@ -1411,6 +1419,8 @@ fn run() {
                 lang.as_deref(), label.as_deref(), verified, cli.json),
         #[cfg(feature = "code")]
         Commands::Harvest { ref dir } => cmd_harvest(cli.path.as_deref(), dir, cli.json),
+        #[cfg(feature = "code")]
+        Commands::HarvestScan { ref dir } => cmd_harvest_scan(dir, cli.json),
         #[cfg(feature = "code")]
         Commands::RecallBlueprint { ref shape, min_similarity, top_k } =>
             cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, top_k, cli.json),
@@ -7077,6 +7087,44 @@ fn cmd_harvest(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
         if report.clusters_found == 0 {
             println!("  (no structure repeated >=2x -- nothing to harvest)");
         }
+    }
+    Ok(())
+}
+
+/// `said harvest-scan <dir>` -- step 1 of agent-in-the-loop harvest: print the clustered repeated
+/// structures (calls + sample code) for the coding agent to name into NL intent phases. Learns NOTHING.
+#[cfg(feature = "code")]
+fn cmd_harvest_scan(dir: &str, json: bool) -> Result<(), String> {
+    let root = Path::new(dir).canonicalize().map_err(|e| format!("resolve '{}': {}", dir, e))?;
+    if !root.is_dir() { return Err(format!("not a directory: {}", dir)); }
+    let patterns = load_gitignore(&root);
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_dir_gitignore(&root, &root, &patterns, &mut files);
+
+    let (mut scanned, mut seen) = (0usize, 0usize);
+    let clusters = sca_core::harvest::harvest_scan(
+        files, |p| std::fs::read_to_string(p).ok(), &mut scanned, &mut seen);
+
+    if json {
+        let arr: Vec<_> = clusters.iter().map(|c| serde_json::json!({
+            "shape_hint": c.shape_hint, "support": c.support, "lang": c.lang,
+            "calls": c.calls, "members": c.members,
+            "sample_file": c.sample_file, "sample_code": c.sample_code,
+        })).collect();
+        println!("{}", serde_json::json!({
+            "ok": true, "files_scanned": scanned, "functions_seen": seen,
+            "clusters": arr,
+            "next": "for each cluster, name its NL intent phases (framework 80% only) and call learn-blueprint",
+        }));
+    } else {
+        println!("Scanned {} files ({} functions); {} repeated structure(s) to name:", scanned, seen, clusters.len());
+        for c in &clusters {
+            println!("\n  shape_hint: {}  (seen {}x, lang {})", c.shape_hint, c.support, c.lang.as_deref().unwrap_or("?"));
+            println!("  calls: {}", c.calls.join(" -> "));
+            println!("  members: {}", c.members.join(", "));
+            println!("  sample: {} ...", c.sample_file);
+        }
+        if clusters.is_empty() { println!("  (no structure repeated >=2x)"); }
     }
     Ok(())
 }

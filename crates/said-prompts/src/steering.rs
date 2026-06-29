@@ -95,7 +95,15 @@ would (\"remember to revisit this fn\", \"remember my mom's birthday\").
 
 Distil, don't dump. Skip the obvious and the unverified. `.said` dedupes. Rule of thumb: learned about \
 the CODE? `learn_fix`. A reusable STRUCTURE? `learn_blueprint`. Did the USER ask me to \
-keep something (coding or not)? remember.";
+keep something (coding or not)? remember.
+
+ONBOARDING an existing repo (harvest, 2-step — YOU supply the naming, `.said` stays LLM-free):
+  1. `harvest_scan` → `.said` returns the REPEATED code structures (clusters: calls + sample code).
+  2. For EACH cluster, read its calls + sample, then `learn_blueprint` with shape = a short intent name \
+(\"Create<Entity> endpoint\") and sections = the ordered NL INTENT phases of the FRAMEWORK ONLY \
+(e.g. [\"accept request + write audit row\", \"idempotency check\", \"wrap + return\"]) — NOT the raw \
+call tokens, and NOT the entity-specific slots (those stay the 20% you fill per entity). NL phases are \
+language-neutral and recall by intent; raw call tokens do not.";
 
 /// One-line summary used by `said setup` output / `said plugin list`.
 pub const STEERING_SUMMARY: &str =

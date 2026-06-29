@@ -559,6 +559,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::CreateTool(t) => self.handle_create(t),
             SaidTools::InitTool(t) => self.handle_init(t),
             SaidTools::HarvestBlueprintsTool(t) => self.handle_harvest_blueprints(t),
+            SaidTools::HarvestScanTool(t) => self.handle_harvest_scan(t),
             SaidTools::SyncTool(t) => self.handle_sync(t),
             SaidTools::JournalTool(t) => self.handle_journal(t),
             SaidTools::OverviewTool(t) => self.handle_overview(t),
@@ -1590,6 +1591,38 @@ impl SaidServerHandler {
             }
         }
         Err(CallToolError::from_message("harvest: could not run the said CLI (set SAID_CLI?)".to_string()))
+    }
+
+    fn handle_harvest_scan(&self, t: HarvestScanTool) -> Result<CallToolResult, CallToolError> {
+        // STEP 1 of agent-in-the-loop harvest: shell to `said harvest-scan --json` to get the clustered
+        // structures, then return them to the agent WITH the naming instruction. We do NOT learn anything
+        // here -- the agent names NL intent phases and calls learn_blueprint. (Read-only: no mmap reload.)
+        let dir = t.dir.unwrap_or_else(|| ".".to_string());
+        let said_path = self.current_path();
+        let abs_brain = std::fs::canonicalize(&said_path)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&said_path)).to_string_lossy().to_string();
+        let args = vec!["harvest-scan".to_string(), dir, "--path".to_string(), abs_brain, "--json".to_string()];
+        let brain_dir = self.brain_dir();
+        for exe in &resolve_said_cli() {
+            if let Ok(r) = std::process::Command::new(exe).args(&args).current_dir(&brain_dir).output() {
+                let out = String::from_utf8_lossy(&r.stdout).to_string();
+                let err = String::from_utf8_lossy(&r.stderr).to_string();
+                if r.status.success() {
+                    let guide = "Above are the repeated code structures (clusters) .said found. For EACH \
+                        cluster: read its calls + sample_code, then call learn_blueprint with shape = a \
+                        short intent name (e.g. \"Create<Entity> endpoint\") and sections = the ordered NL \
+                        INTENT phases of the FRAMEWORK only (e.g. [\"accept request + write audit row\", \
+                        \"idempotency check\", \"wrap + return\"]) -- NOT the raw call tokens, and NOT the \
+                        entity-specific slots (those stay YOURS/the 20%). NL phases are language-neutral \
+                        and recall by intent.";
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(format!("{}\n\n{}", out.trim(), guide))]));
+                }
+                if !err.trim().is_empty() {
+                    return Err(CallToolError::from_message(format!("harvest-scan failed: {}", err.trim())));
+                }
+            }
+        }
+        Err(CallToolError::from_message("harvest-scan: could not run the said CLI (set SAID_CLI?)".to_string()))
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

@@ -1201,6 +1201,25 @@ pub struct LearnBlueprintTool {
 }
 
 #[mcp_tool(
+    name = "harvest_scan",
+    description = "CODING MEMORY (blueprint) — STEP 1 of agent-in-the-loop harvest. Scans a repo and \
+                   returns the REPEATED code structures (clusters; support>=2) as JSON: each has the \
+                   common call-skeleton, sample code, and members. .said does NOT learn them — YOU (the \
+                   coding agent) read each cluster and name its ordered NL INTENT phases (the FRAMEWORK \
+                   80% only, e.g. 'accept request + write audit row', 'idempotency check', 'wrap + \
+                   return' — NOT the entity-specific slots), then call learn_blueprint with those NL \
+                   phases as sections. NL phases (not raw call tokens) are required: they are \
+                   language-neutral and recall by intent. Use ONCE when onboarding .said onto a repo.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct HarvestScanTool {
+    /// The repo directory to scan. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
+#[mcp_tool(
     name = "harvest_blueprints",
     description = "CODING MEMORY (blueprint) — scan an existing repo and AUTO-LEARN blueprints from \
                    REPEATED structures. A function structure becomes a blueprint only if it repeats \
@@ -1224,7 +1243,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool]);
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool]);
 
 #[cfg(feature = "forge")]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
@@ -1232,7 +1251,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,
