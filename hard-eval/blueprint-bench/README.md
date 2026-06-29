@@ -59,8 +59,13 @@ Learnings: save fix / recall-by-paraphrase / update-when-better (verified) / rec
 - **The "without" output cost** assumes the agent re-emits the full structure each time; an agent that
   copy-pastes from an open file pays less — but still pays the **read** cost and gets no cross-language /
   cross-project reuse, no auto-update, no portability.
-- **Recall RANKING among harvested blueprints is weak on this tiny 3-blueprint corpus** (short
-  implementation-token skeletons; documented in 14.15 + the structure-aware re-rank commit). Each arm
-  queries with the shape it is building, so the right blueprint is recalled; the learnings arm recalls by
-  exact shape to avoid the ambiguity. Re-evaluate ranking on a real populated brain, not 3 toys.
+- **Recall RANKING among harvested blueprints is weak** — and it is the ENCODER, not the scorer.
+  `best_blueprints` is byte-identical to the proven `best_coding_fixes` (per 14.15: recall reuses the
+  existing engine, no new mechanism). The weakness is the static Model2Vec encoder's isotropy on short
+  code skeletons — diagnosed + solved in `SAID-ECHO/research/MinishLab` (`code_encoder_compare.md`:
+  potion-code-16M ranks the right item #1 where the text encoder ranks >10; `02_semhash.md`: a 5-signal
+  rerank). Confirmed at scale (42 blueprints), so it is not merely a tiny-corpus artifact. Fix path = the
+  code encoder + semble rerank in the SHARED engine. What works today: harvest, exact-shape recall,
+  cross-language render, the 80/20 saving, learnings. Each arm queries with the shape it builds; the
+  learnings arm recalls by exact shape. See 14.15 "Known limit".
 - Char counts are deterministic; warm recall ms varies a few ms per run (machine load).
