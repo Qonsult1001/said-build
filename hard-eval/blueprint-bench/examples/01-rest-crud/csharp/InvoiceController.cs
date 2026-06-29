@@ -2,9 +2,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Bench.RestCrud;
 
-// REST CRUD example, entity = Invoice. The Create endpoint follows the team's standard shape:
-// accept+audit -> idempotency -> guards -> save -> response -> wrap+return. The SAME shape appears in
-// OrderController (support>=2) so harvest learns ONE "create" blueprint; only the 20% slots differ here.
+// Create Invoice (dotnet).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: ../said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it from the blueprint) | YOURS (yes, kept).
+// The GENERATED sections are the reused 80% (the create-shape skeleton, identical in OrderController);
+// the YOURS sections are the entity-specific 20% (Invoice fields, DML, response).
 [ApiController]
 [Route("invoices")]
 public class InvoiceController : ControllerBase
@@ -21,24 +22,35 @@ public class InvoiceController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateInvoiceRequest req)
     {
-        // [80%] accept + audit
+        // [S1] accept-and-audit  GENERATED
         var responseId = Guid.NewGuid();
         await _audit.Record(req, responseId);
-        // [80%] idempotency
+        // [/S1]
+
+        // [S2] idempotency  GENERATED
         if (await _idem.Seen(req.IdempotencyKey)) return Conflict();
         await _idem.Mark(req.IdempotencyKey);
-        // [20%] guards (entity-specific)
+        // [/S2]
+
+        // [S3] guards  YOURS
         if (string.IsNullOrWhiteSpace(req.Number)) return BadRequest("Number is required");
         if (req.Amount <= 0) return BadRequest("Amount must be positive");
-        // [20%] save (entity-specific)
+        // [/S3]
+
+        // [S4] save  YOURS
         var id = Guid.NewGuid();
         await _store.Insert(id, req.Number, req.Amount, req.CustomerId);
-        // [20%] response (entity-specific)
+        // [/S4]
+
+        // [S5] response  YOURS
         var data = new { id, req.Number, req.Amount, status = "open" };
-        // [80%] wrap + return
+        // [/S5]
+
+        // [S6] wrap-and-return  GENERATED
         var resp = Envelope.Ok(data, responseId);
         await _audit.Complete(responseId, 200, resp);
         return Ok(resp);
+        // [/S6]
     }
 }
 

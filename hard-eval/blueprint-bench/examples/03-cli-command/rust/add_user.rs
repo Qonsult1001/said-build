@@ -1,18 +1,30 @@
-// RENDERED from the recalled `run<Entity>` (command) blueprint (harvested from AddUserCommand/RemoveUserCommand).
-// The [80%] skeleton (parse args -> validate -> load context -> ... -> print result -> return exit code)
-// came from .said's recalled blueprint, rendered in rust. Only the [20%] execute slot was written.
+// Add User command (rust).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it from the blueprint) | YOURS (yes, kept).
+// Rendered cross-language from the recalled `run` (command) blueprint harvested from C#; the GENERATED
+// sections ARE the reused 80% skeleton, the YOURS section is the command-specific 20% (execute).
 pub async fn run(args: &[String]) -> i32 {
-    // [80%] parse args               (blueprint: Parse)
+    // [S1] parse-args  GENERATED
     let parsed = ArgParser::parse(args);
-    // [80%] validate                 (blueprint: Has, WriteLine)
+    // [/S1]
+
+    // [S2] validate  YOURS
     if !parsed.has("name") { eprintln!("--name is required"); return 2; }
     if !parsed.has("email") { eprintln!("--email is required"); return 2; }
-    // [80%] load context             (blueprint: Load)
+    // [/S2]
+
+    // [S3] load-context  GENERATED
     let ctx = AppContext::load().await;
-    // [20%] execute (command-specific)
+    // [/S3]
+
+    // [S4] execute  YOURS
     let id = users_add(&ctx, parsed.get("name"), parsed.get("email")).await;
-    // [80%] print result             (blueprint: WriteLine)
+    // [/S4]
+
+    // [S5] print-result  GENERATED
     println!("added user {id}");
-    // [80%] return exit code
+    // [/S5]
+
+    // [S6] return-exit-code  GENERATED
     0
+    // [/S6]
 }

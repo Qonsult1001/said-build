@@ -5,8 +5,9 @@ through the **live `said-mcp` server** (the real product surface — encoder loa
 
 ## What it measures (the four things)
 
-1. **The 80/20 split** — on real C# source, the share that is reusable framework skeleton (`[80%]`-marked)
-   vs entity-specific slots (`[20%]`-marked).
+1. **The 80/20 split** — on real C# source marked with the canon `[Sn] GENERATED/YOURS` convention
+   (same as `hard-eval/canon-proto`): GENERATED sections = the reusable 80% skeleton (.said rewrites them
+   from the blueprint), YOURS sections = the entity-specific 20% (you keep/edit). Map: `said.index.md`.
 2. **Tokens saved** — chars (the token proxy `token_value.psv` uses), counted identically in both arms.
 3. **Time taken** — the **warm** `recall_blueprint` tool-call latency on the running server (NOT a cold
    process spawn). Server+encoder warm-up is reported **separately, once**.
@@ -37,20 +38,32 @@ node hard-eval/blueprint-bench/run-bench.js     # needs the encoder build: said.
 
 ## Result (representative)
 
-```
+```text
 Harvested 3 blueprints from the C# examples (one-time onboarding).
-Server+encoder warm-up: ~555ms ONCE (not per recall).
+Server+encoder warm-up: ~550ms ONCE (not per recall).
 
-shape           | 80% | without(ch) | with(ch) | saved% | warm recall(ms)
-01-rest-crud    | 93% |        5468 |      244 |    96% |          ~25
-02-http-client  | 97% |        4895 |      388 |    92% |          ~12
-03-cli-command  | 97% |        3430 |      252 |    93% |          ~11
-TOTAL           |     |       13793 |      884 |    94% |
+shape           | GEN% | without(ch) | with(ch) | saved% | warm recall(ms)
+01-rest-crud    | 49%  |        6196 |      907 |    85% |          ~25
+02-http-client  | 54%  |        5635 |      936 |    83% |          ~11
+03-cli-command  | 36%  |        4188 |      833 |    80% |          ~11
+TOTAL           |      |       16019 |     2676 |    83% |
 
 Learnings: save fix / recall-by-paraphrase / update-when-better (verified) / recall-improved — 4/4 PASS
 ```
 
-**~94% fewer chars (tokens), ~80% reusable skeleton, warm recall ~10-25ms.**
+**HONEST numbers (measured against the real `[Sn] GENERATED/YOURS` markers, from `results/savings.psv`):**
+- **~83% fewer chars (tokens)** — the agent recalls the GENERATED skeleton + writes only the YOURS slots,
+  and avoids reading all the example files to learn the pattern.
+- **GENERATED share is 36-54% (avg ~46%), NOT 80%** in these teaching examples. The "80/20" is the
+  *concept*; the actual reusable share depends on the code. Real framework code (e.g. the harvested
+  OrchestrationFactory) skews more GENERATED; these compact examples are more balanced. We do NOT claim
+  80% here — we report what's measured.
+- warm recall ~10-25ms (server warm-up ~550ms ONCE, separate).
+
+CORRECTION HISTORY (removed false claims): an earlier version reported "93-97% reusable / 94% saved" —
+that was inflated (it counted only a thin recall payload as the "with" cost, and labeled the split 80%
+without measuring it). The numbers above are measured from the canon markers; the token saving (~83%) is
+real, the GENERATED share is honestly lower than 80% for these examples.
 
 ## What arXiv says about these results (specific, not generic)
 

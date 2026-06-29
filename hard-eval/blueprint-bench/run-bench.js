@@ -26,14 +26,21 @@ const SHAPES = [
 const chars = s => (s || '').length;
 const nowMs = () => Number(process.hrtime.bigint() / 1000n) / 1000;
 
+// Split by the REAL canon markers ([Sn]..[/Sn] with GENERATED/YOURS), same convention as canon-proto.
+// GENERATED section bytes = the reused 80% (.said hands these over); YOURS = the 20% you write.
 function splitOf(file) {
-  const text = fs.readFileSync(file, 'utf8'); let g = 0, y = 0, total = 0;
+  const text = fs.readFileSync(file, 'utf8');
+  let total = 0, gen = 0, yours = 0, cur = null;
   for (const line of text.split('\n')) {
     total += line.length + 1;
-    if (line.includes('[80%]')) g += line.length + 1;
-    else if (line.includes('[20%]')) y += line.length + 1;
+    const open = line.match(/\[S\d+\]\s+.+?\s+(GENERATED|YOURS)\s*$/);
+    if (open) { cur = open[1]; continue; }
+    if (/\[\/S\d+\]/.test(line)) { cur = null; continue; }
+    if (cur === 'GENERATED') gen += line.length + 1;
+    else if (cur === 'YOURS') yours += line.length + 1;
   }
-  return { total, marked20: y || Math.round(total * 0.2) };
+  // marked20 = the bytes the agent actually writes (YOURS). Fallback to 20% if a file lacks markers.
+  return { total, marked20: yours || Math.round(total * 0.2), gen, yours };
 }
 
 // --- minimal MCP JSON-RPC client over the running server (encoder loaded once) ---
@@ -89,7 +96,8 @@ function freshBrain(tag) {
     const totW = without.input + without.output, totWith = wth.input + wth.output;
     rows.push({
       shape: shape.id,
-      pct_80: split.total ? Math.round(100 * (split.total - split.marked20) / split.total) : 0,
+      // 80% = GENERATED share of the MARKED sections (the reusable skeleton vs the YOURS slots).
+      pct_80: (split.gen + split.yours) ? Math.round(100 * split.gen / (split.gen + split.yours)) : 0,
       without_chars: totW, with_chars: totWith,
       saved_chars: totW - totWith,
       pct_saved: totW ? Math.round(100 * (totW - totWith) / totW) : 0,

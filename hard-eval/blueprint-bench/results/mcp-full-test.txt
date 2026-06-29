@@ -1,0 +1,59 @@
+=== BLUEPRINT FULL MCP TEST SUITE  (run 2026-06-29 09:00) ===
+All harnesses driven against the live said-mcp.exe (encoder baked in, --features coding).
+Numbers below are HONEST + measured against the [Sn] GENERATED/YOURS canon markers.
+
+### 1. blueprint_mcp_e2e.js (core MCP tools, 8 checks)
+PASS  tools/list exposes learn_blueprint
+PASS  tools/list exposes recall_blueprint
+PASS  learn_blueprint stores
+PASS  recall_blueprint returns it
+PASS  keep-first no-op on same shape
+PASS  original survived keep-first
+PASS  verified edit auto-updates
+PASS  recall shows promoted sections
+
+ALL BLUEPRINT MCP CHECKS PASSED
+
+### 2. blueprint_project_inject.js (auto SAID_PROJECT + semantic + isolation)
+PASS  semantic recall on a no-shared-words paraphrase
+PASS  cross-project isolation (said-build does not see vivere blueprint)
+PASS  said-build recalls its OWN blueprint
+ALL PROJECT/SEMANTIC CHECKS PASSED
+
+### 3. blueprint_harvest_e2e.js (harvest real repo via MCP)
+PASS  tools/list exposes harvest_blueprints
+  Harvested 31 blueprint(s) from 42 files (1013 functions scanned):
+PASS  harvest learned >=1 blueprint
+PASS  a harvested blueprint is recallable
+ALL HARVEST MCP CHECKS PASSED
+
+### 4. run-bench.js (80/20 + token savings + learnings, marker-based, live MCP)
+
+Harvested 3 blueprints from the C# examples (one-time onboarding).
+Server+encoder warm-up: 635ms ONCE (not per recall).
+
+shape           | 80% | without(ch) | with(ch) | saved% | warm recall(ms)
+----------------|-----|-------------|----------|--------|----------------
+01-rest-crud    | 49% |        6196 |      907 |    85% |          38.47
+02-http-client  | 54% |        5635 |      936 |    83% |          17.76
+03-cli-command  | 36% |        4188 |      833 |    80% |          14.94
+----------------|-----|-------------|----------|--------|----------------
+TOTAL           |     |       16019 |     2676 |    83% |
+
+Learnings arm (the 20% fixes + update-when-better):
+  PASS  save bug fix
+  PASS  recall by paraphrase
+  PASS  update blueprint when better (verified)
+  PASS  recall shows the improved structure (EmitEvent)
+
+wrote G:\development\said-build\hard-eval\blueprint-bench\results\savings.psv
+
+### 5. recall-at-k-scale.js (recall@k at scale -- the HONEST open limit)
+harvested ~45 blueprints across 3 real sources
+
+  want=create  -> rank 9 of 9  q="record audit idempotency insert save response"
+  want=lookup  -> rank MISS of 10  q="http request message send async parse json"
+  want=run     -> rank 3 of 10  q="parse args validate context exit code"
+
+recall@1=0/3  recall@3=1/3  recall@5=1/3  miss=2
+(@3 is the LLM-picks window. If correct shape is in @3, "let the LLM decide" works at scale.)

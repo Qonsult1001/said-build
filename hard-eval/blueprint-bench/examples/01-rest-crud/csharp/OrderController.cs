@@ -2,8 +2,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Bench.RestCrud;
 
-// SAME create shape as InvoiceController (the 80% skeleton is byte-identical in structure); only the 20%
-// slots differ (Order fields, DML, response). Two occurrences => harvest learns ONE "create" blueprint.
+// Create Order (dotnet).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: ../said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it from the blueprint) | YOURS (yes, kept).
+// SAME create-shape skeleton as InvoiceController (the GENERATED 80% is identical) -> harvest learns ONE
+// `create` blueprint from the two; only the YOURS 20% (Order fields, DML, response) differs.
 [ApiController]
 [Route("orders")]
 public class OrderController : ControllerBase
@@ -20,24 +22,35 @@ public class OrderController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateOrderRequest req)
     {
-        // [80%] accept + audit
+        // [S1] accept-and-audit  GENERATED
         var responseId = Guid.NewGuid();
         await _audit.Record(req, responseId);
-        // [80%] idempotency
+        // [/S1]
+
+        // [S2] idempotency  GENERATED
         if (await _idem.Seen(req.IdempotencyKey)) return Conflict();
         await _idem.Mark(req.IdempotencyKey);
-        // [20%] guards (entity-specific)
+        // [/S2]
+
+        // [S3] guards  YOURS
         if (req.Lines is null || req.Lines.Count == 0) return BadRequest("At least one line is required");
         if (req.CustomerId == Guid.Empty) return BadRequest("CustomerId is required");
-        // [20%] save (entity-specific)
+        // [/S3]
+
+        // [S4] save  YOURS
         var id = Guid.NewGuid();
         await _store.Insert(id, req.CustomerId, req.Lines);
-        // [20%] response (entity-specific)
+        // [/S4]
+
+        // [S5] response  YOURS
         var data = new { id, req.CustomerId, lineCount = req.Lines.Count, status = "placed" };
-        // [80%] wrap + return
+        // [/S5]
+
+        // [S6] wrap-and-return  GENERATED
         var resp = Envelope.Ok(data, responseId);
         await _audit.Complete(responseId, 200, resp);
         return Ok(resp);
+        // [/S6]
     }
 }
 

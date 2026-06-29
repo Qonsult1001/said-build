@@ -96,14 +96,22 @@ the "world-class MCP, end-to-end" proof on the tool surface itself. Run:
 
 ## Blueprint (canon) memory → `test_blueprint.rs` + `hard-eval/blueprint_mcp_e2e.js`
 
-The reusable-80% channel (public name **blueprint**, internal **canon**): store a shape's structure once,
-reuse it instead of recreating it. Core (`crates/sca-core/tests/test_blueprint.rs`, 3 green): learn →
+The reusable-skeleton channel (public name **blueprint**, internal **canon**): store a shape's structure
+once, reuse it instead of recreating it. Core (`crates/sca-core/tests/test_blueprint.rs`, 4 green): learn →
 recall-by-paraphrase round-trip; **KEEP-FIRST** dedup (a 2nd learn of the same shape is a no-op, the
-original stands — the one rule that differs from learn-fix's supersede); `promote` supersedes; project
-isolation. MCP (`hard-eval/blueprint_mcp_e2e.js`, 8/8 green as a separate JSON-RPC process): `tools/list`
-exposes both → learn → recall → keep-first no-op → original survives → `promote=true` supersedes. CLI
-(`said learn-blueprint`/`recall-blueprint`) proven as a real binary. All three surfaces call the ONE
-shared `sca_core::ask` engine (byte-identical). Run: `node hard-eval/blueprint_mcp_e2e.js`.
+original stands — the one rule that differs from learn-fix's supersede); verified-edit AUTO-UPDATE;
+`promote` supersedes; project isolation. MCP (`hard-eval/blueprint_mcp_e2e.js`, 8/8 green as a separate
+JSON-RPC process): `tools/list` exposes both → learn → recall (TOP-K, LLM picks) → keep-first no-op →
+original survives → verified auto-update. CLI (`said learn-blueprint`/`recall-blueprint --top-k`) proven as
+a real binary. All three surfaces call the ONE shared `sca_core::ask` engine (byte-identical). Run:
+`node hard-eval/blueprint_mcp_e2e.js`.
+
+MEASURED (honest, `hard-eval/blueprint-bench/results/`): token saving **~83%** (recall skeleton + write
+only YOURS slots + skip reading the files); GENERATED share **36–54% (avg ~46%)** on the bench examples —
+NOT a fixed 80% (the "80/20" is the framing; the real ratio is code-dependent). OPEN LIMIT: fuzzy
+cross-shape recall RANKING at scale — `recall-at-k-scale.js` measures **recall@3 = 1/3** at 45 blueprints
+(the correct shape can fall past top-K). Top-K + LLM-picks works WHEN the right shape is in the window
+(proven live); the recall ceiling + junk harvested shapes are the documented next work (see 14.15).
 
 ## Harvest-at-init → `test_harvest.rs` + `hard-eval/blueprint_harvest_e2e.js`
 

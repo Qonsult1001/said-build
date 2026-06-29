@@ -1,7 +1,8 @@
 namespace Bench.CliCommand;
 
-// SAME command shape as AddUserCommand (80% skeleton identical); only the execute slot differs.
-// Two occurrences => harvest learns ONE "command" blueprint.
+// Remove User command (dotnet).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: ../said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it from the blueprint) | YOURS (yes, kept).
+// SAME command-shape skeleton as AddUserCommand (GENERATED 80% identical); only the YOURS 20% differs.
 public class RemoveUserCommand
 {
     private readonly IUserService _users;
@@ -9,17 +10,28 @@ public class RemoveUserCommand
 
     public async Task<int> Run(string[] args)
     {
-        // [80%] parse args
+        // [S1] parse-args  GENERATED
         var parsed = ArgParser.Parse(args);
-        // [80%] validate
+        // [/S1]
+
+        // [S2] validate  YOURS
         if (!parsed.Has("id")) { Console.Error.WriteLine("--id is required"); return 2; }
-        // [80%] load context
+        // [/S2]
+
+        // [S3] load-context  GENERATED
         var ctx = await AppContext.Load();
-        // [20%] execute (command-specific)
+        // [/S3]
+
+        // [S4] execute  YOURS
         await _users.Remove(ctx, parsed.Get("id"));
-        // [80%] print result
+        // [/S4]
+
+        // [S5] print-result  GENERATED
         Console.WriteLine($"removed user {parsed.Get("id")}");
-        // [80%] return exit code
+        // [/S5]
+
+        // [S6] return-exit-code  GENERATED
         return 0;
+        // [/S6]
     }
 }

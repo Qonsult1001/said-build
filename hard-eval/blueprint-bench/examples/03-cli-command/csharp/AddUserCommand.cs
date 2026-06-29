@@ -1,8 +1,9 @@
 namespace Bench.CliCommand;
 
-// CLI command-handler example, command = AddUser. The "command" shape: parse args -> validate ->
-// load context -> execute -> print result -> return exit code. The SAME shape appears in
-// RemoveUserCommand (support>=2) so harvest learns ONE "command" blueprint; only the execute slot differs.
+// Add User command (dotnet).  Sections: [Sn]..[/Sn] in run order.  Map + how to edit: ../said.index.md
+// Tag on each section = can you edit it?   GENERATED (no, .said rewrites it from the blueprint) | YOURS (yes, kept).
+// SAME command-shape skeleton as RemoveUserCommand (GENERATED 80% identical) -> harvest learns ONE `run`
+// blueprint; only the YOURS 20% (execute) differs.
 public class AddUserCommand
 {
     private readonly IUserService _users;
@@ -10,19 +11,30 @@ public class AddUserCommand
 
     public async Task<int> Run(string[] args)
     {
-        // [80%] parse args
+        // [S1] parse-args  GENERATED
         var parsed = ArgParser.Parse(args);
-        // [80%] validate
+        // [/S1]
+
+        // [S2] validate  YOURS
         if (!parsed.Has("name")) { Console.Error.WriteLine("--name is required"); return 2; }
         if (!parsed.Has("email")) { Console.Error.WriteLine("--email is required"); return 2; }
-        // [80%] load context
+        // [/S2]
+
+        // [S3] load-context  GENERATED
         var ctx = await AppContext.Load();
-        // [20%] execute (command-specific)
+        // [/S3]
+
+        // [S4] execute  YOURS
         var id = await _users.Add(ctx, parsed.Get("name"), parsed.Get("email"));
-        // [80%] print result
+        // [/S4]
+
+        // [S5] print-result  GENERATED
         Console.WriteLine($"added user {id}");
-        // [80%] return exit code
+        // [/S5]
+
+        // [S6] return-exit-code  GENERATED
         return 0;
+        // [/S6]
     }
 }
 
