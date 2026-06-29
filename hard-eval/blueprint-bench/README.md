@@ -64,9 +64,12 @@ Learnings: save fix / recall-by-paraphrase / update-when-better (verified) / rec
   effective intermediate representation across all target languages; no universally effective formal
   intermediate language exists"* (arXiv:2407.05411; **NL in the Middle**, arXiv:2507.08627). The canon is
   stored as structured-NL and rendered per language — on the right side of the literature.
-- **The recall-ranking limit is "anisotropy," with a CHEAP published fix** (Soft-ZCA whitening on the
-  existing vectors; arXiv:2411.17538) — not a new encoder. See 14.15 "Known limit" for the ordered fix
-  experiments.
+- **The recall-ranking limit was hypothesized as "anisotropy" (Soft-ZCA, arXiv:2411.17538) — but we TESTED
+  it and it's a NEGATIVE result.** Offline full Soft-ZCA (real corpus covariance, eigendecomp, α sweep)
+  stayed 2/3; the cli query still mis-ranks. Corrected diagnosis: a **vocabulary gap** (implementation-token
+  skeletons vs intent queries), not embedding geometry — whitening can't bridge it. Next lever = a
+  token-based rerank (semble), not whitening. See 14.15 "Experiment 1 RESULT". Measure with
+  `recall-ranking-probe.js`.
 
 ## Honest caveats (read these)
 
