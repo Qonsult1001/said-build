@@ -164,7 +164,27 @@ v2.1.193 (`memory/MEMORY.md` 5.48 KB; largest `.jsonl` 38.91 MB / 18,873 lines, 
 Each frontmatter fact already carries `name`/`description`/`metadata.type`/`originSessionId` — a clean map
 to `.said` `remember`/`learn_fix` (tier-1 facts) + Episodic (tier-2 distilled session). The slug → our
 `project:<name>` tag (point 1), so mirror + per-project clean + carry-forward all work via existing tags.
-**Open: Kimi's + Cursor's on-disk layout must be mapped the same way before wiring their readers.**
+
+## Cursor + Kimi: they keep almost NOTHING locally — the strategy flips (measured)
+
+Mapped Cursor + Kimi on this machine (and public format for Kimi, which isn't installed here):
+
+| Tool | Local memory? | What's local | Evidence |
+|---|---|---|---|
+| **Claude** | YES, rich | facts (`memory/*.md`), plans, file-history snapshots, CLAUDE.md | `~/.claude/` (mapped above) |
+| **Cursor** | NO real memory | only IDE state (open tabs, cursor pos) in `state.vscdb` SQLite; sparse checkpoint diffs; `.cursorrules` lives in the PROJECT. **Conversations are SERVER-SIDE, not local.** | `AppData/Roaming/Cursor/User/{globalStorage,workspaceStorage}/` |
+| **Kimi** | NO (not installed; chat client) | server-side conversations; at most a JSON/SQLite config. No project/work-state. | not present on machine |
+
+**Strategic consequence — the "beat them" case is STRONGER than "import their memory":**
+- Only **Claude** has a real local memory worth importing (build the Claude adapter — facts + plans +
+  file-set).
+- **Cursor + Kimi have NO portable local memory** — their context dies on logout / tool switch / machine
+  move. So for them `.said` is not competing with a local store; it **PROVIDES the memory they lack**, via
+  the steering hook (`recall` + `SessionStart` resume) — there is little to import FROM them.
+- Therefore step 2's emphasis is right where the owner put it: **`.said` as the portable work-state layer
+  all three plug into** — IMPORT Claude's local memory where it exists; PROVIDE owned portable work-state
+  to Cursor/Kimi where it doesn't. This is the undeniable moat: one file, survives tool switch + machine
+  move + logout, which none of the three offer.
 
 ## DECISION (revised by strategy) — OWN by default; pointers are the LEARNING step, not the product
 
