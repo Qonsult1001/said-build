@@ -145,18 +145,26 @@ Claude's per-project memory lives under `~/.claude/projects/<slug>/` where `<slu
 absolute path with `/` `:` → `-` (so a NEW project = a new slug dir the moment Claude touches it). FIVE
 distinct stores:
 
-| # | Store | Path | Content | Mirror priority |
-|---|---|---|---|---|
-| 1 | **Distilled facts** | `<slug>/memory/MEMORY.md` + per-fact `*.md` | the index + frontmatter facts (Why/How) | **HIGHEST** — this is the learning that carries forward |
-| 2 | **Raw transcripts** | `<slug>/*.jsonl` | every turn + tools + file content (111 MB here) | distill to ONE episode/session; the raw is disposable |
-| 3 | **Plans** | `~/.claude/plans/*.md` | plan-mode artifacts | medium — decisions/approach |
-| 4 | **File-history** | `<slug>/file-history/` | snapshots of changed files | low — what changed (episodic) |
-| 5 | **Global prefs** | `~/.claude/CLAUDE.md`, `settings.json` | cross-project preferences | cross-project tier |
+| # | Store | Path | Size (this repo) | HOW Claude uses it on RESUME (measured) | `.said` verdict |
+|---|---|---|---|---|---|
+| 1 | **Distilled facts** | `<slug>/memory/MEMORY.md` + per-fact `*.md` | 0.09 MB | **THE core continuity mechanism.** Index always loaded; a Sonnet sideQuery picks ~5 relevant facts; model ADAPTS them (never pastes). Encodes the WHY/invariant. | **OWN — richer.** Map to `remember`/`learn_fix`, `project:<slug>` tag |
+| 2 | **Raw transcripts** | `<slug>/*.jsonl` | **147 MB** | **NOT re-read on resume — it's an AUDIT LOG.** Claude reconstructs from facts + file-snapshots + the last conversation boundary, then COMPACTS to a summary. | **DISPOSABLE** (owner was right). Distil ONE episode if anything; never store/replay raw |
+| 3 | **Plans** | `~/.claude/plans/*.md` | 0.02 MB | Survive sessions and are readable — BUT plan STATUS is NOT auto-recovered (you re-check where you are). | **OWN + close the gap** — capture plan + WHERE-IN-IT (status), which Claude loses |
+| 4 | **File-history** | `<slug>/file-history/<sess>/<hash>@vN` | 24 MB/session | Latest version per edited file = how Claude answers "what was I editing?" on resume (snapshots, not diffs). | **OWN the file-SET + last state** (not 25 versions × 500KB) — the "what was I touching" signal |
+| 5 | **Global prefs/rules** | `~/.claude/CLAUDE.md`, `settings.json`, `.claude.json` | 0.03 MB | CLAUDE.md re-injected as `<system-reminder>` EVERY turn; settings cached (model/effort/tool budgets). | **OWN — non-negotiable** (the user's global rules; portable across tools) |
+
+THE KILLER FINDING (measured): Claude's resume = **distilled facts + file-snapshots + last-boundary
+summary** — NOT the 147 MB transcript. So `.said` needs NONE of the raw bulk. And Claude's continuity is
+**per-tool, per-machine, and loses plan-status on resume** — exactly the seams `.said` wins: own the
+ESSENTIAL pieces (facts + work-state + file-set + plan-status + rules) in ONE portable file that survives a
+tool switch, a machine move, and deleting Claude. Evidence: real files on this machine, Claude Code
+v2.1.193 (`memory/MEMORY.md` 5.48 KB; largest `.jsonl` 38.91 MB / 18,873 lines, audit-only;
+`plans/*.md` survive but status doesn't; `file-history/<sess>/<hash>@v24` = 506 KB snapshots).
 
 Each frontmatter fact already carries `name`/`description`/`metadata.type`/`originSessionId` — a clean map
 to `.said` `remember`/`learn_fix` (tier-1 facts) + Episodic (tier-2 distilled session). The slug → our
 `project:<name>` tag (point 1), so mirror + per-project clean + carry-forward all work via existing tags.
-**Open: Kimi's on-disk layout must be mapped the same way before wiring its reader.**
+**Open: Kimi's + Cursor's on-disk layout must be mapped the same way before wiring their readers.**
 
 ## DECISION (revised by strategy) — OWN by default; pointers are the LEARNING step, not the product
 
