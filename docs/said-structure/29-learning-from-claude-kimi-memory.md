@@ -46,6 +46,21 @@ artifact you didn't explicitly choose to keep.
   generalizes): index Claude's `MEMORY.md` facts into `.said` so the durable store is the union, and the
   large plaintext transcripts can then be pruned.
 
+## THE KEEP/DROP FILTER (owner's rule — governs ALL import + capture)
+
+One rule decides what `.said` stores from ANY tool: **keep only what assists FUTURE development** — fixing
+issues or persisting work across sessions. History that doesn't help a future fix is NOT memory.
+
+- **KEEP** (helps the future): work-state (current task / next step / decisions / blockers), learnings &
+  verified fixes (the WHY/invariant), rules & skills (CLAUDE.md / `.cursor/rules`), plans (+ where-you-are
+  in them).
+- **DROP** (no future value): raw conversation transcripts, file-history-for-audit, diffs-as-history.
+  "Even keeping diffs is not memory — we only keep what could help in future." This is distil-not-dump
+  made concrete, and it's also the privacy answer (the sensitive raw never lands on disk).
+
+Every adapter and every capture path is gated by this filter — import a tool's facts/rules/plans/work-
+state, never its transcript/diff bulk.
+
 ## Net recommendation (small, high-value)
 1. Auto-tag `project:<name>` at ingest → unlocks isolation + per-project delete + opt-in federation.
    **DONE 2026-06-28** (doc 28 §2; `test_project_scope.rs`).
@@ -172,7 +187,7 @@ Mapped Cursor + Kimi on this machine (and public format for Kimi, which isn't in
 | Tool | Local memory? | What's local | Evidence |
 |---|---|---|---|
 | **Claude** | YES, rich | facts (`memory/*.md`), plans, file-history snapshots, CLAUDE.md | `~/.claude/` (mapped above) |
-| **Cursor** | NO real memory | only IDE state (open tabs, cursor pos) in `state.vscdb` SQLite; sparse checkpoint diffs; `.cursorrules` lives in the PROJECT. **Conversations are SERVER-SIDE, not local.** | `AppData/Roaming/Cursor/User/{globalStorage,workspaceStorage}/` |
+| **Cursor** | PARTIAL (in-project) | **conversations server-side** (not local); BUT the project workspace DOES persist the useful bits: `.cursor/rules/*.mdc` (rules = its CLAUDE.md), `.cursor/skills/*/SKILL.md`, and plan/spec `.md` files Cursor's agent writes into the repo (the AppData-only scan missed these). IDE state (tabs) in `state.vscdb` = not memory. | `<project>/.cursor/rules/*.mdc`, `<project>/.cursor/skills/`, repo plan `.md`s |
 | **Kimi** | NO (not installed; chat client) | server-side conversations; at most a JSON/SQLite config. No project/work-state. | not present on machine |
 
 **Strategic consequence — the "beat them" case is STRONGER than "import their memory":**
