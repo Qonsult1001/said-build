@@ -2964,7 +2964,11 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // PHASE 2: SCA encoding (flat-memory mmap streaming with progress)
     let t_phase2 = std::time::Instant::now();
     let json_mode = json;
-    let _ = brain.build_index_with_progress(|done, total, passages| {
+    // Propagate index failure (e.g. an OOM-class allocation error) instead of swallowing it with
+    // `let _ =`. Swallowing it made a failed build proceed to "save" + print success with an EMPTY
+    // brain (exit 0) — a 50-minute silent failure on the Wonga corpus. A failed index is fatal: the
+    // brain would be empty/corrupt, so the user must see a nonzero exit + a real error.
+    brain.build_index_with_progress(|done, total, passages| {
         if !json_mode {
             let pct = done * 100 / total.max(1);
             eprint!("\r  [2/3] Encoding (SCA): {:3}% ({}/{} docs)  passages: {}    ",
@@ -2972,7 +2976,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
             use std::io::Write;
             let _ = std::io::stderr().flush();
         }
-    });
+    }).map_err(|e| format!("build_index (phase 2 encode) failed: {} — the brain was NOT saved", e))?;
     if !json {
         eprintln!("\r  [2/3] Encoded (SCA):  100%  ({:.1}s)                                        ",
                   t_phase2.elapsed().as_secs_f64());
