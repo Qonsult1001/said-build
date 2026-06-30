@@ -95,13 +95,16 @@ Four mechanisms promoted from the novel-mechanisms chapter as concrete work item
 
 ## Ingestion
 
-- [ ] **🔴 HIGH PRIORITY — fast large-repo ingest** (known-limitation [1.6](11-known-limitations.md#16-large-repo-ingest-is-too-slow--memory-heavy-not-acceptable-for-production--must-fix)).
-  A 13k-file repo (Wonga/African-bank scale) inits too slowly + needs ~2.4 GB spill. OOM is solved (RAM
-  bounded); INGEST SPEED is the blocker for onboarding real enterprise codebases. **Actions:** (1)
-  parallelize Phase-1 read+chunk+encode (rayon, bounded channel → streaming writer); (2) incremental +
-  resumable init (BLAKE3 fast path end-to-end); (3) serialize the BM25 word index; (4) research SOTA bulk
-  code-index ingest (zoekt, Tantivy, mem0/Zep) + a files/sec + peak-RAM benchmark. **Target:** 13k files in
-  single-digit minutes, re-init in seconds.
+- [ ] **🔴 HIGH PRIORITY — fast large-repo ingest** (known-limitation [1.6](11-known-limitations.md)).
+  **Memory: DONE** — the `index_batch` encode phase now streams in bounded windows sized from
+  `SAID_INDEX_BUDGET` (default **580 MB constant-memory ceiling**), and `is_junk_dir` skips .NET/SQL build
+  artifacts. The full-Wonga OOM (a single 2.2 GB alloc) is fixed; recall is result-invariant
+  (`test_index_budget_streaming`). **Speed: still open** — the per-file read+tree-sitter chunk loop is
+  serial (~250 s to read 16k files). **Remaining actions:** (1) parallelize Phase-1 read+chunk (rayon,
+  bounded channel → streaming writer; encode is already parallel + windowed); (2) incremental + resumable
+  init (BLAKE3 fast path end-to-end); (3) serialize the BM25 word index; (4) research SOTA bulk code-index
+  ingest (zoekt, Tantivy, mem0/Zep) + a files/sec + peak-RAM benchmark. **Target:** 13k files in
+  single-digit minutes **within the 580 MB ceiling**, re-init in seconds.
 - [ ] **pdfium fallback** — bundled slow rasterizer when `pdfium.dll` not found at runtime.
 - [ ] **Whisper GPU cross-platform** — Metal (macOS) + CUDA/ROCm (Linux) via sherpa-rs features.
 - [ ] **More tree-sitter languages** — Kotlin, Swift, Scala, Ruby, PHP.

@@ -43,32 +43,36 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST is too slow + memory-heavy (NOT ACCEPTABLE for production — must fix)
-- **Limitation** — initial `said init` of a large real codebase (measured: full Wonga banking repo, ~13k
-  C#/SQL files) is **very slow and memory-heavy**: Phase-1 read+AST-chunk+encode of every file runs minutes-
-  to-tens-of-minutes, and even WITH the shipped streaming spill (`SAID_SPILL_BUDGET`, INIT-ROUTE-TRACE.md
-  fixes 1–4) the spill scratch hit **~2.4 GB on disk** with ~0.9–1.0 GB resident before the brain even
-  saved. The OOM fix bounds RAM correctly (no crash), but it does NOT make the build FAST — spilling is
-  pure overhead (mmap + save-time re-pack), so a huge repo pays both the encode time AND the spill cost.
-- **Impact** — onboarding `.said` onto a real enterprise codebase (the "African bank rewrite" scale, the
-  actual product use case) is impractically slow today. This is a **product blocker**, not a benchmark
-  nicety. RECALL is fast (~100 ms warm, doc 35); INGEST is the bottleneck.
-- **Root cause (to confirm with profiling)** — Phase-1 is SERIAL per-file (read → tree-sitter chunk →
-  encode), the SCA encode of every passage dominates, and the BM25 word-index is rebuilt rather than
-  serialized. Spill bounds memory but adds I/O; it does not parallelize or skip work.
-- **Enhancement (research + build — REQUIRED, not optional)** —
-  1. **Parallelize Phase-1** (read+chunk+encode across cores; the encode is embarrassingly parallel — each
-     passage independent). `index_batch_with_progress` already has the structure; the file walk + encode
-     should fan out (rayon) with a bounded channel into the streaming writer.
-  2. **Incremental + resumable ingest** — checkpoint progress so a 13k-file init can resume, and `init` re-
-     runs only touch changed files (BLAKE3 dedup already exists; make it the fast path end-to-end).
-  3. **Serialize the word index** (the open item in INIT-ROUTE-TRACE) so it is never rebuilt.
-  4. **Research the SOTA**: how do code-index tools (Sourcegraph zoekt, Tantivy, ripgrep+tree-sitter
-     pipelines, mem0/Zep bulk ingest) ingest 10k+ files fast — batching, mmap-direct chunking, GPU/SIMD
-     batch encode, sharded indices. Adopt the proven pattern; measure ingest throughput (files/sec,
-     frames/sec, peak RAM) as a first-class benchmark.
-- **Target** — a 13k-file repo should init in **single-digit minutes with bounded RAM**, and re-init in
-  seconds. Until then, large-repo onboarding is gated.
+### 1.6 Large-repo INGEST is too slow (memory now BOUNDED to a 580 MB ceiling — speed still open)
+- **Memory: FIXED (the 580 MB constant-memory ceiling).** The full-Wonga (C#/T-SQL bank, ~38k frames)
+  ingest previously OOM-crashed in `index_batch` with a single `memory allocation of 2,214,592,528 bytes
+  failed` — the encode phase did one `texts.par_iter().collect()` over the WHOLE corpus, holding every
+  passage embedding at once. Two fixes landed:
+  - **Build-artifact skip** — `is_junk_dir` now skips .NET/SQL build dirs (`bin`, `obj`, `Debug`,
+    `Release`, `packages`, …). A .NET repo with no root `.gitignore` was pulling in `obj/Debug/*.generated.sql`
+    (regenerated proc dumps) — a passage explosion. (Helps, but is not the main lever: a real bank keeps
+    ~7.4k legitimate `.sql` files; the corpus is genuinely large.)
+  - **Streaming `index_batch`** — the encode phase now processes docs in **bounded windows** sized from
+    `SAID_INDEX_BUDGET` bytes (**default 580 MB** — the owner's constant-memory contract). Each window is
+    encoded in parallel, folded serially in doc order (bit-identical corpus mean), written to the mmap
+    scratch, then dropped. Peak heap for the phase = one window, not the corpus. Proven result-invariant:
+    `test_index_budget_streaming::windowing_is_result_invariant` (1-byte budget == 4 GB budget recall).
+- **Speed: STILL OPEN.** Phase-1 (read → tree-sitter chunk → encode) is still slow at scale (~250 s just to
+  read+chunk 16k files; full build tens of minutes). This is the remaining blocker for onboarding a real
+  enterprise codebase fast.
+- **Impact** — RAM is now safe (a 13k-file repo stays within the 580 MB ceiling, no crash). Onboarding
+  SPEED is the open product issue. RECALL is fast (~100 ms warm, doc 35).
+- **Enhancement (speed — still REQUIRED)** —
+  1. **Parallelize Phase-1 read+chunk** (the encode is already parallel + now windowed; the per-file
+     read+tree-sitter loop is still serial — fan it out with a bounded channel into the streaming writer).
+  2. **Incremental + resumable ingest** — checkpoint so a 13k-file init can resume; re-init only touches
+     changed files (BLAKE3 dedup exists — make it the end-to-end fast path).
+  3. **Serialize the word index** (open INIT-ROUTE-TRACE item) so it is never rebuilt.
+  4. **Research the SOTA**: zoekt / Tantivy / ripgrep+tree-sitter / mem0/Zep bulk ingest — batching,
+     mmap-direct chunking, SIMD batch encode, sharded indices. Measure files/sec + frames/sec + peak RAM as
+     a first-class benchmark.
+- **Target** — a 13k-file repo should init in **single-digit minutes within the 580 MB ceiling**, and
+  re-init in seconds. Memory target met; speed target pending.
 - **Roadmap §** — [Retrieval / fast large-repo ingest](12-roadmap.md#retrieval) — **HIGH PRIORITY.**
 
 ## 2. Pillars + memory model
