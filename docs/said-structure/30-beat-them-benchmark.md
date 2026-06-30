@@ -7,20 +7,46 @@ Kimi **at their own game**. Defined BEFORE building (metric-first), grounded in 
 
 Claude's `/compact` captures the SAME content we do (task, next step, decisions, exact values, files,
 blockers, plan). On the surface it looks identical — so the honest question is: **how are we actually
-better, not just different?** Three real differences (everything else is cosmetic):
+better, not just different?**
+
+### The honesty correction (measured, not assumed)
+
+We MEASURED a real Claude auto-compact on this very build (the 50,598-char summary at
+`5f03d865….jsonl:19432`). It KEPT most exact anchors — `current_workstate_resume()`, `Pillar::Episodic`,
+`kind:workstate`, `commit ec9f833`, the Soft-ZCA dead end. So the claim **"Claude loses the exact detail
+in ONE compaction" is FALSE** when the summary is well-fed. We do not make that claim. The defensible
+weakness is **CUMULATIVE**, confirmed by the field research: *"quality deteriorates with multiple
+compactions… after 2-3 compactions the agent behaves as if the session just started"* and native Claude
+compaction reduced **132k tokens → 2.3k (98%)** in one cycle (badlogic/cd2ef65; orchestrator.dev 2026).
+And even the academic SOTA does not fix it byte-exact: Contextual Memory Virtualisation
+([arXiv:2602.22402]) preserves state **summary-based, NOT byte-exact** ("maintains information flow without
+byte-exact duplication"). **Nobody — not Claude, not mem0, not the DAG paper — preserves the fact-dense
+detail byte-exact across N compactions. That is the one open seam, and the only axis `.said` claims.**
+
+### The three real differences
 
 | Axis | Claude `/compact` | `.said` work-state | Why it wins |
 |---|---|---|---|
 | **WHO writes it / WHEN** | an LLM SUMMARIZES the whole history at ~95% capacity — ONCE, reactively, mid-task (context already degrading; users report "goes off the rails mid-task"). | the AGENT writes a note WHEN IT CONCLUDES something (a decision, an exact value), incrementally, while context is FRESH. | captured at the best moment (fresh + intentional), not the worst (a panic-summary at 95%). |
-| **FIDELITY** | a GENERATED SUMMARY — it PARAPHRASES. arXiv + Claude's own docs: "loses technical specifics"; `threshold = size > 1` becomes "added a size check." | the agent's OWN WORDS stored VERBATIM, re-injected BYTE-EXACT. `size > 1, NOT >= 1` comes back identical, forever. | **THE difference**: a summary RE-DESCRIBES; we PRESERVE. The lossy fact-dense detail is exactly what they drop and we keep. |
+| **FIDELITY across N compactions** | a GENERATED SUMMARY that is itself RE-SUMMARIZED each cycle → detail decays geometrically (it can survive ONE well-fed compaction; it does not survive many). | the agent's OWN WORDS stored VERBATIM, read-by-id = exact string roundtrip — identical at round 1 and round N. | **THE difference is CUMULATIVE**: a summary re-describes a summary (compounding loss); we preserve the original bytes, so round-N fidelity = round-1 fidelity. |
 | **WHERE it lives / SCOPE** | IN-BAND — the summary IS the next context window, so it is compacted AGAIN next time → CUMULATIVE loss. Session-only; gone on `/clear`, new session, tool switch. | OUT-OF-BAND — a durable file OUTSIDE the window. NEVER compacted (it's not in the window). Survives `/clear`, new sessions, TOOL SWITCH, MACHINE MOVE. | their memory degrades every cycle because it lives in the thing being degraded; ours doesn't degrade BECAUSE it's external. |
 
-One line: **`/compact` is a lossy LLM summary that lives INSIDE the context window — it paraphrases the
-exact detail, degrades more each compaction, and dies with the session. `.said` work-state is the agent's
-OWN WORDS stored VERBATIM OUTSIDE the window — it never paraphrases, never degrades across compactions, and
-survives session/tool/machine boundaries.** The fields look the same; the mechanism is OPPOSITE
-(summarize-into-the-window, lossy/in-band/ephemeral  vs  preserve-outside-the-window, verbatim/out-of-band/
-durable).
+One line: **`/compact` is a lossy LLM summary that lives INSIDE the context window — it may survive one
+compaction but degrades every cycle after (it re-summarizes its own summary), and dies with the session.
+`.said` work-state is the agent's OWN WORDS stored VERBATIM OUTSIDE the window — round-N fidelity equals
+round-1 fidelity, and it survives session/tool/machine boundaries.** The fields look the same; the
+mechanism is OPPOSITE (summarize-into-the-window, lossy-cumulative/in-band/ephemeral  vs
+preserve-outside-the-window, verbatim/out-of-band/durable).
+
+### The wiki-linked CHAIN — full history, never just the latest
+
+The completing piece (owner's insight): each compaction does not OVERWRITE the work-state — it APPENDS a
+new frame **wiki-linked to the previous one** (`[[workstate::<project>::PREV]]` + a shared
+`link:workstate-<project>` concept edge in the OKF graph). So after N compactions you can walk the chain
+newest→oldest and **every round's decisions and exact values are still byte-exact, back to round 1** — the
+exact opposite of a decaying summary, which loses the oldest detail first. `append_work_state` /
+`work_state_history` in `sca-core::workstate`; CLI `said vault workstate-save --chain` /
+`workstate-history`. Proven e2e: 7 chained rounds → history walks back to `round 1: … V1 = 101` intact.
 
 ## WHAT FIXES EVERYTHING — free-form, core, verbatim (the design that made it work)
 
@@ -74,7 +100,7 @@ for Cursor/Kimi); `.said` is self-growing, deduped/promoted, semantic-recalled, 
 | **Consolidation quality** | re-encountering a shape UPDATES the canon (keep-first + verified promote), not duplicate pile-up | the "principled consolidation" the survey calls unsolved | `test_blueprint.rs` (keep-first/promote) |
 | **Abstention** | refuse when nothing relevant (no confabulation) | already in `ask`; matches LongMemEval's abstention axis | existing recall gate |
 | **Federation (cross-project)** | a fix/canon learned in project A surfaces in project B when opted in; isolated when not | theirs is per-project silos; ours federates via `project:` tags + `best_iterations_federated` | `test_project_scope.rs` + a 2-project e2e |
-| **COMPACTION SURVIVAL (the headline moat) — BUILT + PROVEN** | after the host compacts/summarizes (loses the last ~1M tokens of detail), can the agent RE-GROUND to exactly where it was — task, decisions, the precise values summarization discarded? | THIS is the #1 unfixable weakness of Claude/Cursor/Kimi: their working memory IS the context window, so compaction = amnesia ("goes stupid, doesn't know what happened"). `.said` is EXTERNAL + durable — it re-injects the exact work-state on the next turn, as if nothing disappeared. None of them can do this from inside the window. | **SHIPPED (CORE, not vault)**: `sca-core::workstate` (free-form note capture/load/resume) + CLI `said vault workstate-save/show/resume`. **PROVEN 7/7** via real `said.exe`: `hard-eval/beat-them/compaction-survival.js` (capture -> compaction -> re-ground EXACT values verbatim) |
+| **COMPACTION SURVIVAL (the headline moat) — BUILT + PROVEN** | after N compactions (each loses fact-dense detail; CUMULATIVE), can the agent RE-GROUND to exactly where it was — task, decisions, the precise values — with round-N fidelity = round-1 fidelity? | THIS is the #1 unfixable weakness of Claude/Cursor/Kimi: their working memory IS the context window, so it re-compacts its own summary each cycle → CUMULATIVE amnesia after 2-3 rounds. Even the academic SOTA (CMV, arXiv:2602.22402) is summary-based, NOT byte-exact. `.said` is EXTERNAL + byte-exact + wiki-CHAINED (full history, not just latest) — nobody else preserves the detail across N compactions. | **SHIPPED (CORE, not vault)**: `sca-core::workstate` (free-form note + `append_work_state`/`work_state_history` chain) + CLI `said vault workstate-save [--chain]/show/resume/history`. **PROVEN**: single-shot `compaction-survival.js` 7/7; CUMULATIVE `compaction-cumulative.js` (.said 10/10 every round vs in-band→0/10 by round 7); chain e2e (7 rounds walk back to round 1 byte-exact) |
 
 ## STATUS: compaction survival is BUILT + PROVEN (the moat is real, not just claimed)
 

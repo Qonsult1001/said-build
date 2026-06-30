@@ -41,6 +41,26 @@ fn frame_id(project: &str) -> String {
     format!("{}{}", WORKSTATE_ID_PREFIX, project.trim())
 }
 
+/// Shared concept that wiki-links every work-state frame of a project into ONE chain (the OKF graph
+/// edge, same `link:<concept>` namespace a `[[wikilink]]` yields). Walking this concept = the full,
+/// byte-exact history across every compaction — nothing is lost, not even the oldest round.
+fn chain_concept(project: &str) -> String {
+    // hyphenated (concepts are single tokens); kept lowercase to match the link: namespace.
+    format!("workstate-{}", project.trim().to_lowercase())
+}
+
+/// The per-round frame id, sequence-numbered so history is deterministically orderable WITHOUT relying
+/// on metadata timestamps (which are not settable; see frames.rs). Zero-padded for lexical ordering.
+fn chain_frame_id(project: &str, seq: usize) -> String {
+    format!("{}{}::{:06}", WORKSTATE_ID_PREFIX, project.trim(), seq)
+}
+
+/// Parse the sequence number back out of a chain frame id (None if it isn't one).
+fn seq_of(project: &str, doc_id: &str) -> Option<usize> {
+    let prefix = format!("{}{}::", WORKSTATE_ID_PREFIX, project.trim());
+    doc_id.strip_prefix(&prefix)?.parse::<usize>().ok()
+}
+
 /// CAPTURE the agent's free-form work-state note for a project — latest wins (one current state per
 /// project). Stored verbatim; `note` is the agent's own words. Returns the frame doc_id.
 pub fn save_work_state(brain: &mut SaidFile, project: &str, note: &str) -> String {
@@ -52,6 +72,71 @@ pub fn save_work_state(brain: &mut SaidFile, project: &str, note: &str) -> Strin
     brain.remember_with_pillar(Some(&id), note.trim(), None, Pillar::Episodic, tags);
     let _ = brain.build_index();
     id
+}
+
+/// APPEND a work-state note as a NEW frame in the project's wiki-linked chain (the owner's insight:
+/// link each compaction's memory to the previous one so the WHOLE history survives byte-exact, never
+/// just the latest). Each call:
+///   - writes a new sequence-numbered frame `workstate::<project>::NNNNNN`,
+///   - wiki-links it to the prior round (`[[workstate::<project>::PREV]]` in the body + the shared
+///     `link:workstate-<project>` chain concept) so the graph connects newest -> oldest,
+///   - refreshes the latest pointer `workstate::<project>` so `load_work_state`/`resume_block` (the hot
+///     post-compaction path) still return the newest note unchanged.
+/// Returns the new frame's doc_id. This is the chain-aware capture; `save_work_state` remains the
+/// latest-only capture for callers that don't want history.
+pub fn append_work_state(brain: &mut SaidFile, project: &str, note: &str) -> String {
+    let concept = chain_concept(project);
+    // next sequence = max existing + 1 (1-based; deterministic from the existing chain).
+    let next = work_state_chain_ids(brain, project)
+        .iter()
+        .filter_map(|id| seq_of(project, id))
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(1);
+    let id = chain_frame_id(project, next);
+
+    // Body carries an explicit [[prev]] wikilink so the chain is visible IN the note too (not only in
+    // tags) — newest frame points at the one before it. Round 1 has no predecessor.
+    let body = if next > 1 {
+        format!(
+            "{}\n\n[[{}]]",
+            note.trim(),
+            chain_frame_id(project, next - 1)
+        )
+    } else {
+        note.trim().to_string()
+    };
+
+    let tags = vec![
+        WORKSTATE_KIND_TAG.to_string(),
+        format!("project:{}", project.trim()),
+        format!("link:{}", concept), // the shared chain edge (OKF graph namespace)
+    ];
+    brain.remember_with_pillar(Some(&id), &body, None, Pillar::Episodic, tags);
+
+    // refresh the latest pointer to the newest note (verbatim, no chain decoration) for the hot path.
+    save_work_state(brain, project, note);
+    let _ = brain.build_index();
+    id
+}
+
+/// All chain frame doc_ids for a project (unordered). Uses the shared chain concept edge.
+fn work_state_chain_ids(brain: &mut SaidFile, project: &str) -> Vec<String> {
+    brain
+        .frames_linking_concept(&chain_concept(project))
+        .into_iter()
+        .filter(|id| seq_of(project, id).is_some())
+        .collect()
+}
+
+/// The FULL work-state history for a project, newest-first, each note byte-exact. This is what makes
+/// the moat complete: after N compactions you can walk back to round 1 and every decision/exact value
+/// is still here — the opposite of a decaying in-band summary. history[0] = newest, last = oldest.
+pub fn work_state_history(brain: &mut SaidFile, project: &str) -> Vec<String> {
+    let mut ids = work_state_chain_ids(brain, project);
+    // order by embedded sequence DESC (newest first); deterministic, no metadata-timestamp reliance.
+    ids.sort_by_key(|id| std::cmp::Reverse(seq_of(project, id).unwrap_or(0)));
+    ids.iter().filter_map(|id| brain.read(id)).collect()
 }
 
 /// RE-GROUND: read back the work-state note for a project, byte-exact (the post-compaction recovery).
@@ -96,6 +181,44 @@ mod tests {
         assert!(block.contains("MIN_COMMON_STEPS=3"));
         assert!(block.contains("commit fd2bf9e"));
         assert!(block.contains("Soft-ZCA whitening (tested negative"));
+
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(format!("{}.spill", p.to_string_lossy()));
+    }
+
+    #[test]
+    fn wiki_linked_chain_preserves_full_history_across_n_compactions() {
+        // The owner's insight: each compaction should APPEND a new work-state frame that wiki-links back
+        // to the previous one, so the WHOLE session history survives byte-exact -- not just the latest.
+        // This is strictly better than /compact (which decays) AND than latest-only (which drops history).
+        let p = std::env::temp_dir().join(format!("ws_chain_{}.said", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let mut brain = SaidFile::create(p.to_string_lossy().as_ref());
+
+        // 7 successive compactions; each round saves a DISTINCT note with a unique anchor.
+        const ROUNDS: usize = 7;
+        for r in 1..=ROUNDS {
+            let note = format!(
+                "round {r}: decided thing-{r}; exact value V{r} = {}; ruled out dead-end-{r}.",
+                r * 100 + 1
+            );
+            append_work_state(&mut brain, "said-build", &note);
+        }
+
+        // walk the chain newest -> oldest; every round's note must be present, byte-exact, in order.
+        let history = work_state_history(&mut brain, "said-build");
+        assert_eq!(history.len(), ROUNDS, "every compaction's frame must survive (no overwrite)");
+        // history[0] = newest (round 7), history[last] = oldest (round 1)
+        for (i, note) in history.iter().enumerate() {
+            let round = ROUNDS - i;
+            assert!(note.contains(&format!("round {round}:")), "round {round} note byte-exact in chain");
+            assert!(note.contains(&format!("V{round} = {}", round * 100 + 1)), "round {round} exact value survives");
+        }
+        // the OLDEST detail (round 1) -- the first thing a decaying summary loses -- is still byte-exact.
+        assert!(history.last().unwrap().contains("round 1: decided thing-1; exact value V1 = 101"));
+
+        // latest-resume still returns the newest (round 7) -- chain doesn't break the hot path.
+        assert!(load_work_state(&mut brain, "said-build").unwrap().contains("round 7:"));
 
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(format!("{}.spill", p.to_string_lossy()));

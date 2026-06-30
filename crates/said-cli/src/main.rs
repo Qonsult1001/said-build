@@ -1233,9 +1233,20 @@ enum VaultAction {
         /// Read the note from a file instead of --note (Windows-safe).
         #[arg(long)]
         note_file: Option<String>,
+        /// CHAIN this note to the project's wiki-linked history (append a new linked frame instead of
+        /// overwriting the latest). Preserves the FULL history byte-exact across every compaction.
+        #[arg(long)]
+        chain: bool,
     },
     /// Show the captured work-state note for a project.
     WorkstateShow {
+        vault: String,
+        #[arg(long)]
+        project: String,
+    },
+    /// Walk the FULL wiki-linked work-state history for a project (newest -> oldest), each note
+    /// byte-exact. Proves nothing is lost across N compactions -- the opposite of a decaying summary.
+    WorkstateHistory {
         vault: String,
         #[arg(long)]
         project: String,
@@ -1817,7 +1828,7 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
             }
             Ok(())
         }
-        VaultAction::WorkstateSave { vault, project, note, note_file } => {
+        VaultAction::WorkstateSave { vault, project, note, note_file, chain } => {
             // Work-state is a CORE memory function (sca-core, like blueprint/learn_fix) -- NOT a vault
             // feature. Free-form note (the agent's own words), captured so it survives a host compaction.
             let text = match (note, note_file) {
@@ -1830,10 +1841,30 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
             };
             let mut brain = sca_core::said_file::SaidFile::open(vault)
                 .map_err(|e| format!("open {}: {}", vault, e))?;
-            let id = sca_core::workstate::save_work_state(&mut brain, project, &text);
+            let id = if *chain {
+                sca_core::workstate::append_work_state(&mut brain, project, &text)
+            } else {
+                sca_core::workstate::save_work_state(&mut brain, project, &text)
+            };
             brain.save().map_err(|e| format!("save: {}", e))?;
-            if json { println!("{}", serde_json::json!({"ok": true, "workstate": id, "project": project})); }
-            else { println!("captured work-state for '{}' ({})", project, id); }
+            if json { println!("{}", serde_json::json!({"ok": true, "workstate": id, "project": project, "chained": chain})); }
+            else { println!("captured work-state for '{}' ({}){}", project, id, if *chain { " [chained]" } else { "" }); }
+            Ok(())
+        }
+        VaultAction::WorkstateHistory { vault, project } => {
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            let history = sca_core::workstate::work_state_history(&mut brain, project);
+            if json {
+                println!("{}", serde_json::json!({"project": project, "rounds": history.len(), "history": history}));
+            } else if history.is_empty() {
+                println!("no work-state history for '{}'", project);
+            } else {
+                println!("=== work-state history for '{}' ({} rounds, newest first) ===", project, history.len());
+                for (i, note) in history.iter().enumerate() {
+                    println!("\n--- [{}] ---\n{}", history.len() - i, note);
+                }
+            }
             Ok(())
         }
         VaultAction::WorkstateShow { vault, project } => {
