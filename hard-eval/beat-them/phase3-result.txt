@@ -1,0 +1,6 @@
+PHASE 3 -- compaction-survival + token savings (real claude-import brain)
+
+survival: re-grounded 4/4 exact decisions from out-of-band .said after a (simulated) compaction.
+token savings (doc 28, tokens~=chars/4): WITHOUT .said re-read transcript = 11954721 tok (47.8MB);
+WITH .said recall slice = 1044 tok -> 11451x fewer. The dump is also the LOSSY thing /compact
+paraphrased; the .said slice is byte-exact + scoped. This is the moat: out-of-band -> no compaction amnesia.
