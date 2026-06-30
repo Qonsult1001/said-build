@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ledgerly</title>
+</head>
+<body>
+  <main>
+    <h1>Ledgerly</h1>
+    <p>Minimal invoicing service: Invoices, Customers, Payments.</p>
+    <section>
+      <h2>Create invoice</h2>
+      <form id="invoice-form">
+        <input name="customerName" placeholder="Customer name" required />
+        <input name="amount" type="number" step="0.01" placeholder="Amount" required />
+        <input name="dueDate" type="date" required />
+        <button type="submit">Create</button>
+      </form>
+      <ul id="invoice-list"></ul>
+    </section>
+  </main>
+  <script>
+    // Frontend stub: POST /invoices then refresh GET /invoices.
+    const form = document.getElementById('invoice-form');
+    const list = document.getElementById('invoice-list');
+
+    async function refresh() {
+      const res = await fetch('/invoices');
+      const invoices = await res.json();
+      list.innerHTML = invoices
+        .map((i) => `<li>${i.customerName} — ${i.amount}</li>`)
+        .join('');
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      await fetch('/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      form.reset();
+      refresh();
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
