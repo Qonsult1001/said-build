@@ -2932,51 +2932,76 @@ impl CrystallineCore {
         // used the STEMMED crystalline::simple_tokenize here — which silently rebuilt the whole
         // BM25 word index from different tokens and dropped recall@10 0.95→0.90. We MUST match
         // the engine's whitespace tokenizer exactly to keep the lexical index identical.
-        let prepared: Vec<DocWords> = doc_texts
-            .par_iter()
-            .map(|text| {
-                let words: Vec<String> = text
-                    .split_whitespace()
-                    .map(|w| w.to_lowercase())
-                    .filter(|w| w.len() >= 3)
-                    .collect();
-                let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());
-                let mut tf: AHashMap<String, u32> = AHashMap::new();
-                for w in &words {
-                    let w_lower = w.to_lowercase();
-                    let w_normalized: String = w_lower
-                        .trim_end_matches(|c: char| c.is_ascii_punctuation())
-                        .to_string();
-                    if w_normalized.len() < 3 {
-                        continue;
-                    }
-                    *tf.entry(w_normalized.clone()).or_insert(0) += 1;
-                    let sx = Self::get_soundex_static(&w_normalized);
-                    indexed.push((w_normalized, sx));
-                }
-                DocWords { indexed, tf }
-            })
-            .collect();
+        // 580MB CEILING (#4): the old code did one `doc_texts.par_iter().collect::<Vec<DocWords>>()`
+        // over the WHOLE corpus — every doc's word list + soundex + tf map held in RAM at once. On a
+        // 37k-frame SQL corpus that transient was multiple GB (a second whole-corpus materialization
+        // beyond the encode phase). We process doc_texts in BOUNDED WINDOWS: par-prepare a window,
+        // merge it sequentially, drop it, next window. Peak transient = one window, not the corpus.
+        // Windows are contiguous in doc order and merged in order, so vocab-id assignment + every
+        // index is BIT-IDENTICAL to the old single-collect build.
+        let word_budget: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&b: &usize| b > 0)
+            .unwrap_or(580 * 1024 * 1024);
+        // Rough transient cost per doc: avg text bytes × a factor for the (word String + soundex
+        // String + tf entry) expansion. Sample to keep huge-SQL-file corpora windowing tight.
+        let sample_n = doc_texts.len().min(64);
+        let avg_text: usize = if sample_n == 0 { 1 } else {
+            (doc_texts[..sample_n].iter().map(|t| t.len()).sum::<usize>() / sample_n).max(1)
+        };
+        let per_doc_cost = avg_text * 6; // ~6× text size for the DocWords expansion
+        let word_window = (word_budget / per_doc_cost.max(1)).clamp(1, doc_texts.len().max(1));
 
-        // Sequential merge — identical vocab-id assignment + index population as the old loop.
-        for (i, dw) in prepared.into_iter().enumerate() {
-            let doc_idx = start_idx + i;
-            let mut word_set = AHashSet::new();
-            for (w_normalized, sx) in &dw.indexed {
-                let wid = self.intern_word(w_normalized);
-                word_set.insert(wid);
-                self.word_inverted_fast
-                    .entry(wid)
-                    .or_insert_with(AHashSet::new)
-                    .insert(doc_idx);
-                self.phonetic_index_fast
-                    .entry(sx.clone())
-                    .or_insert_with(AHashSet::new)
-                    .insert(wid);
+        let mut merged = 0usize;
+        for chunk in doc_texts.chunks(word_window) {
+            let prepared: Vec<DocWords> = chunk
+                .par_iter()
+                .map(|text| {
+                    let words: Vec<String> = text
+                        .split_whitespace()
+                        .map(|w| w.to_lowercase())
+                        .filter(|w| w.len() >= 3)
+                        .collect();
+                    let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());
+                    let mut tf: AHashMap<String, u32> = AHashMap::new();
+                    for w in &words {
+                        let w_lower = w.to_lowercase();
+                        let w_normalized: String = w_lower
+                            .trim_end_matches(|c: char| c.is_ascii_punctuation())
+                            .to_string();
+                        if w_normalized.len() < 3 {
+                            continue;
+                        }
+                        *tf.entry(w_normalized.clone()).or_insert(0) += 1;
+                        let sx = Self::get_soundex_static(&w_normalized);
+                        indexed.push((w_normalized, sx));
+                    }
+                    DocWords { indexed, tf }
+                })
+                .collect();
+
+            // Sequential merge — identical vocab-id assignment + index population as the old loop.
+            for dw in prepared.into_iter() {
+                let doc_idx = start_idx + merged;
+                let mut word_set = AHashSet::new();
+                for (w_normalized, sx) in &dw.indexed {
+                    let wid = self.intern_word(w_normalized);
+                    word_set.insert(wid);
+                    self.word_inverted_fast
+                        .entry(wid)
+                        .or_insert_with(AHashSet::new)
+                        .insert(doc_idx);
+                    self.phonetic_index_fast
+                        .entry(sx.clone())
+                        .or_insert_with(AHashSet::new)
+                        .insert(wid);
+                }
+                self.doc_word_sets_fast.push(word_set);
+                let tf_ids = self.intern_tf(dw.tf); self.doc_word_tf_fast.push(tf_ids);
+                self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
+                merged += 1;
             }
-            self.doc_word_sets_fast.push(word_set);
-            let tf_ids = self.intern_tf(dw.tf); self.doc_word_tf_fast.push(tf_ids);
-            self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
         }
         
         // Compute dynamic scale if holographic
