@@ -152,6 +152,15 @@ enum Commands {
         #[arg(long)]
         pillar: Option<String>,
     },
+    /// RESIDENT mode: load the brain + encoder ONCE, then answer queries from stdin (one per line) against
+    /// the warm brain — the fix for the per-process reload cost. Prints `READY`, then one answer per query
+    /// line; blank line / EOF exits. Use for hot loops / benchmarking / an agent that asks many questions.
+    Serve {
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        #[arg(long)]
+        pillar: Option<String>,
+    },
     /// Show how many memories you have
     Stats {
         /// Show the full technical breakdown (indexes, brain-state internals).
@@ -1484,6 +1493,7 @@ fn run() {
         #[cfg(feature = "code")]
         Commands::Callers { ref name } => cmd_code_edges(cli.path.as_deref(), name, true, cli.json),
         Commands::Ask { ref query, top, deep, ref engine, ref pillar } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, pillar.as_deref(), cli.json),
+        Commands::Serve { top, ref pillar } => cmd_serve(cli.path.as_deref(), top, pillar.as_deref(), cli.json),
         #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         #[cfg(feature = "code")]
@@ -3330,8 +3340,15 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
+fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
+    ask_on_brain(&mut brain, query, top, deep, engine, pillar, json)
+}
+
+/// RESIDENT-friendly query: run a single `ask` against an ALREADY-OPEN brain (encoder + indexes already
+/// loaded). `cmd_ask` opens-then-calls (one-shot); `cmd_serve` opens ONCE then calls this in a loop so the
+/// 16MB encoder + word index load a single time and every subsequent query is fast (~100ms warm).
+fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
     let t0 = Instant::now();
 
     // Tag-scope detection: if the query contains a scoping token like
@@ -3390,7 +3407,7 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
     // observe whether a cycle ran by watching the consolidation counter.
     let cycles_before = brain.engine.brain.consolidation_cycles;
     let (kept, keywords) = sca_core::ask::ask(
-        &mut brain, query, top, deep, scope_doc_ids.as_ref(),
+        brain, query, top, deep, scope_doc_ids.as_ref(),
     );
 
     if keywords.is_empty() {
@@ -3460,6 +3477,36 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         if dreamed {
             eprintln!("\n[brain] dream cycle complete â€” corpus drift toward recent query patterns");
         }
+    }
+    Ok(())
+}
+
+/// `said serve` — RESIDENT CLI mode. Opens the brain + loads the 16MB encoder + indexes ONCE, then reads
+/// queries from STDIN (one per line) and answers each against the already-warm brain. This is the fix for
+/// the per-process reload cost: instead of `said ask` spawning a fresh process (re-loading the encoder +
+/// rebuilding the word index) on every query, `serve` pays that once and every subsequent query is fast
+/// (~100ms warm on a 5k-frame brain, vs ~500ms+ cold per spawn). For hot loops / benchmarking / an agent
+/// that asks many questions, use this (or the resident MCP server). Protocol: write a query line to stdin,
+/// read the answer (JSON if --json) from stdout; a blank line or EOF exits. First line printed is `READY`.
+fn cmd_serve(path: Option<&str>, top: usize, pillar: Option<&str>, json: bool) -> Result<(), String> {
+    use std::io::{BufRead, Write};
+    let t_load = Instant::now();
+    let mut brain = open_brain(path)?;
+    // warm the encoder + word index with one throwaway query so the FIRST real query is already fast.
+    let _ = sca_core::ask::ask(&mut brain, "warmup", 1, false, None);
+    eprintln!("[serve] brain + encoder loaded in {:.0}ms — resident, ready. One query per stdin line; blank line/EOF exits.",
+              t_load.elapsed().as_secs_f64() * 1000.0);
+    println!("READY");
+    let _ = std::io::stdout().flush();
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let q = match line { Ok(l) => l, Err(_) => break };
+        let q = q.trim();
+        if q.is_empty() { break; }
+        // each query reuses the warm brain — no reopen, no reload.
+        let _ = ask_on_brain(&mut brain, q, top, false, "current", pillar, json);
+        let _ = std::io::stdout().flush();
     }
     Ok(())
 }
