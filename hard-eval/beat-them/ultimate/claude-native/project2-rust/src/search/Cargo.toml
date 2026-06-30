@@ -1,0 +1,11 @@
+[package]
+name = "search"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+core = { path = "../core" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
