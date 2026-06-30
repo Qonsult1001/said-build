@@ -397,43 +397,78 @@ impl ScaEngine {
         // and flipped a few fingerprints → measured recall@10 0.95→0.90; this restores it).
         use rayon::prelude::*;
         struct DocEnc { doc_mean: Vec<f32>, passages: Vec<Vec<f32>>, n_passages: usize }
-        let per_doc: Vec<DocEnc> = texts
-            .par_iter()
-            .map(|text| {
-                let passages_text = Self::chunk_text(text, 512, 256);
-                let n_passages = passages_text.len();
-                let mut doc_sum = vec![0.0f64; embed_dim];
-                let mut passages: Vec<Vec<f32>> = Vec::with_capacity(n_passages);
-                for passage in &passages_text {
-                    let mut emb = encoder.encode_one(passage);
-                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                    for v in &mut emb { *v /= norm; }
-                    for (i, &v) in emb.iter().enumerate() { doc_sum[i] += v as f64; }
-                    passages.push(emb);
-                }
-                let mut doc_mean: Vec<f32> = doc_sum.iter()
-                    .map(|&s| (s / n_passages.max(1) as f64) as f32)
-                    .collect();
-                let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                for v in &mut doc_mean { *v /= norm; }
-                DocEnc { doc_mean, passages, n_passages }
-            })
-            .collect();
 
-        // Serial fold IN DOC-THEN-PASSAGE ORDER → corpus_sum bit-identical to the serial path.
-        for (doc_idx, d) in per_doc.iter().enumerate() {
-            for emb in &d.passages {
-                for (i, &v) in emb.iter().enumerate() { corpus_sum[i] += v as f64; }
+        // 580MB CONSTANT-MEMORY CEILING (#4 / owner contract): the old code encoded ALL docs with
+        // one `texts.par_iter().collect()`, holding EVERY passage embedding of the WHOLE corpus in
+        // RAM at once — on the Wonga bank corpus (38k frames, 7.4k SQL files) that was a single
+        // ~2.2GB allocation that OOM-crashed index_batch. We now process docs in BOUNDED WINDOWS:
+        // each window is encoded in parallel (full throughput) then folded serially IN DOC ORDER
+        // and written to the mmap scratch, then DROPPED before the next window. Peak heap for this
+        // phase = one window's passage embeddings, not the corpus. The serial fold order across
+        // windows is identical to the old single-pass fold, so corpus_sum stays BIT-IDENTICAL
+        // (f64 add is order-sensitive; we never reorder). Window size is derived from a memory
+        // budget (SAID_INDEX_BUDGET bytes, default 580MB) ÷ an estimated per-doc embedding cost —
+        // no magic constant; a tiny corpus uses one window, a huge one streams.
+        let budget_bytes: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&b: &usize| b > 0)
+            .unwrap_or(580 * 1024 * 1024);
+        // Estimated bytes one doc's embeddings occupy while in flight: avg passages/doc × one
+        // embedding (embed_dim f32) × a slack factor for the par_iter result Vec + doc_sum. We
+        // bound by a sampled avg passage count so a corpus of huge SQL files windows tighter.
+        let sample_n = n_docs.min(64);
+        let avg_passages: usize = if sample_n == 0 { 1 } else {
+            let s: usize = texts[..sample_n].iter()
+                .map(|t| Self::chunk_text(t, 512, 256).len().max(1))
+                .sum();
+            (s / sample_n).max(1)
+        };
+        let per_doc_bytes = avg_passages * embed_dim * 4 * 3; // ×3 slack (emb + doc_sum + result)
+        let window = (budget_bytes / per_doc_bytes.max(1)).clamp(1, n_docs.max(1));
+
+        let mut doc_idx = 0usize;
+        for chunk in texts.chunks(window) {
+            // Encode this window in parallel — peak memory bounded to `window` docs.
+            let per_doc: Vec<DocEnc> = chunk
+                .par_iter()
+                .map(|text| {
+                    let passages_text = Self::chunk_text(text, 512, 256);
+                    let n_passages = passages_text.len();
+                    let mut doc_sum = vec![0.0f64; embed_dim];
+                    let mut passages: Vec<Vec<f32>> = Vec::with_capacity(n_passages);
+                    for passage in &passages_text {
+                        let mut emb = encoder.encode_one(passage);
+                        let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                        for v in &mut emb { *v /= norm; }
+                        for (i, &v) in emb.iter().enumerate() { doc_sum[i] += v as f64; }
+                        passages.push(emb);
+                    }
+                    let mut doc_mean: Vec<f32> = doc_sum.iter()
+                        .map(|&s| (s / n_passages.max(1) as f64) as f32)
+                        .collect();
+                    let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    for v in &mut doc_mean { *v /= norm; }
+                    DocEnc { doc_mean, passages, n_passages }
+                })
+                .collect();
+
+            // Serial fold IN DOC-THEN-PASSAGE ORDER → corpus_sum bit-identical to the serial path.
+            for d in &per_doc {
+                for emb in &d.passages {
+                    for (i, &v) in emb.iter().enumerate() { corpus_sum[i] += v as f64; }
+                }
+                total_passages += d.n_passages;
+                let offset = doc_idx * bytes_per_mean;
+                let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
+                scratch.as_mut_slice()[offset..offset + bytes_per_mean].copy_from_slice(bytes);
+                doc_idx += 1;
+                if doc_idx % 50 == 0 || doc_idx == n_docs {
+                    progress(doc_idx, n_docs, total_passages);
+                }
             }
-            total_passages += d.n_passages;
-            let offset = doc_idx * bytes_per_mean;
-            let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
-            scratch.as_mut_slice()[offset..offset + bytes_per_mean].copy_from_slice(bytes);
-            if (doc_idx + 1) % 50 == 0 || doc_idx + 1 == n_docs {
-                progress(doc_idx + 1, n_docs, total_passages);
-            }
+            drop(per_doc); // free this window before encoding the next — the memory bound.
         }
-        drop(per_doc);
         scratch.flush()?;
 
         phase_t!("B encode", _t); let _t = std::time::Instant::now();
