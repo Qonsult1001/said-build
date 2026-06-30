@@ -1477,6 +1477,11 @@ pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
         "kt" | "kts" => "kotlin",
         "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
         "c" | "h" => "c",
+        // SQL / T-SQL. Without this, a coding-fix or blueprint over a .sql file was invisible to
+        // the language layer (lang_from_edits → None → no per-language recall isolation; harvest
+        // skipped SQL from blueprints). SQL chunking + symbols are already first-class; this makes
+        // FIXES + BLUEPRINTS first-class too, the same as C#. (sql_chunk handles sql|ddl|tsql.)
+        "sql" | "tsql" | "ddl" => "sql",
         _ => return None,
     })
 }
@@ -1626,3 +1631,27 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
 // best_coding_fix(es) are validated end-to-end by the decoy + scale harnesses
 // (hard-eval/recall-measure.sh, recall-scale.sh) — they need a brain with the static
 // encoder loaded (the semantic fingerprint signal), which a pure unit test cannot give.
+
+#[cfg(test)]
+mod ext_to_lang_tests {
+    use super::ext_to_lang;
+
+    // The Wonga bank rewrite is C# + T-SQL. SQL chunking + symbols are first-class, but a
+    // coding-fix or blueprint over a .sql file was INVISIBLE to the language layer: ext_to_lang
+    // returned None for sql/tsql, so lang_from_edits could not tag a SQL fix (no per-language
+    // recall) and harvest.rs skipped SQL from blueprint harvesting entirely. SQL must be a
+    // first-class language for FIXES + BLUEPRINTS the same way C# is.
+    #[test]
+    fn sql_is_a_recognized_language() {
+        assert_eq!(ext_to_lang("sql"), Some("sql"));
+        assert_eq!(ext_to_lang("tsql"), Some("sql"));
+        assert_eq!(ext_to_lang("ddl"), Some("sql"));
+    }
+
+    #[test]
+    fn existing_languages_still_recognized() {
+        assert_eq!(ext_to_lang("cs"), Some("csharp"));
+        assert_eq!(ext_to_lang("py"), Some("python"));
+        assert_eq!(ext_to_lang("nonsense"), None);
+    }
+}
