@@ -43,11 +43,17 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST is too slow (memory now BOUNDED to a 580 MB ceiling — speed still open)
-- **Memory: FIXED (the 580 MB constant-memory ceiling).** The full-Wonga (C#/T-SQL bank, ~38k frames)
-  ingest previously OOM-crashed in `index_batch` with a single `memory allocation of 2,214,592,528 bytes
-  failed` — the encode phase did one `texts.par_iter().collect()` over the WHOLE corpus, holding every
-  passage embedding at once. Two fixes landed:
+### 1.6 Large-repo INGEST OOMs at scale — the RESIDENT WORD INDEX is the blocker (580 MB ceiling not yet met)
+- **STATUS (measured, honest): still OOM-crashes on full Wonga.** Two transient fixes cut steady-state heap
+  from **7.2 GB → 2.56 GB** (7.5×), but the full-Wonga (C#/T-SQL bank, 37,169 frames) ingest STILL aborts
+  with `memory allocation of 3,324,402,560 bytes failed` — a HashMap/Vec **resize-doubling spike** of the
+  resident BM25 word index (a ~1.6 GB structure rehashes to 3.3 GB). The word index is ~70 KB/doc; at 37k
+  docs that is ~2.6 GB resident, which physically cannot fit the 580 MB ceiling. **The only real fix is a
+  disk-backed / mmap word index (SPIMI)** — read postings in place from the file, not resident HashMaps.
+  (In progress.) NOTE: a hard allocation-abort exits the process directly, so even the exit-code fix can't
+  turn it into a clean error — only bounding the allocation (SPIMI) prevents it.
+- **Memory progress so far (the transient half).** The encode + word-prep phases previously each did one
+  `par_iter().collect()` over the WHOLE corpus. Two fixes landed:
   - **Build-artifact skip** — `is_junk_dir` now skips .NET/SQL build dirs (`bin`, `obj`, `Debug`,
     `Release`, `packages`, …). A .NET repo with no root `.gitignore` was pulling in `obj/Debug/*.generated.sql`
     (regenerated proc dumps) — a passage explosion. (Helps, but is not the main lever: a real bank keeps
