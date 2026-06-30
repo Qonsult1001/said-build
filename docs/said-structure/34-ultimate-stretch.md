@@ -40,15 +40,34 @@ read time — exactly what the research says full-context markdown gets wrong.
 MCP-only). Tombstoned (lineage preserved, recoverable). Scoped: only `project:<name>` frames go; other
 projects in a shared brain are untouched. Proven + regression 15/15 green.
 
-## Honest weakness (stated, not hidden)
+## Speed — corrected (the owner was right: the first number measured LOADING, not READING)
 
-**Recall latency scales with brain size.** A 0.2 MB project brain recalls in ~0.8 s; the 6 MB / 5,000-frame
-imported brain takes ~3.9 s per query (the per-query encode + frame scan grows with the corpus). This is
-real and worth optimizing — but the comparison still wins decisively: a 100 MB+ markdown store **cannot be
-loaded into context at all**, so the alternative isn't "faster", it's "impossible". The `.said` slice is
-~500 tokens regardless of corpus size, so the agent stays inside its window; markdown does not. Speed at
-scale is the optimization target ([3.5 retrieval pipeline](03-core-subsystems/3.5-retrieval-pipeline.md)),
-not a correctness gap.
+The initial "~3.9 s recall" was **wrong** — it measured a fresh CLI PROCESS (spawn + load the 16 MB embedded
+encoder + mmap + the BM25 word-index rebuild that is NOT serialized, per `INIT-ROUTE-TRACE.md`), not the
+read. Separated properly (resident MCP session):
+
+| Operation | Time | What it is |
+|---|---|---|
+| `get` by id (mmap read) | **4 ms** | direct frame read — instant, as the design promises |
+| warm `ask`, **small** brain (~600 frames) | **51 ms** | the real recall speed — fast |
+| warm `ask`, **big** brain (5,340 frames) | **~1,300 ms** | recall fusion, super-linear in frame count |
+| **cold** process, big brain | ~3,900 ms | spawn + encoder load + word-index rebuild + the above |
+
+Two separate facts:
+
+1. **In a resident session (the MCP server — the real deployment) load is paid ONCE.** `get` is 4 ms,
+   small-brain recall 51 ms. The per-CLI-process measurement re-paid the whole load every query — it
+   measured loading, not reading. The owner's suspicion was correct.
+2. **Genuine optimization target: recall fusion is super-linear in frame count** — 9× more frames (600→
+   5,340) costs ~25× more time (51→1,300 ms). Doc 3.5 claims ~12 ms on 19k frames, so ~1.3 s on 5k is
+   anomalous — a real perf issue in the fusion path (candidate scoring / float-rerank re-encode / graph
+   fan-out scaling), NOT a loading artifact and NOT a correctness gap. Also: the word index should be
+   serialized so it is not rebuilt at first query (`INIT-ROUTE-TRACE.md` already names this).
+
+The comparison wins regardless: a 100 MB+ markdown store **cannot be loaded into context at all**; the
+`.said` slice is ~500 tokens regardless of corpus size, and `get`/small-brain recall is single-digit-to-50
+ms. Speed at scale ([3.5 retrieval pipeline](03-core-subsystems/3.5-retrieval-pipeline.md)) is an
+optimization target, not a blocker.
 
 ## What this proves about the design
 
