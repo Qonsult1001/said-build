@@ -30,16 +30,19 @@ fn recall_is_project_scoped_when_requested_but_open_by_default() {
     let open = sca_core::ask::recall_coding_fixes(&mut b, q, 5, 0.0);
     assert!(open.len() >= 2, "unscoped recall should see both projects' fixes, got {}", open.len());
 
-    // (2) SCOPED to said-build: only said-build's fix may come back.
+    // (2) SCOPED to said-build: FIXES ARE ALWAYS CROSS-PROJECT (owner decision 2026-06-30, the "biggest
+    // win"). Even with SAID_RECALL_PROJECT set, procedural fixes from OTHER projects MUST still be
+    // recallable — that scope only narrows episodic/code memories in `ask`, never the reusable 80%.
+    // (Grounded: procedural memory is the transferable type, arXiv:2603.07670 / 2602.06052.)
     std::env::set_var("SAID_RECALL_PROJECT", "said-build");
     let scoped = sca_core::ask::recall_coding_fixes(&mut b, q, 5, 0.0);
     std::env::remove_var("SAID_RECALL_PROJECT");
-    assert!(!scoped.is_empty(), "scoped recall should still find said-build's fix");
-    for f in &scoped {
-        let body = b.get(&f.doc_id).unwrap_or_default();
-        assert!(body.contains("said-build"), "scoped recall leaked a non-said-build fix: {}", body);
-        assert!(!body.contains("said-echo"), "scoped recall returned said-echo fix under said-build scope");
-    }
+    assert!(scoped.len() >= 2,
+        "fixes are cross-project: scoped recall must STILL see both projects' fixes (the 80%-reuse win), got {}",
+        scoped.len());
+    let bodies: Vec<String> = scoped.iter().map(|f| b.get(&f.doc_id).unwrap_or_default()).collect();
+    assert!(bodies.iter().any(|x| x.contains("said-echo")),
+        "said-echo's fix must remain reusable from said-build (procedural = cross-project)");
 
     let _ = std::fs::remove_file(&p);
     let _ = std::fs::remove_file(format!("{}.spill", p.to_string_lossy()));

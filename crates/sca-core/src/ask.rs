@@ -633,6 +633,28 @@ pub fn ask(
         b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // ── PROJECT SCOPE (kind-aware, opt-in) ───────────────────────────────
+    // When SAID_RECALL_PROJECT is set, drop EPISODIC/SEMANTIC memories (commits, repo-docs, code chunks)
+    // belonging to ANOTHER project — a "which commit in said-build" must not pull said-echo's. But
+    // PROCEDURAL memories (coding fixes + blueprints) are NEVER scoped out: cross-project reuse of the
+    // verified 80% is the biggest win (docs/28; procedural = the transferable memory type, arXiv:2603.07670
+    // /2602.06052). Globals (untagged) always pass. Unset => no constraint (everything, reuse stays on).
+    // Sym hits (exact symbol lookups the caller explicitly named) are also exempt — a name lookup is
+    // intentional. This mirrors the lang:/project: filter already in recall_coding_fixes, additively.
+    if let Some(want) = crate::project::recall_project() {
+        results.retain(|c| {
+            if c.kind == "symbol" { return true; }                    // explicit name lookup — keep
+            match brain.frames.get_meta(&c.doc_id) {
+                Some(m) => {
+                    // Procedural (fixes/blueprints) bypass scope — always cross-project reusable.
+                    if m.pillar == crate::frames::Pillar::Procedural { return true; }
+                    crate::project::passes_scope(&m.tags, Some(&want))
+                }
+                None => true, // no meta (shouldn't happen) — don't drop
+            }
+        });
+    }
+
     // Content-dedup: the same fact stored under several ids would otherwise fill
     // several top-K slots with identical text — wasting the result budget and (when
     // fed to an LLM) the context window. Results are sorted by confidence, so keeping
@@ -1151,13 +1173,13 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     // Unset => no constraint (back-compat). Over-fetch k*4 so the post-filter still fills k.
     let lang_want = std::env::var("SAID_RECALL_LANG").ok()
         .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
-    // PROJECT GUARANTEE (mirrors lang): when SAID_RECALL_PROJECT is set, hard-filter to frames whose
-    // stored `project:<name>` tag matches — so project B never receives project A's fix unless it opts
-    // in. Frames with NO project tag (global/legacy) are kept (project-agnostic). Unset => no constraint
-    // (cross-project reuse stays possible — the federation/skill-pack story).
-    let project_want = std::env::var("SAID_RECALL_PROJECT").ok()
-        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let fetch_k = if lang_want.is_some() || project_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+    // PROCEDURAL = ALWAYS CROSS-PROJECT (owner decision 2026-06-30, the "biggest win"): coding fixes are
+    // the reusable 80% — recall a verified fix built in ANY project into the current one instead of
+    // recreating it. So `recall_coding_fixes` deliberately does NOT honor SAID_RECALL_PROJECT (that scopes
+    // only EPISODIC/code memories in `ask`); fixes ignore project scope entirely. Grounded in the standard
+    // memory taxonomy: PROCEDURAL memory is the transferable type (arXiv:2603.07670, 2602.06052). The
+    // `lang:` guarantee still applies (a Python task never gets a C# fix). [[language-isolation-guarantee]]
+    let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
 
     // Over-fetch a wider pool than k so we can measure THIS query's score distribution for the gate
     // below — the top candidate's absolute score is meaningless on its own (embedding anisotropy:
@@ -1201,16 +1223,10 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     pool.into_iter()
         .filter(|(doc_id, _)| gate_keep.contains(doc_id))
         .filter_map(|(doc_id, score)| {
-            // Read both meta tags (lang + project) in ONE immutable borrow, BEFORE the mutable
-            // brain.get(&body) below — avoids a second borrow and applies the project hard-filter here.
-            let (meta_lang, meta_project) = brain.frames.get_meta(&doc_id).map(|m| (
-                m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()),
-                m.tags.iter().find_map(|t| t.strip_prefix("project:").map(|s| s.to_string())),
-            )).unwrap_or((None, None));
-            // PROJECT hard-filter (None on the frame => project-agnostic => kept for reuse).
-            if let Some(want) = &project_want {
-                if let Some(have) = &meta_project { if have != want { return None; } }
-            }
+            // Read the lang tag (fixes are ALWAYS cross-project, so no project filter here — see the
+            // PROCEDURAL=cross-project note above). Single immutable borrow before the mutable brain.get.
+            let meta_lang = brain.frames.get_meta(&doc_id)
+                .and_then(|m| m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()));
             let body = brain.get(&doc_id).unwrap_or_default();
             Some(RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang })
         })
@@ -1331,28 +1347,21 @@ pub fn promote_blueprint(
 }
 
 /// RECALL TOP-K blueprints for a shape query, highest score first. Reuses the coding-fix semantic
-/// scorer, filtered to BLUEPRINT_KIND_TAG, with the same SAID_RECALL_LANG/SAID_RECALL_PROJECT
-/// hard-filters as fixes.
+/// scorer, filtered to BLUEPRINT_KIND_TAG. Like fixes, blueprints are PROCEDURAL = ALWAYS CROSS-PROJECT
+/// (owner decision 2026-06-30): a verified reusable structure built in any project is recallable in the
+/// current one — so this does NOT honor SAID_RECALL_PROJECT. The SAID_RECALL_LANG guarantee still applies.
 pub fn recall_blueprints(brain: &mut SaidFile, shape: &str, k: usize, min_score: f32) -> Vec<RecalledBlueprint> {
     let lang_want = std::env::var("SAID_RECALL_LANG").ok()
         .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
-    let project_want = std::env::var("SAID_RECALL_PROJECT").ok()
-        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let fetch_k = if lang_want.is_some() || project_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+    let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
 
     let pool = best_blueprints(brain, shape, fetch_k.max(8));
     pool.into_iter()
         .filter(|(_, score)| *score >= min_score)
         .filter_map(|(doc_id, score)| {
-            // Read lang + project meta tags in one immutable borrow before the mutable get() (mirrors
-            // recall_coding_fixes). project hard-filter: keep matching project, or untagged (agnostic).
-            let (meta_lang, meta_project) = brain.frames.get_meta(&doc_id).map(|m| (
-                m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()),
-                m.tags.iter().find_map(|t| t.strip_prefix("project:")).map(|s| s.to_string()),
-            )).unwrap_or((None, None));
-            if let Some(want) = &project_want {
-                if let Some(have) = &meta_project { if have != want { return None; } }
-            }
+            // lang tag only (blueprints are always cross-project — see the PROCEDURAL note above).
+            let meta_lang = brain.frames.get_meta(&doc_id)
+                .and_then(|m| m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()));
             let body = brain.get(&doc_id).unwrap_or_default();
             Some(RecalledBlueprint {
                 shape: blueprint_shape(&body),

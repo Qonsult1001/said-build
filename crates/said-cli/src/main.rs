@@ -2402,6 +2402,15 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     // brains refuse. Callers should use pointer ingest via `said ingest --pointer`.
     brain.ensure_content_ingest_allowed()?;
 
+    // PROJECT SCOPE (code-ingest only): `add --dir` is a CODE-project ingest, so when SAID_PROJECT is set
+    // every chunk/file gets `project:<name>` + the `link:project-<name>` wiki edge — so recall can scope
+    // to one project and the graph fan-out reaches the whole project cluster (docs/28 keystone). Bare
+    // `remember`/`add <text>` is left global (handled elsewhere). Empty when unset => today's behavior.
+    let project_tags: Vec<String> = match sca_core::project::current_project() {
+        Some(p) => vec![sca_core::project::project_tag(&p), sca_core::project::project_link_tag(&p)],
+        None => Vec::new(),
+    };
+
     let mut added = 0u64;
     let mut skipped = 0u64;
 
@@ -2455,12 +2464,13 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                     for chunk in &chunks {
                         let doc_id = format!("{}::{}", rel_path, chunk.name);
                         let title = format!("{}:{}-{} ({})", filename, chunk.start_line, chunk.end_line, chunk.kind);
-                        let tags = vec![
+                        let mut tags = vec![
                             format!("lang:{}", ext),
                             format!("kind:{}", chunk.kind),
                             format!("file:{}", rel_path),
                             hash_tag.clone(),
                         ];
+                        tags.extend(project_tags.iter().cloned());
                         let opts = PutOptions {
                             doc_id: &doc_id,
                             content: &chunk.content,
@@ -2484,12 +2494,13 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
         {
             let doc_id = rel_path.clone();
             let title = filename.clone();
-            let tags = vec![
+            let mut tags = vec![
                 format!("lang:{}", ext),
                 format!("kind:file"),
                 format!("file:{}", rel_path),
                 hash_tag.clone(),
             ];
+            tags.extend(project_tags.iter().cloned());
             let opts = PutOptions {
                 doc_id: &doc_id,
                 content: &content,
