@@ -2909,13 +2909,16 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     }
 
     // PHASE 3: Compact blocks + save to disk
-    // OKF deterministic cross-link pass (opt-in via SAID_OKF_LINKS=1). Builds the section-level
-    // concept graph: links PIECES (paragraph/chunk frames) that share a content entity (party,
-    // ref-number, key phrase) + literal title mentions — no LLM, hash-safe link: tags (a few
+    // OKF deterministic cross-link pass — DEFAULT ON (opt OUT with SAID_OKF_LINKS=0). Builds the
+    // section-level concept graph: links PIECES (paragraph/chunk frames) that share a content entity
+    // (party, ref-number, key phrase) + literal title mentions — no LLM, hash-safe link: tags (a few
     // bytes each in the existing tag list, ~2% size growth, NOT a duplicate index). Traversal
-    // (frames_linking_concept / ask bridge) then reaches every section about an entity. Opt-in
-    // because it scans every body; code frames are excluded internally regardless.
-    if std::env::var("SAID_OKF_LINKS").is_ok() {
+    // (frames_linking_concept / the ask Engine-D bridge, doc 3.5) then reaches every memory about an
+    // entity — the "we cannot miss anything" property; this is what makes recall reach cross-referenced
+    // commits/docs, not just the single best lexical hit. Default-on so EVERY init (CLI + the MCP init
+    // that shells to it) gets the wiki graph; code frames are excluded internally regardless. Set
+    // SAID_OKF_LINKS=0 to skip (e.g. a pure-code brain where the body scan isn't worth it).
+    if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
         let edges = brain.build_concept_links();
         if !json { eprintln!("  [okf] section concept graph: {edges} entity/title link edges"); }
     }
