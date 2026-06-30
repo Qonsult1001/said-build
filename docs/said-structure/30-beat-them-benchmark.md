@@ -37,20 +37,26 @@ for Cursor/Kimi); `.said` is self-growing, deduped/promoted, semantic-recalled, 
 | **Consolidation quality** | re-encountering a shape UPDATES the canon (keep-first + verified promote), not duplicate pile-up | the "principled consolidation" the survey calls unsolved | `test_blueprint.rs` (keep-first/promote) |
 | **Abstention** | refuse when nothing relevant (no confabulation) | already in `ask`; matches LongMemEval's abstention axis | existing recall gate |
 | **Federation (cross-project)** | a fix/canon learned in project A surfaces in project B when opted in; isolated when not | theirs is per-project silos; ours federates via `project:` tags + `best_iterations_federated` | `test_project_scope.rs` + a 2-project e2e |
-| **COMPACTION SURVIVAL (the headline moat) — BUILT + PROVEN** | after the host compacts/summarizes (loses the last ~1M tokens of detail), can the agent RE-GROUND to exactly where it was — task, decisions, the precise values summarization discarded? | THIS is the #1 unfixable weakness of Claude/Cursor/Kimi: their working memory IS the context window, so compaction = amnesia ("goes stupid, doesn't know what happened"). `.said` is EXTERNAL + durable — it re-injects the exact work-state on the next turn, as if nothing disappeared. None of them can do this from inside the window. | **SHIPPED**: `said-vault::workstate` (byte-exact capture/load/resume) + CLI `said vault workstate-save/show/resume`. **PROVEN 7/7** via real `said.exe`: `hard-eval/beat-them/compaction-survival.js` (capture -> compaction -> re-ground EXACT values verbatim) |
+| **COMPACTION SURVIVAL (the headline moat) — BUILT + PROVEN** | after the host compacts/summarizes (loses the last ~1M tokens of detail), can the agent RE-GROUND to exactly where it was — task, decisions, the precise values summarization discarded? | THIS is the #1 unfixable weakness of Claude/Cursor/Kimi: their working memory IS the context window, so compaction = amnesia ("goes stupid, doesn't know what happened"). `.said` is EXTERNAL + durable — it re-injects the exact work-state on the next turn, as if nothing disappeared. None of them can do this from inside the window. | **SHIPPED (CORE, not vault)**: `sca-core::workstate` (free-form note capture/load/resume) + CLI `said vault workstate-save/show/resume`. **PROVEN 7/7** via real `said.exe`: `hard-eval/beat-them/compaction-survival.js` (capture -> compaction -> re-ground EXACT values verbatim) |
 
 ## STATUS: compaction survival is BUILT + PROVEN (the moat is real, not just claimed)
 
-Shipped in `said-vault` (the owner's call — exact/lossless internal recall): `workstate` module captures the
-work-state schema below byte-exact (`remember_with_pillar` + `read` = exact string roundtrip; the
-`exact_values` preserved verbatim), CLI `said vault workstate-{save,show,resume}`. PROVEN end-to-end 7/7
-through the real `said.exe` (`hard-eval/beat-them/compaction-survival.js`, result in
-`beat-them/results/compaction-survival.txt`): capture mid-task state -> simulate host compaction (detail
-gone) -> `workstate-resume` re-grounds the EXACT values verbatim (`threshold = size > 1, NOT >= 1`;
-`MIN_COMMON_STEPS = 3`; `ask.rs:1542` formula; `commit fd2bf9e`; the next step; the ruled-out dead end so
-it won't retry). That is the "like nothing ever disappeared" bar, demonstrated. Unit test:
-`crates/said-vault/src/workstate.rs`. NEXT: wire the auto re-ground onto the host hook (SessionStart /
-post-compaction UserPromptSubmit) so it fires without a manual command.
+Shipped as a CORE memory function in `sca-core::workstate` — like `ask`/`learn_coding_fix`/blueprint,
+available to EVERY `.said` user on every surface. (NOT a vault feature: the vault is a separate
+ENTERPRISE-only product for document compliance; work-state is core. It was prototyped in the vault first,
+then moved.) The work-state is FREE-FORM, agent-authored — one NL note in the agent's OWN words, NOT a
+rigid field schema (the blueprint-NL lesson + Self-Spec, 14.15: don't impose a schema it fights;
+`WORKSTATE_HINT` offers a suggested shape as guidance only). Stored as one frame `workstate::<project>`
+(Episodic, `kind:workstate`); read back by id = exact string roundtrip (no fuzzy match — keyed by project),
+so the note survives VERBATIM. CLI: `said vault workstate-{save,show,resume}` (grouping; the impl is core).
+
+PROVEN end-to-end 7/7 through the real `said.exe` (`hard-eval/beat-them/compaction-survival.js`, result in
+`beat-them/results/compaction-survival.txt`): capture the agent's free-form mid-task note -> simulate host
+compaction (detail gone) -> `workstate-resume` re-grounds the note verbatim, with the EXACT values intact
+(`threshold = size > 1, NOT >= 1`; `MIN_COMMON_STEPS = 3`; `ask.rs:1542` formula; `commit fd2bf9e`; the
+next step; the ruled-out dead end so it won't retry). The "like nothing ever disappeared" bar, demonstrated.
+Unit test: `crates/sca-core/src/workstate.rs`. NEXT: wire the auto re-ground onto the host hook
+(SessionStart / post-compaction UserPromptSubmit) so it fires without a manual command.
 
 ## THE headline: compaction survival — the weakness none of them can fix
 

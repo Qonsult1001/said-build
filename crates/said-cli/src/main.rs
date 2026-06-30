@@ -1218,48 +1218,30 @@ enum VaultAction {
         #[arg(long)]
         admin: String,
     },
-    /// COMPACTION-SURVIVAL work-state: capture the current mid-task state (task / next / decisions /
-    /// exact values / files / blockers / plan-status) byte-exact, so it survives a host context
-    /// compaction. The exact fact-dense detail summarization throws away is preserved verbatim.
+    /// COMPACTION-SURVIVAL work-state: capture your current mid-task state, in your OWN words, so it
+    /// survives a host context compaction (the exact detail summarization throws away, kept verbatim).
+    /// Free-form — write whatever lets you resume exactly; `--note-file` recommended on Windows.
     WorkstateSave {
-        /// Path to the vault .said file
+        /// Path to the .said brain file
         vault: String,
         /// Project key (one current work-state per project)
         #[arg(long)]
         project: String,
-        /// What I'm doing right now
+        /// The work-state note, in your own words.
         #[arg(long)]
-        task: String,
-        /// The immediate next action
+        note: Option<String>,
+        /// Read the note from a file instead of --note (Windows-safe).
         #[arg(long)]
-        next: String,
-        /// Decisions made + exact form (repeatable): --decision "threshold = size > 1"
-        #[arg(long = "decision")]
-        decisions: Vec<String>,
-        /// Exact fact-dense values to preserve verbatim (repeatable): --exact "MIN_COMMON_STEPS=3"
-        #[arg(long = "exact")]
-        exact: Vec<String>,
-        /// File in the working set (repeatable)
-        #[arg(long = "file")]
-        files: Vec<String>,
-        /// A current blocker (repeatable)
-        #[arg(long = "blocker")]
-        blockers: Vec<String>,
-        /// A dead end already tried — don't retry (repeatable)
-        #[arg(long = "ruled-out")]
-        ruled_out: Vec<String>,
-        /// Where in the plan we are
-        #[arg(long, default_value = "")]
-        plan_status: String,
+        note_file: Option<String>,
     },
-    /// Show the captured work-state for a project (the raw JSON; --json for machine form).
+    /// Show the captured work-state note for a project.
     WorkstateShow {
         vault: String,
         #[arg(long)]
         project: String,
     },
     /// RE-GROUND after a compaction: print the work-state resume block to re-inject into the host —
-    /// exactly where you were, with the lost detail verbatim ("like nothing ever disappeared").
+    /// exactly where you were, your own note verbatim ("like nothing ever disappeared").
     WorkstateResume {
         vault: String,
         #[arg(long)]
@@ -1835,28 +1817,31 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
             }
             Ok(())
         }
-        VaultAction::WorkstateSave { vault, project, task, next, decisions, exact, files, blockers, ruled_out, plan_status } => {
-            // Work-state is the user's OWN mid-task state (not the role-gated doc vault) -> open the
-            // SaidFile directly. Byte-exact capture so it survives a host compaction.
-            let mut brain = sca_core::said_file::SaidFile::open(vault)
-                .map_err(|e| format!("open vault {}: {}", vault, e))?;
-            let state = said_vault::workstate::WorkState {
-                project: project.clone(), task: task.clone(), next_step: next.clone(),
-                decisions: decisions.clone(), exact_values: exact.clone(), files: files.clone(),
-                blockers: blockers.clone(), ruled_out: ruled_out.clone(), plan_status: plan_status.clone(),
-                updated_at: 0,
+        VaultAction::WorkstateSave { vault, project, note, note_file } => {
+            // Work-state is a CORE memory function (sca-core, like blueprint/learn_fix) -- NOT a vault
+            // feature. Free-form note (the agent's own words), captured so it survives a host compaction.
+            let text = match (note, note_file) {
+                (Some(_), Some(_)) => return Err("pass only one of --note / --note-file".into()),
+                (Some(n), None) => n.clone(),
+                (None, Some(f)) => std::fs::read_to_string(f)
+                    .map_err(|e| format!("read --note-file {}: {}", f, e))?
+                    .trim_start_matches('\u{feff}').to_string(),
+                (None, None) => return Err("missing --note or --note-file".into()),
             };
-            let id = said_vault::workstate::save(&mut brain, state);
-            brain.save().map_err(|e| format!("save vault: {}", e))?;
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            let id = sca_core::workstate::save_work_state(&mut brain, project, &text);
+            brain.save().map_err(|e| format!("save: {}", e))?;
             if json { println!("{}", serde_json::json!({"ok": true, "workstate": id, "project": project})); }
             else { println!("captured work-state for '{}' ({})", project, id); }
             Ok(())
         }
         VaultAction::WorkstateShow { vault, project } => {
             let mut brain = sca_core::said_file::SaidFile::open(vault)
-                .map_err(|e| format!("open vault {}: {}", vault, e))?;
-            match said_vault::workstate::load(&mut brain, project) {
-                Some(s) => { if json { println!("{}", s.to_json()); } else { println!("{}", s.render_resume()); } }
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            match sca_core::workstate::load_work_state(&mut brain, project) {
+                Some(note) => { if json { println!("{}", serde_json::json!({"project": project, "note": note})); }
+                                else { println!("{}", note); } }
                 None => { if json { println!("{}", serde_json::json!({"workstate": serde_json::Value::Null})); }
                           else { println!("no work-state captured for '{}'", project); } }
             }
@@ -1864,8 +1849,8 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
         }
         VaultAction::WorkstateResume { vault, project } => {
             let mut brain = sca_core::said_file::SaidFile::open(vault)
-                .map_err(|e| format!("open vault {}: {}", vault, e))?;
-            match said_vault::workstate::resume_block(&mut brain, project) {
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            match sca_core::workstate::resume_block(&mut brain, project) {
                 Some(block) => println!("{}", block),
                 None => println!("no work-state to resume for '{}'", project),
             }

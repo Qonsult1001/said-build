@@ -70,6 +70,7 @@ pub mod document_ingest;
 #[cfg(feature = "browser")]
 pub mod browser_ingest;
 pub mod steering;
+pub mod workstate;
 pub mod vault_tombstone;
 #[cfg(feature = "ocr")]
 pub mod ocr_ingest;
