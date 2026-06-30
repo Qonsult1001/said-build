@@ -11,7 +11,7 @@ export prompt, and the retrieval-theory literature. This is the SCHEMA standard;
 Recall@1 on a single fixed-dimension embedding has a **mathematical ceiling** — proven in
 *Theoretical Limitations of Embedding-Based Retrieval* (arXiv:2508.21038): a d-dim vector can perfectly
 retrieve only a bounded subset of query→doc relationships, and it worsens as the relevant set grows
-relative to `d`. `.said`'s encoder is d=64 (small + portable by design, [3.2](03-core-subsystems/3.2-static-encoder.md)),
+relative to `d`. `.said`'s encoder is d=128 (small + portable by design, [3.2](03-core-subsystems/3.2-static-encoder.md)),
 so chasing recall@1 = 100% on one vector is chasing a provably-unreachable target.
 
 So the leading systems don't. Verified from real source:
@@ -112,7 +112,7 @@ query
 
 The embedding/vector path ([3.5](03-core-subsystems/3.5-retrieval-pipeline.md)) still runs and helps —
 but it is the *candidate generator*, not the gate. The **graph reachability + LLM-select** is what makes
-recall complete, so the d=64 recall@1 ceiling (arXiv:2508.21038) stops being the limiting factor.
+recall complete, so the d=128 recall@1 ceiling (arXiv:2508.21038) stops being the limiting factor.
 
 ## Why this beats a pure-embedding memory
 

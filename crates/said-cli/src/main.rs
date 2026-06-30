@@ -2812,7 +2812,12 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                             rel_path, chunk.name, base_kind, chunk.start_line
                         );
                         let title = format!("{}:{}-{} ({})", filename, chunk.start_line, chunk.end_line, base_kind);
-                        brain.remember_as(&doc_id, &chunk.content, Some(&title));
+                        let fid = brain.remember_as(&doc_id, &chunk.content, Some(&title));
+                        // KIND CLASSIFICATION (mirrors cmd_add_dir): AST code chunks live in the Code
+                        // pillar so per-pillar scope (row-31) can separate code from commits/docs — without
+                        // this, init stored everything as default Episodic and `--pillar episodic` leaked
+                        // code into "which commit" queries (recall collapse). Same rule for both ingest paths.
+                        brain.frames.set_pillar(fid, sca_core::frames::Pillar::Code);
                         brain.add_tag(&doc_id, &source_tag);
                         brain.add_tag(&doc_id, "ingest:code");
                         brain.add_tag(&doc_id, &hash_tag);
@@ -2874,7 +2879,17 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         }
 
         // Non-code files OR code files where AST chunking failed: store whole file
-        brain.remember_as(&rel_path, &content, Some(&filename));
+        let fid = brain.remember_as(&rel_path, &content, Some(&filename));
+        // KIND CLASSIFICATION (mirrors cmd_add_dir whole-file path): code file -> Code, doc/markdown ->
+        // Semantic, plain text (commits etc.) -> Episodic (default). Lets "which commit" scope to episodic.
+        let wf_pillar = if code_extension(&ext) {
+            sca_core::frames::Pillar::Code
+        } else if doc_extension(&ext) {
+            sca_core::frames::Pillar::Semantic
+        } else {
+            sca_core::frames::Pillar::Episodic
+        };
+        brain.frames.set_pillar(fid, wf_pillar);
         brain.add_tag(&rel_path, &source_tag);
         let kind_tag = if code_extension(&ext) { "ingest:code" } else { "ingest:text" };
         brain.add_tag(&rel_path, kind_tag);
