@@ -175,3 +175,11 @@ fact-recall). The compounding axis is where the moat is and where no competitor 
 metric harnesses first (some exist), then the work-state-continuity feature, then run the full comparison.
 Status: DEFINED (this doc). Harnesses: effort + cross-task recall + consolidation EXIST; cross-tool
 portable continuity is the one to build.
+
+## RUN IT — full suite, 8/8, reproducible
+
+Every axis above is now exercised on ONE complete `.said` brain (all code/sym/blueprints/fixes/memories/
+docs/git in one file). Exact reproduction — every step, every gotcha — is in
+[32-full-suite-reproduction.md](32-full-suite-reproduction.md). Quick path:
+`node hard-eval/beat-them/full-suite.js` → **8/8 PASS** (coding-brain, effort-decay, federation,
+consolidation/keep-first, abstention, compaction-survival, ~12,969× token saving, update-on-the-fly).
