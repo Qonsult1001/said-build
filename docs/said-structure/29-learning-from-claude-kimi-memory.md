@@ -4,6 +4,10 @@ The owner asked: Claude Code (and Kimi) already persist memory; what can `.said`
 and there's a safety concern that Claude's chat history "is not safe on my side." Here is what was found on
 disk and what it means for `.said`.
 
+> This doc is the import **strategy**. The memory **format standard** it implies (claim → evidence → source,
+> recalled by manifest + OKF links, sidestepping the recall@1 ceiling) is specified in
+> [31-memory-evidence-standard.md](31-memory-evidence-standard.md).
+
 ## How Claude Code persists memory (observed on this machine)
 - **Per-project, path-keyed auto-memory.** `C:/Users/Carter/.claude/projects/<path-slug>/memory/` — the
   slug encodes the project path (`g--development-said-build`). So Claude memory IS auto-scoped per project
