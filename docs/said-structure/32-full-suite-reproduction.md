@@ -115,6 +115,7 @@ Expected: **8/8 PASS** — one axis per [doc 30](30-beat-them-benchmark.md):
 |---|---|---|
 | 2 — update on the fly (MCP) | `phase2-mcp-update-live.js` | live `remember`/`tool_completion`/`journal` over the REAL MCP server, immediately recallable, no restart (6/6) |
 | 3 — compaction-survival + tokens | `phase3-compaction-survival.js` | re-ground exact decisions after compaction + ~11,451× token saving |
+| 4 — federation (2 REAL projects) | `phase4-federation-real.js` | project A (said-build) + project B (orchestration crate): code/episodic SCOPED per project; A's fix + blueprint FEDERATE to B; fix crosses even when recall is project-scoped (5/5) |
 | compaction (single + cumulative) | `compaction-survival.js`, `compaction-cumulative.js` | byte-exact re-ground; `.said` 10/10 every round vs in-band → 0/10 |
 | /compact head-to-head | `claude-compact-vs-said.js` | working-set SYMBOL recall (exact, doc 3.1 PureLexical) — `.said` 12/12 vs /compact 2/12 |
 | memory-evidence coexistence | `memory-evidence-e2e.js` | memory + blueprint + fix coexist in one brain (7/7) |
