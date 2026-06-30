@@ -2974,6 +2974,26 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         if !json { eprintln!("  [okf] section concept graph: {edges} entity/title link edges"); }
     }
 
+    // HARVEST-ON-INIT — DEFAULT ON (opt OUT with SAID_INIT_HARVEST=0). A full `init` already AST-chunks
+    // every code file, so it also scans for REPEATED structures and auto-learns blueprints (the 80% canon)
+    // from them -- doc 14.15 "harvest-at-init". Min-support 2 (a structure must repeat) + size/similarity
+    // gates; keep-first so re-running never clobbers a hand-tuned/promoted blueprint. This makes building
+    // the coding brain learn its canon automatically (owner: "part of global"), not a separate command.
+    #[cfg(feature = "code")]
+    if std::env::var("SAID_INIT_HARVEST").map(|v| v != "0").unwrap_or(true) {
+        let h_files: Vec<PathBuf> = {
+            let mut v = Vec::new();
+            walk_dir_gitignore(&dir_path, &dir_path, &gitignore_patterns, &mut v);
+            v
+        };
+        let report = sca_core::harvest::harvest_blueprints(
+            &mut brain, h_files, |p| std::fs::read_to_string(p).ok());
+        if !json && report.clusters_found > 0 {
+            eprintln!("  [harvest] auto-learned {} blueprint(s) from {} repeated structure(s)",
+                      report.clusters_found, report.clusters_found);
+        }
+    }
+
     let t_phase3 = std::time::Instant::now();
     if !json {
         eprint!("  [3/3] Compacting + saving...");
