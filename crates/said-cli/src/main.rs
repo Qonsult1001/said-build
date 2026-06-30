@@ -139,6 +139,11 @@ enum Commands {
         /// + 3-boost algorithm â€” for A/B comparison and head-to-head.
         #[arg(long, default_value = "current")]
         engine: String,
+        /// Scope recall to one or more pillars (comma-separated: episodic,semantic,procedural,code,
+        /// external). E.g. a "which commit" question -> `--pillar episodic` excludes code/doc frames
+        /// so the right memory ranks first (row-31 per-pillar scope). Omit = all pillars (default).
+        #[arg(long)]
+        pillar: Option<String>,
     },
     /// Show how many memories you have
     Stats {
@@ -1439,7 +1444,7 @@ fn run() {
         Commands::Calls { ref name } => cmd_code_edges(cli.path.as_deref(), name, false, cli.json),
         #[cfg(feature = "code")]
         Commands::Callers { ref name } => cmd_code_edges(cli.path.as_deref(), name, true, cli.json),
-        Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
+        Commands::Ask { ref query, top, deep, ref engine, ref pillar } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, pillar.as_deref(), cli.json),
         #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         #[cfg(feature = "code")]
@@ -2478,7 +2483,10 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                             tags,
                             ..PutOptions::new(&doc_id, &chunk.content)
                         };
-                        brain.put_with(&opts);
+                        // KIND CLASSIFICATION: AST code chunks live in the Code pillar so a code query
+                        // can be scoped to code and a non-code ("which commit") query can exclude it
+                        // (row-31 per-pillar scope). Default Episodic would mix code into every result.
+                        brain.put_with_pillar(&opts, sca_core::frames::Pillar::Code);
                         added += 1;
                     }
                     continue;
@@ -2508,7 +2516,17 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                 tags,
                 ..PutOptions::new(&doc_id, &content)
             };
-            brain.put_with(&opts);
+            // KIND CLASSIFICATION for whole-file ingest: a code file with no AST chunks -> Code;
+            // a doc/markdown file -> Semantic (distilled knowledge); plain text -> Episodic (default).
+            // This is what lets a "which commit" query route AWAY from code/doc frames (row-31 scope).
+            let pillar = if code_extension(&ext) {
+                sca_core::frames::Pillar::Code
+            } else if doc_extension(&ext) {
+                sca_core::frames::Pillar::Semantic
+            } else {
+                sca_core::frames::Pillar::Episodic
+            };
+            brain.put_with_pillar(&opts, pillar);
             added += 1;
         }
     }
@@ -3206,7 +3224,7 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &str, json: bool) -> Result<(), String> {
+fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
     let t0 = Instant::now();
 
@@ -3229,6 +3247,36 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         } else {
             None
         };
+
+    // PILLAR SCOPE: `--pillar episodic,code,...` restricts recall to those pillars by resolving their
+    // doc_ids and intersecting with any tag-scope, then passing the set into the SAME fusion (so the
+    // wiki-link graph fan-out and rerank all run within the chosen kind). A "which commit" query with
+    // `--pillar episodic` thus excludes Code/Semantic frames and ranks the right commit first (row-31).
+    let scope_doc_ids = match pillar {
+        Some(raw) => {
+            let wanted: std::collections::HashSet<sca_core::frames::Pillar> = raw.split(',')
+                .filter_map(|s| match s.trim().to_lowercase().as_str() {
+                    "episodic" => Some(sca_core::frames::Pillar::Episodic),
+                    "semantic" => Some(sca_core::frames::Pillar::Semantic),
+                    "procedural" => Some(sca_core::frames::Pillar::Procedural),
+                    "code" => Some(sca_core::frames::Pillar::Code),
+                    "external" => Some(sca_core::frames::Pillar::External),
+                    _ => None,
+                }).collect();
+            if wanted.is_empty() { scope_doc_ids } else {
+                let in_pillar: std::collections::HashSet<String> = brain.frames.active_doc_ids().iter()
+                    .filter(|did| brain.frames.get_meta(did).map(|m| wanted.contains(&m.pillar)).unwrap_or(false))
+                    .map(|s| s.to_string())
+                    .collect();
+                // intersect with an existing tag-scope if present, else use the pillar set alone.
+                match scope_doc_ids {
+                    Some(tag_scope) => Some(tag_scope.intersection(&in_pillar).cloned().collect()),
+                    None => Some(in_pillar),
+                }
+            }
+        }
+        None => scope_doc_ids,
+    };
 
     // Delegate to the shared 3-engine fusion. MCP's ask tool calls the same
     // function so CLI and MCP return identical result sets. Auto-dream now fires

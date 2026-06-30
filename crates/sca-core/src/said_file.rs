@@ -1418,6 +1418,17 @@ impl SaidFile {
         frame_id
     }
 
+    /// Insert a text frame under an EXPLICIT pillar (e.g. classify ingested code as `Pillar::Code`,
+    /// commits as `Pillar::Episodic`, docs as `Pillar::Semantic`) so per-pillar/kind retrieval scoping
+    /// (docs/said-structure/05-features/row-31, 04-four-pillars/memory.md) actually works. `put_with`
+    /// alone derives the pillar from `memory_type`, which has no Code variant — this is the only path
+    /// that can store a Code-pillar frame from the generic ingest layer.
+    pub fn put_with_pillar(&mut self, opts: &crate::frames::PutOptions, pillar: crate::frames::Pillar) -> u64 {
+        let frame_id = self.frames.put_with_pillar(opts, pillar);
+        self.dirty = true;
+        frame_id
+    }
+
     /// Insert raw binary content (image/font bytes that may contain non-UTF-8
     /// sequences). Unlike `put()` which takes `&str`, this accepts arbitrary
     /// `&[u8]`. Delegates to FrameStore::put_with_pillar_raw which is the
