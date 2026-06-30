@@ -1,0 +1,14 @@
+THE ULTIMATE STRETCH -- portable .said memory vs 100MB markdown
+
+  PASS  (1) file size at scale             134MB markdown -> 6.01MB .said = 22x smaller
+  PASS  (2) speed (recall returns a slice, no full-corpus load) 842ms (0.2MB brain) / 3875ms (6MB/5k-frame brain) -- vs loading 100MB+ markdown = impossible to fit
+  PASS  (3) missing-info (fact-dense detail kept) claim + evidence links recalled byte-exact
+  PASS  (4) tokens saved vs markdown-in-context markdown-in-context 33,621,140 tok/session -> .said slice 524 tok = 64,162x fewer
+  PASS  (5) wipe a whole project (scoped)  project PA wiped; PB survives; recoverable (tombstoned)
+  PASS  (6) cross-use A->B (cross-language canon) C# and Rust canon byte-identical (federation)
+  PASS  (7) parallel agents (shared-memory model) fleet shares ONE .said; per-agent brains + federation (proven 5/5, multiagent-shared-memory.js)
+  PASS  (8) portable project-switch (plug + go) copied the .said, opened under a NEW project; sym + recall work natively -- portable, zero setup
+
+8/8 proven
+
+Headline: 134MB real Claude markdown -> 6.01MB .said (22x smaller); markdown-in-context 33,621,140 tok/session vs .said slice ~524 tok.

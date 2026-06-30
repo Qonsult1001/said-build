@@ -78,8 +78,15 @@ enum Commands {
     },
     /// Remove a memory by its id
     Delete {
-        /// Document ID
-        doc_id: String,
+        /// Document ID (omit when using --project to wipe a whole project)
+        doc_id: Option<String>,
+        /// Wipe an ENTIRE project: tombstone every frame tagged `project:<name>` (the portable-brain
+        /// "delete everything for project X"). Lineage preserved (recoverable via `admin`).
+        #[arg(long)]
+        project: Option<String>,
+        /// Preview only — list what would be deleted without tombstoning.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Symbol lookup: find a function/struct/class/trait by name.
     /// Tries exact match first, then prefix, then case-insensitive contains.
@@ -1469,7 +1476,7 @@ fn run() {
             }
         }
         Commands::Get { ref doc_id } => cmd_get(cli.path.as_deref(), doc_id, cli.json),
-        Commands::Delete { ref doc_id } => cmd_delete(cli.path.as_deref(), doc_id, cli.json),
+        Commands::Delete { ref doc_id, ref project, dry_run } => cmd_delete(cli.path.as_deref(), doc_id.as_deref(), project.as_deref(), dry_run, cli.json),
         #[cfg(feature = "code")]
         Commands::Sym { ref name, max, list } => cmd_sym(cli.path.as_deref(), name, max, list, cli.json),
         #[cfg(feature = "code")]
@@ -3209,8 +3216,33 @@ fn cmd_get(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String> {
     }
 }
 
-fn cmd_delete(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String> {
+fn cmd_delete(path: Option<&str>, doc_id: Option<&str>, project: Option<&str>, dry_run: bool, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
+
+    // PROJECT WIPE: tombstone every frame tagged project:<name> -- "delete everything for project X" on the
+    // portable brain (doc 28). Lineage preserved (recoverable via `admin`). Mirrors the MCP tag_filter path.
+    if let Some(proj) = project {
+        let want = format!("project:{}", proj.trim());
+        let targets: Vec<String> = brain.frames.active_doc_ids().iter()
+            .filter(|did| brain.frames.get_meta(did).map(|m| m.tags.iter().any(|t| t == &want)).unwrap_or(false))
+            .map(|s| s.to_string())
+            .collect();
+        if dry_run {
+            if json { println!("{}", serde_json::json!({"dry_run": true, "project": proj, "would_delete": targets.len(), "doc_ids": targets})); }
+            else { println!("[DRY RUN] would wipe {} frame(s) for project '{}'", targets.len(), proj);
+                   for d in targets.iter().take(20) { println!("  {}", d); } }
+            return Ok(());
+        }
+        let mut n = 0;
+        for d in &targets { if brain.tombstone_frame(d) { n += 1; } }
+        brain.save()?;
+        if json { println!("{}", serde_json::json!({"wiped": n, "project": proj})); }
+        else { println!("Wiped {} frame(s) for project '{}' (tombstoned, recoverable via admin)", n, proj); }
+        return Ok(());
+    }
+
+    // single doc_id delete (the original path)
+    let Some(doc_id) = doc_id else { return Err("provide a doc_id, or --project <name> to wipe a whole project".into()); };
     let deleted = brain.delete(doc_id);
     brain.save()?;
     if json {
