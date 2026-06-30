@@ -162,6 +162,38 @@ enum Commands {
         #[arg(long)]
         prefix: Option<String>,
     },
+    /// Save a memory-evidence frame (the doc-31 standard): a CLAIM with structured evidence, recalled
+    /// by manifest + LLM-select (like Claude/Kimi), with link: edges to its source (commit/file/concept).
+    /// Coexists with blueprints + coding-fixes in the same brain.
+    SaveMemory {
+        /// Short kebab-case name (the manifest slug + doc_id).
+        #[arg(long)]
+        name: String,
+        /// One-line description — the relevance hook the LLM matches on when selecting.
+        #[arg(long)]
+        description: String,
+        /// Memory type: user | feedback | project | reference (Claude's 4 types).
+        #[arg(long, default_value = "project")]
+        mtype: String,
+        /// The claim body (the agent's own words; ideally fact + Why: + How to apply:).
+        #[arg(long)]
+        claim: Option<String>,
+        /// Read the claim from a file instead (Windows-safe).
+        #[arg(long)]
+        claim_file: Option<String>,
+        /// Evidence tokens (repeatable): commit hashes, file/symbol names, concepts -> link: edges.
+        #[arg(long)]
+        evidence: Vec<String>,
+    },
+    /// Recall a memory by name — returns the claim verbatim + its evidence links (the source pointers
+    /// to verify before acting, per the drift rule).
+    RecallMemory {
+        #[arg(long)]
+        name: String,
+    },
+    /// List the memory MANIFEST (name + description + type) — the selectable list the host LLM picks
+    /// from (Claude's findRelevantMemories pattern; no vector recall@1).
+    MemoryManifest {},
     /// Shrink the memory file (reclaim space)
     ///
     /// Pass --drop-history with either --all or --keep N to permanently purge old
@@ -1485,6 +1517,10 @@ fn run() {
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
         Commands::ListConcepts { prefix } => cmd_list_concepts(cli.path.as_deref(), prefix.as_deref(), cli.json),
+        Commands::SaveMemory { ref name, ref description, ref mtype, ref claim, ref claim_file, ref evidence } =>
+            cmd_save_memory(cli.path.as_deref(), name, description, mtype, claim.as_deref(), claim_file.as_deref(), evidence, cli.json),
+        Commands::RecallMemory { ref name } => cmd_recall_memory(cli.path.as_deref(), name, cli.json),
+        Commands::MemoryManifest {} => cmd_memory_manifest(cli.path.as_deref(), cli.json),
         Commands::Compact { drop_history, all, keep } => cmd_compact(cli.path.as_deref(), drop_history, all, keep, cli.json),
         Commands::Config { ref key, ref value } => {
             cmd_config(key.as_deref(), value.as_deref(), cli.json)
@@ -3617,6 +3653,68 @@ fn cmd_list_concepts(path: Option<&str>, prefix: Option<&str>, json: bool) -> Re
     println!("Concepts ({} distinct):", concepts.len());
     for (c, n) in &concepts {
         println!("  {:>4}  {}", n, c);
+    }
+    Ok(())
+}
+
+fn cmd_save_memory(path: Option<&str>, name: &str, description: &str, mtype: &str,
+                   claim: Option<&str>, claim_file: Option<&str>, evidence: &[String], json: bool) -> Result<(), String> {
+    let claim_text = match (claim, claim_file) {
+        (Some(_), Some(_)) => return Err("pass only one of --claim / --claim-file".into()),
+        (Some(c), None) => c.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f)
+            .map_err(|e| format!("read --claim-file {}: {}", f, e))?
+            .trim_start_matches('\u{feff}').to_string(),
+        (None, None) => return Err("missing --claim or --claim-file".into()),
+    };
+    let mut brain = open_brain(path)?;
+    let id = sca_core::memory::save_memory(&mut brain, name, description, mtype, &claim_text, evidence);
+    brain.save()?;
+    if json {
+        println!("{}", serde_json::json!({"ok": true, "memory": id, "type": mtype, "evidence": evidence}));
+    } else {
+        println!("saved memory '{}' ({}) [{}]{}", name, id, mtype,
+            if evidence.is_empty() { String::new() } else { format!(" -> evidence: {}", evidence.join(", ")) });
+    }
+    Ok(())
+}
+
+fn cmd_recall_memory(path: Option<&str>, name: &str, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    match sca_core::memory::recall_memory(&mut brain, name) {
+        Some(m) => {
+            if json {
+                println!("{}", serde_json::json!({"memory": m.doc_id, "claim": m.claim, "evidence_links": m.evidence_links}));
+            } else {
+                println!("{}", m.claim);
+                if !m.evidence_links.is_empty() {
+                    println!("\nEvidence (verify before acting): {}", m.evidence_links.join(", "));
+                }
+            }
+        }
+        None => {
+            if json { println!("{}", serde_json::json!({"memory": serde_json::Value::Null})); }
+            else { println!("no memory named '{}'", name); }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_memory_manifest(path: Option<&str>, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let man = sca_core::memory::manifest(&brain);
+    if json {
+        let arr: Vec<_> = man.iter()
+            .map(|e| serde_json::json!({"name": e.name, "description": e.description, "type": e.mtype}))
+            .collect();
+        println!("{}", serde_json::json!(arr));
+    } else if man.is_empty() {
+        println!("no memories yet. save one with: said save-memory --name <n> --description <d> --claim <c> --evidence <commit/file>");
+    } else {
+        println!("Memory manifest ({} memories) — the list to SELECT from:", man.len());
+        for e in &man {
+            println!("  [{}] {} — {}", e.mtype, e.name, e.description);
+        }
     }
     Ok(())
 }
