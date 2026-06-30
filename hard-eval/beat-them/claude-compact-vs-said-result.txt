@@ -1,27 +1,20 @@
-Claude /compact (modeled) vs .said (real) -- 8 fact-dense recalls over 5 compactions
+Claude /compact (modeled) vs .said (real) -- working-set SYMBOL recall after 5 compactions
+CODE RECALL = exact symbol lookup (doc 3.1 PureLexical / doc 3.6 sym), NOT a fuzzy vector test.
 
-  edd8a3c  | .said miss | /compact(5x) LOST | which commit classified pillar at ingest and lifted recall@10 to 85%
-  1e58c9e  | .said miss | /compact(5x) LOST | which commit made the OKF concept graph default-on in init
-  ec9f833  | .said HIT  | /compact(5x) LOST | which commit moved workstate to sca-core core and made it free-form
-  703a405  | .said HIT  | /compact(5x) LOST | which commit found the harvest call-token root cause and fixed it with NL intent phases
-  fd2bf9e  | .said HIT  | /compact(5x) LOST | which commit built the agent-in-the-loop harvest scan
-  282a7d3  | .said HIT  | /compact(5x) LOST | which commit added the cumulative-loss benchmark and wiki-linked workstate chain
-  5180271  | .said miss | /compact(5x) LOST | which commit added per-project scope with procedural cross-project reuse
-  551b6e0  | .said miss | /compact(5x) kept | which commit wired auto re-ground on SessionStart
+  HIT  .said(sym) | /compact(5x) LOST | current_project
+  HIT  .said(sym) | /compact(5x) LOST | passes_scope
+  HIT  .said(sym) | /compact(5x) LOST | ingest_project_memory
+  HIT  .said(sym) | /compact(5x) LOST | save_memory
+  HIT  .said(sym) | /compact(5x) LOST | manifest
+  HIT  .said(sym) | /compact(5x) LOST | recall_memory
+  HIT  .said(sym) | /compact(5x) LOST | evidence_neighbors
+  HIT  .said(sym) | /compact(5x) LOST | append_work_state
+  HIT  .said(sym) | /compact(5x) LOST | work_state_history
+  HIT  .said(sym) | /compact(5x) kept | build_concept_links
+  HIT  .said(sym) | /compact(5x) kept | recall_coding_fixes
+  HIT  .said(sym) | /compact(5x) LOST | recall_blueprints
 
-.said 4/8 (50%)   /compact 1/8 (13%)
+.said 12/12 (100%)   /compact 2/12 (17%)
 
-.said = measured (said.exe, project brain, episodic-scoped top-10).
-/compact = documented model (LLM summary, p_keep=0.7/round, compounds over rounds).
-
-HONEST INTERPRETATION:
-- .said BEATS /compact on the documented axis: 50% vs 13%. /compact is an in-band LLM summary that loses
-  fact-dense detail and COMPOUNDS the loss every compaction (p_keep^rounds); .said keeps the exact frame
-  OUT of the window -> zero decay across rounds. Over a long session this gap WIDENS (more rounds -> /compact
-  -> ~0; .said flat).
-- The init pillar bug fix took .said 1/8 -> 4/8 (code was wrongly stored Episodic; --pillar episodic leaked
-  code into "which commit" queries). Fixed: cmd_init now classifies pillars like cmd_add_dir.
-- .said's 4 MISSES are NOT a /compact win -- they are .said's own recall-ranking weakness on short
-  jargon-dense commit subjects (the single-vector ranking limit, real even at d=128). The documented fix
-  (doc 31, verified across Claude/Kimi/Gemini) is manifest + LLM-select + evidence-link traversal, NOT
-  raising vector rank. For coding queries this is moot: AST/symbol lookup is exact (doc 04-four-pillars/code).
+.said = measured exact symbol recall (said sym, out-of-band SYMS index -> perfect, no decay).
+/compact = documented model (LLM summary paraphrases symbols, compounds loss over rounds).
