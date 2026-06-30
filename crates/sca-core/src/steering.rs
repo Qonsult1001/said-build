@@ -180,6 +180,15 @@ pub fn decide(brain: &mut SaidFile, event: &HookEvent, mode: SteerMode) -> HookD
     // portable, BYO-LLM store. Leads even when there's no prompt to recall against (SessionStart has
     // none). If there's no journal, fall through to the normal recall path below.
     if event.phase == HookPhase::SessionStart {
+        // COMPACTION SURVIVAL (doc 30): re-ground the agent with its OWN verbatim work-state FIRST — the
+        // precise mid-task detail (exact values/decisions/next step) that a host /compact summary would
+        // have paraphrased away. This is the headline moat: it lives OUTSIDE the compactable window, so
+        // it survives a compaction / new session / tool switch byte-exact. Project comes from
+        // SAID_PROJECT (set by the MCP server from the brain filename). Falls through to the journal
+        // resume below when there's no captured work-state.
+        if let Some(ws) = current_workstate_resume(brain) {
+            return HookDecision::Provide { context: ws };
+        }
         if let Some(resume) = render_session_resume(brain) {
             return HookDecision::Provide { context: resume };
         }
@@ -316,6 +325,15 @@ fn cap_note(s: &str, max: usize) -> String {
 /// SESSION RESUME context (point 2): the most recent `kind:journal` frame, rendered as plain-facts
 /// prior-session state (nudge framing — labeled data, no imperative). Returns None when there's no
 /// journal. This is what lets "where I left off" persist to .said and resume on the next SessionStart.
+/// Re-ground the agent with its OWN verbatim work-state for the current project (doc 30 compaction
+/// survival). Project from SAID_PROJECT (the MCP server sets it from the brain filename); without it,
+/// no work-state to scope to -> None and we fall through to the journal resume.
+fn current_workstate_resume(brain: &mut SaidFile) -> Option<String> {
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+    crate::workstate::resume_block(brain, &project)
+}
+
 fn render_session_resume(brain: &mut SaidFile) -> Option<String> {
     // newest active frame tagged kind:journal (by created_at)
     let mut best: Option<(u64, String)> = None;

@@ -3,6 +3,43 @@
 How `.said` (canon/blueprints + fixes + OKF wiki, self-growing, portable) out-smarts Claude / Cursor /
 Kimi **at their own game**. Defined BEFORE building (metric-first), grounded in arXiv.
 
+## THE KEY INSIGHT — why `.said` work-state beats Claude's `/compact` (the same-looking thing)
+
+Claude's `/compact` captures the SAME content we do (task, next step, decisions, exact values, files,
+blockers, plan). On the surface it looks identical — so the honest question is: **how are we actually
+better, not just different?** Three real differences (everything else is cosmetic):
+
+| Axis | Claude `/compact` | `.said` work-state | Why it wins |
+|---|---|---|---|
+| **WHO writes it / WHEN** | an LLM SUMMARIZES the whole history at ~95% capacity — ONCE, reactively, mid-task (context already degrading; users report "goes off the rails mid-task"). | the AGENT writes a note WHEN IT CONCLUDES something (a decision, an exact value), incrementally, while context is FRESH. | captured at the best moment (fresh + intentional), not the worst (a panic-summary at 95%). |
+| **FIDELITY** | a GENERATED SUMMARY — it PARAPHRASES. arXiv + Claude's own docs: "loses technical specifics"; `threshold = size > 1` becomes "added a size check." | the agent's OWN WORDS stored VERBATIM, re-injected BYTE-EXACT. `size > 1, NOT >= 1` comes back identical, forever. | **THE difference**: a summary RE-DESCRIBES; we PRESERVE. The lossy fact-dense detail is exactly what they drop and we keep. |
+| **WHERE it lives / SCOPE** | IN-BAND — the summary IS the next context window, so it is compacted AGAIN next time → CUMULATIVE loss. Session-only; gone on `/clear`, new session, tool switch. | OUT-OF-BAND — a durable file OUTSIDE the window. NEVER compacted (it's not in the window). Survives `/clear`, new sessions, TOOL SWITCH, MACHINE MOVE. | their memory degrades every cycle because it lives in the thing being degraded; ours doesn't degrade BECAUSE it's external. |
+
+One line: **`/compact` is a lossy LLM summary that lives INSIDE the context window — it paraphrases the
+exact detail, degrades more each compaction, and dies with the session. `.said` work-state is the agent's
+OWN WORDS stored VERBATIM OUTSIDE the window — it never paraphrases, never degrades across compactions, and
+survives session/tool/machine boundaries.** The fields look the same; the mechanism is OPPOSITE
+(summarize-into-the-window, lossy/in-band/ephemeral  vs  preserve-outside-the-window, verbatim/out-of-band/
+durable).
+
+## WHAT FIXES EVERYTHING — free-form, core, verbatim (the design that made it work)
+
+Three design choices, each learned the hard way earlier in this build, are why work-state actually works:
+
+1. **CORE, not vault.** It lives in `sca-core::workstate` (like `ask`/`learn_coding_fix`/blueprint) —
+   available to EVERY `.said` user on every surface. (The vault is a SEPARATE enterprise product; coupling
+   a core capability to a paid tier was a mistake, corrected.)
+2. **FREE-FORM, agent-authored — NOT a rigid field schema.** The agent writes ONE NL note in its OWN words.
+   We do NOT force it into fixed fields (task/next/decisions/…) — that is the SAME rigidity trap as
+   blueprint call-tokens, which 14.15 (Self-Spec) warns against: "don't impose a schema it fights." Fixed
+   fields are offered only as an OPTIONAL hint (`WORKSTATE_HINT`). The agent's phrasing IS the memory.
+3. **VERBATIM, out-of-band — not summarized, not re-encoded.** Stored as one frame `workstate::<project>`
+   and read back by id = exact string roundtrip. No fuzzy match (keyed by project), no LLM rewrite. The
+   note survives byte-for-byte — which is the whole point vs a lossy summary.
+
+That combination — core + free-form + verbatim + out-of-band — is what turns "remember what I was doing"
+from Claude's lossy in-band summary into a durable, exact, portable memory none of them can match.
+
 ## The seam (their weakness, measured)
 
 Existing memory systems and their benchmarks are tuned for **short-range fact recall**: *"94% of LoCoMo /
