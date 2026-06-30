@@ -43,6 +43,34 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
+### 1.6 Large-repo INGEST is too slow + memory-heavy (NOT ACCEPTABLE for production — must fix)
+- **Limitation** — initial `said init` of a large real codebase (measured: full Wonga banking repo, ~13k
+  C#/SQL files) is **very slow and memory-heavy**: Phase-1 read+AST-chunk+encode of every file runs minutes-
+  to-tens-of-minutes, and even WITH the shipped streaming spill (`SAID_SPILL_BUDGET`, INIT-ROUTE-TRACE.md
+  fixes 1–4) the spill scratch hit **~2.4 GB on disk** with ~0.9–1.0 GB resident before the brain even
+  saved. The OOM fix bounds RAM correctly (no crash), but it does NOT make the build FAST — spilling is
+  pure overhead (mmap + save-time re-pack), so a huge repo pays both the encode time AND the spill cost.
+- **Impact** — onboarding `.said` onto a real enterprise codebase (the "African bank rewrite" scale, the
+  actual product use case) is impractically slow today. This is a **product blocker**, not a benchmark
+  nicety. RECALL is fast (~100 ms warm, doc 35); INGEST is the bottleneck.
+- **Root cause (to confirm with profiling)** — Phase-1 is SERIAL per-file (read → tree-sitter chunk →
+  encode), the SCA encode of every passage dominates, and the BM25 word-index is rebuilt rather than
+  serialized. Spill bounds memory but adds I/O; it does not parallelize or skip work.
+- **Enhancement (research + build — REQUIRED, not optional)** —
+  1. **Parallelize Phase-1** (read+chunk+encode across cores; the encode is embarrassingly parallel — each
+     passage independent). `index_batch_with_progress` already has the structure; the file walk + encode
+     should fan out (rayon) with a bounded channel into the streaming writer.
+  2. **Incremental + resumable ingest** — checkpoint progress so a 13k-file init can resume, and `init` re-
+     runs only touch changed files (BLAKE3 dedup already exists; make it the fast path end-to-end).
+  3. **Serialize the word index** (the open item in INIT-ROUTE-TRACE) so it is never rebuilt.
+  4. **Research the SOTA**: how do code-index tools (Sourcegraph zoekt, Tantivy, ripgrep+tree-sitter
+     pipelines, mem0/Zep bulk ingest) ingest 10k+ files fast — batching, mmap-direct chunking, GPU/SIMD
+     batch encode, sharded indices. Adopt the proven pattern; measure ingest throughput (files/sec,
+     frames/sec, peak RAM) as a first-class benchmark.
+- **Target** — a 13k-file repo should init in **single-digit minutes with bounded RAM**, and re-init in
+  seconds. Until then, large-repo onboarding is gated.
+- **Roadmap §** — [Retrieval / fast large-repo ingest](12-roadmap.md#retrieval) — **HIGH PRIORITY.**
+
 ## 2. Pillars + memory model
 
 ### 2.1 `Factual → Semantic` collapse in legacy ingestion paths

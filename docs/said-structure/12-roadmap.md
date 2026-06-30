@@ -95,6 +95,13 @@ Four mechanisms promoted from the novel-mechanisms chapter as concrete work item
 
 ## Ingestion
 
+- [ ] **🔴 HIGH PRIORITY — fast large-repo ingest** (known-limitation [1.6](11-known-limitations.md#16-large-repo-ingest-is-too-slow--memory-heavy-not-acceptable-for-production--must-fix)).
+  A 13k-file repo (Wonga/African-bank scale) inits too slowly + needs ~2.4 GB spill. OOM is solved (RAM
+  bounded); INGEST SPEED is the blocker for onboarding real enterprise codebases. **Actions:** (1)
+  parallelize Phase-1 read+chunk+encode (rayon, bounded channel → streaming writer); (2) incremental +
+  resumable init (BLAKE3 fast path end-to-end); (3) serialize the BM25 word index; (4) research SOTA bulk
+  code-index ingest (zoekt, Tantivy, mem0/Zep) + a files/sec + peak-RAM benchmark. **Target:** 13k files in
+  single-digit minutes, re-init in seconds.
 - [ ] **pdfium fallback** — bundled slow rasterizer when `pdfium.dll` not found at runtime.
 - [ ] **Whisper GPU cross-platform** — Metal (macOS) + CUDA/ROCm (Linux) via sherpa-rs features.
 - [ ] **More tree-sitter languages** — Kotlin, Swift, Scala, Ruby, PHP.
