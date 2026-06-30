@@ -97,15 +97,65 @@ for (const t of transcripts) {
   tier2++;
 }
 
+// ---- TIER 1.5: the WHOLE PROJECT -- all code (AST/sym), all docs, all git history, all planning ----
+// The suite brain must hold EVERYTHING: the distilled Claude memories ABOVE + the entire project below,
+// so phases 2-6 test all kinds coexisting (memory + code + docs + commits + fixes + blueprints).
+// Code -> Code pillar (AST chunks + symbol index); docs/planning -> Semantic; commits -> Episodic.
+function gitCommitsDir() {
+  // dump full git history to per-commit files (hash + body + stat) so commits are searchable Episodic frames
+  const dir = path.join(path.dirname(OUT), 'git-history');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const hashes = execFileSync('git', ['-C', ROOT, 'rev-list', 'HEAD'], { encoding: 'utf8', maxBuffer: 1 << 26 }).trim().split('\n');
+    for (const h of hashes) {
+      if (!h) continue;
+      const body = execFileSync('git', ['-C', ROOT, 'show', '-s', '--format=commit %H%nauthor %an%ndate %ad%n%n%s%n%n%b', h], { encoding: 'utf8', maxBuffer: 1 << 26 });
+      const stat = execFileSync('git', ['-C', ROOT, 'show', '--stat', '--format=', h], { encoding: 'utf8', maxBuffer: 1 << 26 });
+      fs.writeFileSync(path.join(dir, `${h}.txt`), `${body}\n\n--- files changed ---\n${stat}`);
+    }
+    return { dir, n: hashes.filter(Boolean).length };
+  } catch (e) { return { dir, n: 0 }; }
+}
+const git = gitCommitsDir();
+function ingestAll(targets) {
+  let added = 0;
+  for (const t of targets) {
+    const abs = path.isAbsolute(t) ? t : path.join(ROOT, t);
+    if (!fs.existsSync(abs)) continue;
+    const out = run('init', abs);
+    const m = /Memories added:\s+(\d+)/.exec(out);
+    if (m) added += Number(m[1]);
+  }
+  return added;
+}
+// EVERYTHING: all code (crates), all docs+planning (docs), the whole git history, the hard-eval harnesses
+const projectFrames = ingestAll([git.dir, 'crates', 'docs', 'hard-eval/beat-them/steps']);
+
+// ---- TIER 1.6: seed the LEARNED 80/20 -- blueprints (canon) + fixes -- so all 4 kinds coexist ----
+// (these would normally accrue from real builds; seeded here so the suite can test recall of all kinds)
+run('learn-blueprint', '--shape', 'Create<Entity> REST endpoint',
+    '--sections', '{"sections":["validate the request","idempotency check","persist the row","wrap and return"]}');
+run('learn-blueprint', '--shape', 'MCP tool handler',
+    '--sections', '{"sections":["parse args","open brain","do the action","return guided result"]}');
+run('learn-fix', '--problem', 'implement an LRU cache with O(1) eviction',
+    '--learnings', 'HashMap + doubly linked list, move-to-front on get, evict tail on overflow',
+    '--edits', '[{"file":"lru.rs","content":"struct LruCache { map: HashMap, head, tail }"}]');
+run('learn-fix', '--problem', 'static encoder returns empty recall',
+    '--learnings', 'embed-model must load the embedded 4M encoder first (try_load_encoder embedded-first), else encode_query=None',
+    '--edits', '[{"file":"engine.rs","content":"auto_load_encoder"}]');
+
 const stats = run('stats');
 const mem = (/Memories:\s+(\d+)/.exec(stats) || [])[1] || '?';
 const sizeMB = (fs.statSync(OUT).size / 1e6).toFixed(1);
-console.log('=== PHASE 1 v2 (doc-29-faithful): Claude corpus -> 3 tiers, distil-not-dump ===\n');
-console.log(`  TIER 1 distilled facts (claim+evidence):   ${tier1} frames`);
-console.log(`  TIER 2 ONE consolidated note PER SESSION:  ${tier2} frames (from ${distilledFromEvents} events distilled)`);
-console.log(`  TIER 3 raw transcript:                     NOT stored (${droppedRaw} raw events dropped, ${(scannedBytes/1e6).toFixed(1)} MB)`);
-console.log(`  total .said memories:                      ${mem}  |  brain ${sizeMB} MB (from ${(scannedBytes/1e6).toFixed(1)} MB)`);
+console.log('=== PHASE 1 v3: EVERYTHING in one .said -- memories + code + docs + git + fixes + blueprints ===\n');
+console.log(`  TIER 1 distilled Claude facts (claim+evidence):  ${tier1} frames`);
+console.log(`  TIER 2 ONE consolidated note PER SESSION:        ${tier2} frames (${distilledFromEvents} events distilled)`);
+console.log(`  TIER 3 raw transcript:                           DROPPED (${droppedRaw} events, ${(scannedBytes/1e6).toFixed(1)} MB)`);
+console.log(`  WHOLE PROJECT (code AST/sym + docs/planning + git history): ${projectFrames} frames (${git.n} commits)`);
+console.log(`  SEEDED learned 80/20: 2 blueprints + 2 fixes`);
+console.log(`  -------------------------------------------------------------`);
+console.log(`  TOTAL .said memories: ${mem}  |  brain ${sizeMB} MB`);
 const concepts = (run('list-concepts').split('\n').find(l => /distinct/.test(l)) || '').trim();
 console.log(`  ${concepts}`);
-console.log(`\n  Per doc 29: tier-1 facts + tier-2 ONE distilled session note (extract+consolidate, Mem0 2-stage),`);
-console.log(`  tier-3 raw DROPPED. This is distil-not-dump (the v1 of this script wrongly stored 545 raw slices).`);
+console.log(`\n  ONE brain holds ALL kinds: distilled Claude memories (doc-29) + the whole project (code/docs/git/`);
+console.log(`  planning) + learned fixes + blueprints. Phases 2-6 test everything coexisting.`);

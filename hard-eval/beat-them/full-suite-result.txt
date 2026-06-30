@@ -1,0 +1,12 @@
+FULL doc-30 SUITE on the ONE complete brain (5,340 memories)
+
+  PASS  coding-brain (sym+harvest) sym=true harvested-blueprint=true
+  PASS  effort-decay (canon reuse) blueprint sections recallable -> 80% free on entity #2
+  PASS  federation (fix cross-project) procedural fix recalls (cross-project reuse)
+  PASS  consolidation (keep-first) same shape+project re-learn = no-op (original stands, no duplicate)
+  PASS  abstention (no confabulation) unrelated query -> 5 weak/no hits (gate active)
+  PASS  compaction-survival        re-grounded 3/3 exact decisions from out-of-band memory
+  PASS  compaction tokens (slice vs dump) 12969x fewer tokens to recover context
+  PASS  update-on-the-fly          appended memory immediately recallable
+
+AXES: 8/8 passed
