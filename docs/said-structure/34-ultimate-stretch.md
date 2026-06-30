@@ -40,34 +40,37 @@ read time — exactly what the research says full-context markdown gets wrong.
 MCP-only). Tombstoned (lineage preserved, recoverable). Scoped: only `project:<name>` frames go; other
 projects in a shared brain are untouched. Proven + regression 15/15 green.
 
-## Speed — corrected (the owner was right: the first number measured LOADING, not READING)
+## Speed — fully corrected (the owner was right twice: DEBUG binary + per-process reload)
 
-The initial "~3.9 s recall" was **wrong** — it measured a fresh CLI PROCESS (spawn + load the 16 MB embedded
-encoder + mmap + the BM25 word-index rebuild that is NOT serialized, per `INIT-ROUTE-TRACE.md`), not the
-read. Separated properly (resident MCP session):
+The "~3.9 s recall" was wrong for THREE compounding reasons, all measurement artifacts: (1) it used the
+**debug** binary (~7.5× slower than release for the encoder math), (2) it spawned a **fresh CLI process per
+query** (re-loading the 16 MB encoder + rebuilding the non-serialized word index every time), (3) cold OS
+file cache. None of those is the engine's recall speed.
+
+**Measured properly — RELEASE binary, RESIDENT MCP server (the real production deployment):**
 
 | Operation | Time | What it is |
 |---|---|---|
-| `get` by id (mmap read) | **4 ms** | direct frame read — instant, as the design promises |
-| warm `ask`, **small** brain (~600 frames) | **51 ms** | the real recall speed — fast |
-| warm `ask`, **big** brain (5,340 frames) | **~1,300 ms** | recall fusion, super-linear in frame count |
-| **cold** process, big brain | ~3,900 ms | spawn + encoder load + word-index rebuild + the above |
+| MCP init (load encoder ONCE) | **322 ms** | paid once at server start, never per query |
+| `get` by id (mmap read) | **4 ms** | direct frame read |
+| query 1 (builds word index) | ~280 ms | first query in the process |
+| **warm `ask`, big brain (5,340 frames)** | **~100 ms** (92–176) | the real recall speed |
+| small brain (~600 frames), release CLI | ~136 ms | (still re-loads encoder per CLI spawn) |
 
-Two separate facts:
+**Conclusion: there is NO fundamental engine flaw.** Real warm recall on a 5,340-frame brain is **~100 ms**.
+The encoder + word-index load **once** in the resident MCP (the production path) and serve every subsequent
+query fast. The owner's instinct was exactly right: the model must NOT reload per `ask` — and in the
+resident MCP it does not. The earlier numbers measured per-CLI-process re-initialization on a debug build,
+not recall.
 
-1. **In a resident session (the MCP server — the real deployment) load is paid ONCE.** `get` is 4 ms,
-   small-brain recall 51 ms. The per-CLI-process measurement re-paid the whole load every query — it
-   measured loading, not reading. The owner's suspicion was correct.
-2. **Genuine optimization target: recall fusion is super-linear in frame count** — 9× more frames (600→
-   5,340) costs ~25× more time (51→1,300 ms). Doc 3.5 claims ~12 ms on 19k frames, so ~1.3 s on 5k is
-   anomalous — a real perf issue in the fusion path (candidate scoring / float-rerank re-encode / graph
-   fan-out scaling), NOT a loading artifact and NOT a correctness gap. Also: the word index should be
-   serialized so it is not rebuilt at first query (`INIT-ROUTE-TRACE.md` already names this).
+**One real optimization (documented, not a flaw):** the `_fast` word index is NOT serialized
+(`INIT-ROUTE-TRACE.md`), so the FIRST query in any fresh process rebuilds it (~the 280 ms above). Serializing
+it would make even query-1 fast and remove the rebuild entirely. The CLI also re-loads the encoder per
+invocation — fine for one-shot use, but hot loops should use the resident MCP (or a future resident CLI
+mode).
 
-The comparison wins regardless: a 100 MB+ markdown store **cannot be loaded into context at all**; the
-`.said` slice is ~500 tokens regardless of corpus size, and `get`/small-brain recall is single-digit-to-50
-ms. Speed at scale ([3.5 retrieval pipeline](03-core-subsystems/3.5-retrieval-pipeline.md)) is an
-optimization target, not a blocker.
+The comparison wins decisively either way: a 100 MB+ markdown store **cannot be loaded into context at all**;
+`.said` recall is ~100 ms warm and the returned slice is ~500 tokens regardless of corpus size.
 
 ## What this proves about the design
 
