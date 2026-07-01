@@ -2830,10 +2830,14 @@ impl SaidFile {
             .collect();
         if metas.is_empty() { return 0; }
 
-        // (a) Per-frame content entities + (b) title registry, in one pass.
+        // (a) Per-frame content entities + (b) title registry, in one pass. We also capture, per
+        // frame, its lowercased body's WORD-TOKEN SET (runs of [a-z0-9_], matching contains_whole_word's
+        // word-char class) so the title-mention step below can be LINEAR (token lookups) instead of the
+        // old O(frames × titles) re-decompress-and-substring-scan that hung on 37k-frame corpora.
         let mut frame_entities: Vec<(String, Vec<String>)> = Vec::new();      // (doc_id, entities_lc)
         let mut entity_frames: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
         let mut titles: Vec<(String, String)> = Vec::new();                    // (title_concept_lc, doc_id)
+        let mut frame_token_sets: Vec<std::collections::HashSet<String>> = Vec::new(); // per-frame body tokens
         for (doc_id, title, _tags) in &metas {
             if let Some(t) = title {
                 let base = std::path::Path::new(t.trim()).file_stem()
@@ -2842,6 +2846,14 @@ impl SaidFile {
                 if tl.len() >= 4 { titles.push((tl, doc_id.clone())); }
             }
             let body = self.frames.read_frame_text(doc_id, &data).unwrap_or_default();
+            let body_lc = body.to_lowercase();
+            // Tokenize on the SAME word-char class contains_whole_word uses (alphanumeric + '_').
+            let token_set: std::collections::HashSet<String> = body_lc
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            frame_token_sets.push(token_set);
             let ents = Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME);
             let idx = frame_entities.len();
             for e in &ents { entity_frames.entry(e.clone()).or_default().push(idx); }
@@ -2856,13 +2868,43 @@ impl SaidFile {
                 edges.push((frame_entities[i].0.clone(), entity.clone()));
             }
         }
-        // (b) title mentions across bodies (wiki corpora).
-        for (doc_id, _ents) in &frame_entities {
-            let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
-            for (title_lc, target_id) in &titles {
-                if target_id == doc_id { continue; }
-                if Self::contains_whole_word(&body_lc, title_lc) {
-                    edges.push((doc_id.clone(), title_lc.clone()));
+        // (b) title mentions across bodies — LINEAR (was O(frames × titles) re-decompress + substring
+        // scan = 1.37B pairs on 37k frames, which hung Phase 3). A title is a file-stem: a single run of
+        // word chars ([a-z0-9_]) in the common case, so "body contains title as a whole word" is exactly
+        // "the title is one of the body's word-tokens" — an O(1) set membership against the token set we
+        // captured above. We index single-token titles by their token and probe each frame's token set;
+        // the RARE title that contains a non-word separator (e.g. '-') can't be a single token, so it
+        // keeps the exact contains_whole_word check but only against those few titles. Result: same edges
+        // as the old loop, but O(total tokens + Σ matches) instead of O(N²). Determinism preserved.
+        let mut title_index: std::collections::HashMap<&str, Vec<&(String, String)>> = std::collections::HashMap::new();
+        let mut sep_titles: Vec<&(String, String)> = Vec::new(); // titles with non-word chars (rare)
+        for tt in &titles {
+            let is_single_token = tt.0.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if is_single_token {
+                title_index.entry(tt.0.as_str()).or_default().push(tt);
+            } else {
+                sep_titles.push(tt);
+            }
+        }
+        for (fi, (doc_id, _ents)) in frame_entities.iter().enumerate() {
+            let tokens = &frame_token_sets[fi];
+            // single-token titles: O(1) membership per distinct body token.
+            for tok in tokens {
+                if let Some(matches) = title_index.get(tok.as_str()) {
+                    for (title_lc, target_id) in matches {
+                        if target_id == doc_id { continue; }
+                        edges.push((doc_id.clone(), title_lc.clone()));
+                    }
+                }
+            }
+            // rare separator-bearing titles: exact whole-word check against this body only.
+            if !sep_titles.is_empty() {
+                let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
+                for (title_lc, target_id) in &sep_titles {
+                    if target_id == doc_id { continue; }
+                    if Self::contains_whole_word(&body_lc, title_lc) {
+                        edges.push((doc_id.clone(), title_lc.clone()));
+                    }
                 }
             }
         }
