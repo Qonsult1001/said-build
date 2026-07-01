@@ -61,6 +61,49 @@ fn widx_from_core_matches_resident() {
     let _ = std::fs::remove_file(format!("{}.spill", path));
 }
 
+/// The correctness guarantee for the whole SPIMI change: doc_has_word must return the SAME answer
+/// whether it reads the resident structures (fresh build) or the disk-backed WIDX (after reopen).
+#[test]
+fn doc_has_word_identical_resident_vs_widx() {
+    let path = "tmp_widx_dhw.said";
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+
+    let docs = [
+        ("d1", "the loan amortization schedule computes principal and interest"),
+        ("d2", "fica verification checks customer identity credit bureau"),
+        ("d3", "stored procedure posts ledger entry per account audit"),
+    ];
+    let probes = ["loan", "fica", "ledger", "procedure", "amortization", "missing", "the", "customer"];
+
+    // Fresh in-RAM build (resident path).
+    let mut b = SaidFile::create(path);
+    assert!(b.auto_load_encoder());
+    for (id, t) in docs { b.remember_with_salience(Some(id), t, None, Pillar::Code, vec![]); }
+    b.build_index().expect("build_index");
+    assert!(!b.engine.core.has_widx(), "fresh build uses resident structures");
+    let resident: Vec<bool> = (0..docs.len())
+        .flat_map(|d| probes.iter().map(move |w| (d, *w)))
+        .map(|(d, w)| b.engine.core.doc_has_word(d, w))
+        .collect();
+    b.save().expect("save");
+
+    // Reopen (disk-backed WIDX path).
+    let reopened = SaidFile::open(path).expect("open");
+    assert!(reopened.engine.core.has_widx(), "reopened uses WIDX");
+    let from_widx: Vec<bool> = (0..docs.len())
+        .flat_map(|d| probes.iter().map(move |w| (d, *w)))
+        .map(|(d, w)| reopened.engine.core.doc_has_word(d, w))
+        .collect();
+
+    assert_eq!(resident, from_widx, "doc_has_word must be identical resident vs WIDX");
+    // sanity: at least some probes hit (not all-false)
+    assert!(from_widx.iter().any(|&x| x), "expected some words to be found");
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+}
+
 #[test]
 fn widx_persists_across_save_and_open() {
     let path = "tmp_widx_persist.said";

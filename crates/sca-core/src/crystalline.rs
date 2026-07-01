@@ -2594,6 +2594,14 @@ impl CrystallineCore {
     /// Replaces the former `get_doc_word_set(...).contains(word)` pattern now that the
     /// per-doc sets key on u32 ids (#4 interning).
     pub fn doc_has_word(&self, doc_idx: usize, word: &str) -> bool {
+        // Disk-backed path (WIDX present): resolve the word to its id + decode the doc's word-set in
+        // place from the mmap. Bit-identical to the resident path (same ids, same membership).
+        if let Some(reader) = self.widx_reader() {
+            return match (reader.word_id_of(word), reader.doc_word_set(doc_idx)) {
+                (Some(id), Some(set)) => set.binary_search(&id).is_ok(),
+                _ => false,
+            };
+        }
         match (self.word_to_id.get(word), self.doc_word_sets_fast.get(doc_idx)) {
             (Some(id), Some(set)) => set.contains(id),
             _ => false,
