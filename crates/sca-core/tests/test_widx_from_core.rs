@@ -104,6 +104,42 @@ fn doc_has_word_identical_resident_vs_widx() {
     let _ = std::fs::remove_file(format!("{}.spill", path));
 }
 
+/// The build-fix correctness proof: deriving word_inverted + phonetic from the per-doc sets + vocab
+/// (word_index_derived) must produce a WordIndex IDENTICAL to reading the resident structures
+/// (to_word_index). If identical, the corpus-wide word_inverted_fast accumulator (the OOM spike) can
+/// be dropped from the build and derived instead.
+#[test]
+fn derived_word_index_matches_resident() {
+    let path = "tmp_widx_derived.said";
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+
+    let mut b = SaidFile::create(path);
+    assert!(b.auto_load_encoder());
+    for (id, t) in [
+        ("d1", "the loan amortization schedule computes monthly principal and interest payments"),
+        ("d2", "fica verification checks the customer identity against the credit bureau records"),
+        ("d3", "stored procedure posts a ledger entry per account and audits every balance change"),
+        ("d4", "interest accrual runs nightly on the business day calendar not utc timezone"),
+        ("d5", "the repayment plan supports early settlement with a rebate calculation formula"),
+    ] {
+        b.remember_with_salience(Some(id), t, None, Pillar::Code, vec![]);
+    }
+    b.build_index().expect("build_index");
+
+    let from_resident = b.engine.core.to_word_index();
+    let from_derived = b.engine.core.word_index_derived();
+
+    assert_eq!(from_derived.vocab, from_resident.vocab, "vocab");
+    assert_eq!(from_derived.doc_word_sets, from_resident.doc_word_sets, "doc_word_sets");
+    assert_eq!(from_derived.doc_word_tf, from_resident.doc_word_tf, "doc_word_tf");
+    assert_eq!(from_derived.word_inverted, from_resident.word_inverted, "word_inverted (transpose)");
+    assert_eq!(from_derived.phonetic, from_resident.phonetic, "phonetic (from vocab)");
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+}
+
 #[test]
 fn widx_persists_across_save_and_open() {
     let path = "tmp_widx_persist.said";

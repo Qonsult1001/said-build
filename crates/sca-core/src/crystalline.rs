@@ -2641,6 +2641,48 @@ impl CrystallineCore {
         crate::word_index::WidxReader::new(bytes).ok()
     }
 
+    /// Build the WIDX by DERIVING word_inverted + phonetic from the per-doc word-sets + vocab,
+    /// instead of reading the resident `word_inverted_fast` / `phonetic_index_fast`. These two are
+    /// pure functions of the other data:
+    ///   * word_inverted[wid] = { doc_idx : wid ∈ doc_word_sets[doc_idx] }  (the transpose)
+    ///   * phonetic[soundex]  = { wid : soundex(vocab[wid]) == soundex }    (from vocab alone)
+    /// So they never need to be BUILT or held during ingest — the corpus-wide `word_inverted_fast`
+    /// accumulator (the ~1.6GB→3.3GB resize spike that OOMs the first build) can be dropped. This
+    /// method produces a WordIndex bit-identical to `to_word_index()` (proven by a test), and is the
+    /// basis for the segmented-build fix. `soundex` is the same fn the ingest path uses.
+    pub fn word_index_derived(&self) -> crate::word_index::WordIndex {
+        let doc_word_sets: Vec<Vec<u32>> = self.doc_word_sets_fast.iter()
+            .map(|set| { let mut v: Vec<u32> = set.iter().copied().collect(); v.sort_unstable(); v })
+            .collect();
+        let doc_word_tf: Vec<Vec<(u32, u32)>> = self.doc_word_tf_fast.iter()
+            .map(|m| { let mut v: Vec<(u32, u32)> = m.iter().map(|(&k, &c)| (k, c)).collect(); v.sort_unstable_by_key(|&(k, _)| k); v })
+            .collect();
+        // Derive word_inverted by transposing the per-doc sets.
+        let mut inv: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+        for (doc_idx, set) in doc_word_sets.iter().enumerate() {
+            for &wid in set {
+                inv.entry(wid).or_default().push(doc_idx as u32);
+            }
+        }
+        let word_inverted: Vec<(u32, Vec<u32>)> = inv.into_iter().collect(); // already sorted by wid + doc
+        // Derive phonetic from vocab (soundex of each word -> its id).
+        let mut ph: std::collections::BTreeMap<String, Vec<u32>> = std::collections::BTreeMap::new();
+        for (wid, word) in self.word_vocab.iter().enumerate() {
+            let sx = Self::get_soundex_static(word);
+            ph.entry(sx).or_default().push(wid as u32);
+        }
+        let phonetic: Vec<(String, Vec<u32>)> = ph.into_iter()
+            .map(|(sx, mut wids)| { wids.sort_unstable(); (sx, wids) })
+            .collect();
+        crate::word_index::WordIndex {
+            vocab: self.word_vocab.clone(),
+            doc_word_sets,
+            doc_word_tf,
+            word_inverted,
+            phonetic,
+        }
+    }
+
     /// Build a serialization-ready `WordIndex` (WIDX) from the resident BM25 structures. Every list
     /// is SORTED so the byte format is deterministic + delta-encodable and the mmap reader can
     /// binary-search. This is the write side of the disk-backed word index (the 580MB fix): save()
