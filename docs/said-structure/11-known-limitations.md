@@ -44,16 +44,26 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
 ### 1.6 Large-repo INGEST: crash FIXED, WIDX disk-index shipped — but 580 MB ceiling NOT yet met
-- **STATUS (measured, honest, 2026-07-01).** The CRASH is fixed: full Wonga (37,177 frames) no longer
-  OOM-aborts — it runs through Phase 2/3 (prior runs died at `memory allocation of 3,324,402,560 bytes`).
-  But the **580 MB ceiling is NOT met**: measured peak private heap is still **~3.3 GB**. The progression:
-  - 7.2 GB (original, whole-corpus collects) → 2.56 GB (encode + word-prep streaming) → crash removed
-    (spike fix: word_inverted built pre-sized, not incrementally) → skip-resident (word_inverted/phonetic
-    not built at all in init; WIDX derived at save). Yet peak stayed ~3.3 GB.
-  - **Why the skip-resident fix didn't drop the peak:** the ~1.6 GB `word_inverted_fast` builds in Phase 2,
-    but the peak is already ~2.5–3 GB in **Phase 1**, from structures NOT yet bounded — the per-doc
-    `doc_word_sets_fast` (~800 MB) + `doc_word_tf_fast` (~900 MB), plus the frame pending buffer + encode
-    transients. Each fix removed one O(corpus) consumer; the remaining ones are the per-doc structures.
+- **STATUS (measured, honest, 2026-07-01).** The REAL headline cause was **CSV DATA DUMPS**, not the word
+  index. Wonga's actual code is only **82 MB** (.cs + .sql, 11,843 files); it also carried **3.8 GB of
+  `african_bank_data/source/*.csv`** (an 831 MB transaction export + 63 more >5 MB) that were ingested
+  because `.csv` was in `PLAIN_TEXT_EXTENSIONS` → char-chunked into a multi-GB passage explosion = the
+  3.3 GB OOM. **Fix:** `should_enroll()` caps NON-code text/data files at `SAID_TEXT_MAX_BYTES` (default
+  5 MB); code/SQL uncapped (both init filter sites). **Result:** Phase-1 read **200–370 s → 14.4 s**
+  (~20×), Phase-2 encode **100.6 s, no crash**, files 15,249 → 15,186 (63 dumps excluded).
+- **Measured memory breakdown @ 37,112 docs** (CSV excluded, skip-resident on), via `SAID_MEM_REPORT`:
+  lexical word index = **459 MB total** (`vocabulary_fast=400 MB` dominant, `word_inverted_fast=0 MB`
+  [skip-resident works], `doc_word_sets=20 MB`, `doc_word_tf=38 MB`) — **UNDER the 580 MB ceiling**; frame
+  store `pending=285 MB`. So the word index AND the frame buffer are both fine. (An earlier note here
+  guessed the per-doc structures were 800/900 MB — WRONG, they are 20/38 MB; corrected by the mem-report.)
+- **NOT YET DONE / open (honest):** peak private heap was still **~2 GB** in Phase 2/3, and the last logged
+  run **did NOT save a populated brain** — it reached OKF (`6274 link edges`) then the run was interrupted
+  during Phase 3 (compact/OKF/harvest/save) before the save completed. So: **(a)** a full end-to-end
+  populated-brain run at 37k frames is NOT yet confirmed, and **(b)** the ~2 GB peak is a **Phase-3
+  transient** (compact block-dict repack OR the OKF `build_concept_links` / harvest pass), NOT the word
+  index (459 MB) or frames (285 MB). NEXT (a sniper shot, recorded in memory `large-repo-ingest-too-slow`):
+  re-run with `SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0` — if peak drops to ~500 MB the culprit is
+  OKF/harvest (make it streaming); if still ~2 GB it is `compact_block_dict` (bound the repack).
 - **What SHIPPED + WORKS (real value):** the disk-backed WIDX word-index section
   (`crates/sca-core/src/word_index.rs`) — serialize (varint-delta postings) + `WidxReader` in-place mmap
   decode + save/open persistence + WIDX-aware query sites (`docs_for_wid`) + skip building the resident

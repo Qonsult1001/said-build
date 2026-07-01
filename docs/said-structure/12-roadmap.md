@@ -95,16 +95,18 @@ Four mechanisms promoted from the novel-mechanisms chapter as concrete work item
 
 ## Ingestion
 
-- [ ] **🔴 HIGH PRIORITY — fast large-repo ingest** (known-limitation [1.6](11-known-limitations.md)).
-  **Memory: DONE** — the `index_batch` encode phase now streams in bounded windows sized from
-  `SAID_INDEX_BUDGET` (default **580 MB constant-memory ceiling**), and `is_junk_dir` skips .NET/SQL build
-  artifacts. The full-Wonga OOM (a single 2.2 GB alloc) is fixed; recall is result-invariant
-  (`test_index_budget_streaming`). **Speed: still open** — the per-file read+tree-sitter chunk loop is
-  serial (~250 s to read 16k files). **Remaining actions:** (1) parallelize Phase-1 read+chunk (rayon,
-  bounded channel → streaming writer; encode is already parallel + windowed); (2) incremental + resumable
-  init (BLAKE3 fast path end-to-end); (3) serialize the BM25 word index; (4) research SOTA bulk code-index
-  ingest (zoekt, Tantivy, mem0/Zep) + a files/sec + peak-RAM benchmark. **Target:** 13k files in
-  single-digit minutes **within the 580 MB ceiling**, re-init in seconds.
+- [ ] **🔴 HIGH PRIORITY — large-repo ingest: crash fixed + 20× faster, 580 MB ceiling NOT yet met**
+  (known-limitation [1.6](11-known-limitations.md)). **Crash + speed: DONE** — the real cause was 3.8 GB of
+  CSV DATA DUMPS (`african_bank_data/*.csv`), now skipped by `should_enroll` (5 MB cap on non-code files);
+  plus `is_junk_dir` skips .NET/SQL build artifacts, encode + word-prep stream in bounded windows
+  (`SAID_INDEX_BUDGET`), and the word index is disk-backed (WIDX / skip-resident). Result: no OOM crash,
+  Phase-1 read 200–370 s → 14.4 s, word index 459 MB (< 580 MB). **580 MB peak: NOT met** — peak is still
+  ~2 GB, from a **Phase-3 transient** (compact block-dict repack OR OKF `build_concept_links`/harvest), NOT
+  the word index or frames. And a full **populated-brain** run at 37 k frames is not yet confirmed end to
+  end. **Remaining actions:** (1) isolate the Phase-3 ~2 GB (`SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0`
+  A/B) then bound it (streaming OKF/harvest, or a bounded compact repack); (2) confirm a full populated
+  37 k-frame brain saves; (3) parallelize Phase-1 read+chunk for more speed; (4) incremental + resumable
+  init (BLAKE3 fast path). **Target:** 37 k-frame code brain within the 580 MB ceiling, re-init in seconds.
 - [ ] **pdfium fallback** — bundled slow rasterizer when `pdfium.dll` not found at runtime.
 - [ ] **Whisper GPU cross-platform** — Metal (macOS) + CUDA/ROCm (Linux) via sherpa-rs features.
 - [ ] **More tree-sitter languages** — Kotlin, Swift, Scala, Ruby, PHP.
