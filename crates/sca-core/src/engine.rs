@@ -396,7 +396,7 @@ impl ScaEngine {
         // associative, so order matters: pre-summing per-doc shifted the corpus mean's low bits
         // and flipped a few fingerprints → measured recall@10 0.95→0.90; this restores it).
         use rayon::prelude::*;
-        struct DocEnc { doc_mean: Vec<f32>, passages: Vec<Vec<f32>>, n_passages: usize }
+        struct DocEnc { doc_mean: Vec<f32>, passage_sum: Vec<f64>, n_passages: usize }
 
         // 580MB CONSTANT-MEMORY CEILING (#4 / owner contract): the old code encoded ALL docs with
         // one `texts.par_iter().collect()`, holding EVERY passage embedding of the WHOLE corpus in
@@ -436,28 +436,36 @@ impl ScaEngine {
                     let passages_text = Self::chunk_text(text, 512, 256);
                     let n_passages = passages_text.len();
                     let mut doc_sum = vec![0.0f64; embed_dim];
-                    let mut passages: Vec<Vec<f32>> = Vec::with_capacity(n_passages);
+                    // Accumulate the per-doc PASSAGE SUM (for corpus_sum) here instead of storing every
+                    // passage embedding in a `Vec<Vec<f32>>`. That stored-all-passages Vec was the
+                    // ~650MB encode transient on passage-dense SQL (a whole window of 4096 docs ×
+                    // many passages × 128 f32). corpus_sum is folded in doc-then-passage order below;
+                    // f64 addition is order-sensitive, and passage_sum sums each doc's passages in the
+                    // SAME order, so the result is BIT-IDENTICAL to the old store-then-fold path.
+                    let mut passage_sum = vec![0.0f64; embed_dim];
                     for passage in &passages_text {
                         let mut emb = encoder.encode_one(passage);
                         let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
                         for v in &mut emb { *v /= norm; }
-                        for (i, &v) in emb.iter().enumerate() { doc_sum[i] += v as f64; }
-                        passages.push(emb);
+                        for (i, &v) in emb.iter().enumerate() {
+                            doc_sum[i] += v as f64;
+                            passage_sum[i] += v as f64;
+                        }
+                        // emb dropped here — one passage embedding in flight per thread, not the window.
                     }
                     let mut doc_mean: Vec<f32> = doc_sum.iter()
                         .map(|&s| (s / n_passages.max(1) as f64) as f32)
                         .collect();
                     let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
                     for v in &mut doc_mean { *v /= norm; }
-                    DocEnc { doc_mean, passages, n_passages }
+                    DocEnc { doc_mean, passage_sum, n_passages }
                 })
                 .collect();
 
-            // Serial fold IN DOC-THEN-PASSAGE ORDER → corpus_sum bit-identical to the serial path.
+            // Serial fold IN DOC ORDER → corpus_sum bit-identical (each doc's passage_sum was summed
+            // in passage order inside the map, so total order = doc-then-passage as before).
             for d in &per_doc {
-                for emb in &d.passages {
-                    for (i, &v) in emb.iter().enumerate() { corpus_sum[i] += v as f64; }
-                }
+                for (i, &s) in d.passage_sum.iter().enumerate() { corpus_sum[i] += s; }
                 total_passages += d.n_passages;
                 let offset = doc_idx * bytes_per_mean;
                 let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
