@@ -169,13 +169,47 @@ where
     }
 
     // Greedy clustering by SKELETON SIMILARITY (structural Jaccard >= SIM_GATE), never by the name's verb.
+    //
+    // BLOCKING (record-linkage standard, Ravikumar VLDB'03 / Papadakis 2013): the old inner loop was
+    // `for j in i+1..N`, i.e. all-pairs skeleton_sim — O(N^2). On a real code repo (~14.5k functions,
+    // Wonga) that is ~105M Jaccard comparisons each allocating two HashSets, which HUNG harvest in
+    // Phase 3. But Jaccard(A,B) >= 0.70 is IMPOSSIBLE unless A and B share at least one call token (a
+    // zero intersection => similarity 0). So we index functions by call token and only compare `i`
+    // against CANDIDATES that share >=1 token with it. The outer `for i` order and the greedy `used[]`
+    // assignment are UNCHANGED, and candidates are visited in ascending index order, so the resulting
+    // clusters are BIT-IDENTICAL to the all-pairs version — just without the guaranteed-miss pairs.
+    let mut token_index: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (idx, s) in sigs.iter().enumerate() {
+        // dedup this fn's tokens so its posting appears once per token
+        let mut seen_tok: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for call in &s.skeleton {
+            if seen_tok.insert(call.as_str()) {
+                token_index.entry(call.as_str()).or_default().push(idx);
+            }
+        }
+    }
     let mut used = vec![false; sigs.len()];
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for i in 0..sigs.len() {
         if used[i] { continue; }
         let mut members = vec![i]; used[i] = true;
-        for j in (i + 1)..sigs.len() {
-            if used[j] { continue; }
+        // Gather candidate j>i that share >=1 call token with i (the only ones that CAN pass the gate).
+        let mut cands: Vec<usize> = Vec::new();
+        {
+            let mut seen_tok: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for call in &sigs[i].skeleton {
+                if !seen_tok.insert(call.as_str()) { continue; }
+                if let Some(posting) = token_index.get(call.as_str()) {
+                    for &j in posting {
+                        if j > i && !used[j] { cands.push(j); }
+                    }
+                }
+            }
+        }
+        cands.sort_unstable();
+        cands.dedup();
+        for j in cands {
+            if used[j] { continue; } // may have been claimed by an earlier candidate this round
             if skeleton_sim(&sigs[i].skeleton, &sigs[j].skeleton) >= SIM_GATE { members.push(j); used[j] = true; }
         }
         groups.push(members);
