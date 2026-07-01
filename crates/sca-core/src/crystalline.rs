@@ -3201,6 +3201,17 @@ impl CrystallineCore {
             }
         }
 
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            let sets_b: usize = self.doc_word_sets_fast.iter()
+                .map(|s| s.capacity() * std::mem::size_of::<u32>() + 48).sum();
+            let tf_b: usize = self.doc_word_tf_fast.iter()
+                .map(|m| m.len() * (std::mem::size_of::<u32>() + std::mem::size_of::<u32>()) + 48).sum();
+            let vocab_b: usize = self.word_vocab.iter().map(|w| w.len() + 24).sum::<usize>()
+                + self.word_to_id.iter().map(|(w, _)| w.len() + 24 + 4 + 8).sum::<usize>();
+            eprintln!("  [mem] add_docs_quantized resident: doc_word_sets={:.0}MB  doc_word_tf={:.0}MB  vocab={:.0}MB  ndocs={}  vocab_words={}",
+                mb(sets_b), mb(tf_b), mb(vocab_b), self.doc_word_sets_fast.len(), self.word_to_id.len());
+        }
         // Derive word_inverted_fast (transpose of the per-doc sets) + phonetic_index_fast (soundex per
         // vocab word). SKIP it during bulk init (SAID_SKIP_RESIDENT_WORDIDX=1): the ~1.6GB resident
         // inverted map is the last thing over the 580MB ceiling, and init saves immediately (WIDX is

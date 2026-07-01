@@ -548,6 +548,12 @@ impl ScaEngine {
         let passage_counts: Vec<usize> = vec![1; n_docs];
 
         phase_t!("F-G idf/read-means", _t); let _t = std::time::Instant::now();
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            let texts_b: usize = texts.iter().map(|s| s.len()).sum();
+            eprintln!("  [mem] pre-add_docs_quantized: all_embs={:.0}MB  texts={:.0}MB  gammas={:.0}MB  n_docs={}",
+                mb(all_embs.len() * 4), mb(texts_b), mb(gammas.len() * 4), n_docs);
+        }
         // H. Add all docs to CrystallineCore (tokenizes per-doc from texts internally)
         let _h = &_t;
         self.core.add_docs_quantized(
