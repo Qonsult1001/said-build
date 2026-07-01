@@ -2641,6 +2641,28 @@ impl CrystallineCore {
         crate::word_index::WidxReader::new(bytes).ok()
     }
 
+    /// (Re)build the resident word_inverted_fast + phonetic_index_fast from the per-doc word-sets +
+    /// vocab in ONE pass, each pre-sized to its final key count so there is NO incremental resize-
+    /// doubling (the spike that OOMed the first Wonga build). word_inverted is the transpose of
+    /// doc_word_sets; phonetic is soundex-per-vocab-word. Bit-identical to the old incremental build
+    /// (test derived_word_index_matches_resident). Idempotent: clears both first.
+    pub fn rebuild_derived_word_structures(&mut self) {
+        self.word_inverted_fast.clear();
+        self.phonetic_index_fast.clear();
+        // word_inverted: pre-size to vocab length (one entry per distinct word-id at most).
+        self.word_inverted_fast.reserve(self.word_vocab.len());
+        for (doc_idx, set) in self.doc_word_sets_fast.iter().enumerate() {
+            for &wid in set {
+                self.word_inverted_fast.entry(wid).or_insert_with(AHashSet::new).insert(doc_idx);
+            }
+        }
+        // phonetic: soundex of each vocab word -> its id.
+        for (wid, word) in self.word_vocab.iter().enumerate() {
+            let sx = Self::get_soundex_static(word);
+            self.phonetic_index_fast.entry(sx).or_insert_with(AHashSet::new).insert(wid as u32);
+        }
+    }
+
     /// Build the WIDX by DERIVING word_inverted + phonetic from the per-doc word-sets + vocab,
     /// instead of reading the resident `word_inverted_fast` / `phonetic_index_fast`. These two are
     /// pure functions of the other data:
@@ -3089,21 +3111,18 @@ impl CrystallineCore {
                 })
                 .collect();
 
-            // Sequential merge — identical vocab-id assignment + index population as the old loop.
+            // Sequential merge — build ONLY the per-doc structures + vocab interning here. The
+            // corpus-wide word_inverted_fast + phonetic_index_fast are NO LONGER built incrementally
+            // in this loop: that HashMap grew to ~1.6GB and its resize-doubling spiked to the 3.3GB
+            // that OOM-crashed the first Wonga build. They are derived ONCE, pre-sized, AFTER the loop
+            // (word_inverted = transpose of doc_word_sets; phonetic = soundex per vocab word) — proven
+            // bit-identical by test derived_word_index_matches_resident. Vocab-id assignment order is
+            // unchanged (intern_word still runs per word in doc-then-word order), so every id matches.
             for dw in prepared.into_iter() {
-                let doc_idx = start_idx + merged;
                 let mut word_set = AHashSet::new();
-                for (w_normalized, sx) in &dw.indexed {
+                for (w_normalized, _sx) in &dw.indexed {
                     let wid = self.intern_word(w_normalized);
                     word_set.insert(wid);
-                    self.word_inverted_fast
-                        .entry(wid)
-                        .or_insert_with(AHashSet::new)
-                        .insert(doc_idx);
-                    self.phonetic_index_fast
-                        .entry(sx.clone())
-                        .or_insert_with(AHashSet::new)
-                        .insert(wid);
                 }
                 self.doc_word_sets_fast.push(word_set);
                 let tf_ids = self.intern_tf(dw.tf); self.doc_word_tf_fast.push(tf_ids);
@@ -3111,7 +3130,12 @@ impl CrystallineCore {
                 merged += 1;
             }
         }
-        
+
+        // Derive word_inverted_fast (transpose of the per-doc sets) + phonetic_index_fast (soundex per
+        // vocab word) in ONE pre-sized pass — no incremental resize spike. This is the OOM fix: the
+        // build no longer holds a growing corpus-wide inverted map. Bit-identical to the old loop.
+        self.rebuild_derived_word_structures();
+
         // Compute dynamic scale if holographic
         if self.holographic_16view {
             self.holographic_scale = self.compute_dynamic_scale(&embeddings_flat);
