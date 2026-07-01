@@ -2603,6 +2603,34 @@ impl CrystallineCore {
         self.doc_word_tf_fast.get(doc_idx)
     }
 
+    /// Build a serialization-ready `WordIndex` (WIDX) from the resident BM25 structures. Every list
+    /// is SORTED so the byte format is deterministic + delta-encodable and the mmap reader can
+    /// binary-search. This is the write side of the disk-backed word index (the 580MB fix): save()
+    /// calls this, serializes it into the WIDX section, and the resident HashMaps can then be dropped.
+    pub fn to_word_index(&self) -> crate::word_index::WordIndex {
+        let doc_word_sets: Vec<Vec<u32>> = self.doc_word_sets_fast.iter()
+            .map(|set| { let mut v: Vec<u32> = set.iter().copied().collect(); v.sort_unstable(); v })
+            .collect();
+        let doc_word_tf: Vec<Vec<(u32, u32)>> = self.doc_word_tf_fast.iter()
+            .map(|m| { let mut v: Vec<(u32, u32)> = m.iter().map(|(&k, &c)| (k, c)).collect(); v.sort_unstable_by_key(|&(k, _)| k); v })
+            .collect();
+        let mut word_inverted: Vec<(u32, Vec<u32>)> = self.word_inverted_fast.iter()
+            .map(|(&wid, docs)| { let mut d: Vec<u32> = docs.iter().map(|&x| x as u32).collect(); d.sort_unstable(); (wid, d) })
+            .collect();
+        word_inverted.sort_unstable_by_key(|&(wid, _)| wid);
+        let mut phonetic: Vec<(String, Vec<u32>)> = self.phonetic_index_fast.iter()
+            .map(|(sx, wids)| { let mut w: Vec<u32> = wids.iter().copied().collect(); w.sort_unstable(); (sx.clone(), w) })
+            .collect();
+        phonetic.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        crate::word_index::WordIndex {
+            vocab: self.word_vocab.clone(),
+            doc_word_sets,
+            doc_word_tf,
+            word_inverted,
+            phonetic,
+        }
+    }
+
     /// Get IDF for a word (for lexical scoring in engine.rs).
     pub fn get_word_idf(&self, word: &str) -> f32 {
         *self.word_idf_fast.get(word).unwrap_or(&1.0)
