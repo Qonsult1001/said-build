@@ -454,7 +454,23 @@ impl SaidFile {
             } else {
                 (0, 0, 0)
             };
-        let _ = refs_offset; // reserved for future REFS section
+        // Load WIDX section (disk-backed word index — the 580MB fix). Reuses the refs_offset slot.
+        // Layout: b"WIDX" | u32 uncompressed_len | u32 compressed_len | zstd(raw). Absent (offset 0
+        // or wrong magic — e.g. an old file) => None, and readers fall back to rebuild-from-texts.
+        let mut widx_bytes: Option<Vec<u8>> = None;
+        if refs_offset > 0 && refs_offset + 12 < data_bytes.len() {
+            if &data_bytes[refs_offset..refs_offset+4] == b"WIDX" {
+                let uncompressed_len = u32::from_le_bytes(data_bytes[refs_offset+4..refs_offset+8].try_into().unwrap()) as usize;
+                let compressed_len = u32::from_le_bytes(data_bytes[refs_offset+8..refs_offset+12].try_into().unwrap()) as usize;
+                let blob_start = refs_offset + 12;
+                let blob_end = blob_start + compressed_len;
+                if blob_end <= data_bytes.len() {
+                    if let Ok(raw) = zstd::bulk::decompress(&data_bytes[blob_start..blob_end], uncompressed_len) {
+                        widx_bytes = Some(raw);
+                    }
+                }
+            }
+        }
 
         // Load DICT section (offset from header — no scanning, no false positives)
         let mut zstd_dict: Option<Vec<u8>> = None;
@@ -469,6 +485,8 @@ impl SaidFile {
 
         // Load SCRM (SCA index)
         let mut engine = ScaEngine::new();
+        // Attach the disk-backed word index (WIDX) so queries read postings in place (580MB fix).
+        engine.core.set_widx_bytes(widx_bytes);
         if scrm_offset > 0 && scrm_offset < data_bytes.len() {
             if &data_bytes[scrm_offset..scrm_offset+4] == b"SCRM" {
                 let _ = engine.core.deserialize_breadcrumbs(&data_bytes[scrm_offset..toc_offset.min(data_bytes.len())]);
@@ -2482,28 +2500,24 @@ impl SaidFile {
             }
         }
 
-        // REFS section — v7_1 reference edges (not yet implemented).
-        // Reserved for LSP-derived cross-file references, frozen at init.
-        let refs_offset: u64 = 0;
-
-        // CTXT section — temporarily disabled to debug block corruption
-        if false && !self.corpus_ids.is_empty() {
-            let mut ctxt_raw = Vec::new();
-            ctxt_raw.extend_from_slice(&(self.corpus_ids.len() as u32).to_le_bytes());
-            for (id, text_lower) in self.corpus_ids.iter().zip(self.corpus_texts_lower.iter()) {
-                let id_bytes = id.as_bytes();
-                ctxt_raw.extend_from_slice(&(id_bytes.len() as u16).to_le_bytes());
-                ctxt_raw.extend_from_slice(id_bytes);
-                let text_bytes = text_lower.as_bytes();
-                ctxt_raw.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
-                ctxt_raw.extend_from_slice(text_bytes);
-            }
-            if let Ok(compressed) = zstd::bulk::compress(&ctxt_raw, 19) {
-                buf.extend_from_slice(b"CTXT");
-                buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&(ctxt_raw.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&compressed);
-            }
+        // WIDX section — disk-backed BM25 word index (the 580MB-ceiling fix). Reuses the
+        // refs_offset header slot (REFS was reserved + always 0). Layout mirrors SYMS:
+        //   b"WIDX" | u32 uncompressed_len | u32 compressed_len | zstd(WordIndex::serialize_raw)
+        // The resident word index is ~70KB/doc (~2.6GB at 37k docs); serialized + on disk it is a
+        // fraction of that, and the reader (WidxReader) decodes postings in place from the mmap so
+        // recall never re-materializes the corpus in RAM. Absent (offset 0) => readers fall back to
+        // rebuild-from-texts (full back-compat).
+        let mut refs_offset: u64 = 0;
+        if !self.engine.core.word_index_is_empty() {
+            refs_offset = buf.len() as u64;
+            let raw = self.engine.core.to_word_index().serialize_raw();
+            let uncompressed_len = raw.len() as u32;
+            let compressed = zstd::bulk::compress(&raw, 15)
+                .map_err(|e| format!("zstd compress WIDX failed: {}", e))?;
+            buf.extend_from_slice(b"WIDX");
+            buf.extend_from_slice(&uncompressed_len.to_le_bytes());
+            buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&compressed);
         }
 
         // FTOC section

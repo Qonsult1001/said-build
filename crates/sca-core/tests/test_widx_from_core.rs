@@ -60,3 +60,45 @@ fn widx_from_core_matches_resident() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{}.spill", path));
 }
+
+#[test]
+fn widx_persists_across_save_and_open() {
+    let path = "tmp_widx_persist.said";
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+
+    // Build + save a brain; capture its in-RAM word index for comparison.
+    let expected: WordIndex = {
+        let mut b = SaidFile::create(path);
+        assert!(b.auto_load_encoder(), "encoder");
+        for (id, text) in [
+            ("d1", "the loan amortization schedule computes monthly principal"),
+            ("d2", "fica verification checks the customer identity"),
+            ("d3", "stored procedure posts a ledger entry per account"),
+        ] {
+            b.remember_with_salience(Some(id), text, None, Pillar::Code, vec![]);
+        }
+        b.build_index().expect("build_index");
+        let wi = b.engine.core.to_word_index();
+        b.save().expect("save");
+        wi
+    };
+
+    // Reopen from disk — the WIDX section must be present + readable, matching the pre-save index.
+    let reopened = SaidFile::open(path).expect("open");
+    assert!(reopened.engine.core.has_widx(), "reopened brain must carry a WIDX section");
+    let reader = reopened.engine.core.widx_reader().expect("widx reader from disk");
+
+    assert_eq!(reader.vocab_len(), expected.vocab.len(), "vocab size persisted");
+    for d in 0..expected.doc_word_sets.len() {
+        assert_eq!(reader.doc_word_set(d).as_ref(), Some(&expected.doc_word_sets[d]),
+            "doc {} word-set survived save/open", d);
+    }
+    for (wid, docs) in &expected.word_inverted {
+        assert_eq!(reader.word_inverted(*wid).as_ref(), Some(docs),
+            "wid {} postings survived save/open", wid);
+    }
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.spill", path));
+}

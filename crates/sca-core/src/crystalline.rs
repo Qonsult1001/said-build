@@ -568,7 +568,13 @@ pub struct CrystallineCore {
     // so each step is independently testable against the recall + memory gates.
     word_vocab: Vec<String>,
     word_to_id: AHashMap<String, u32>,
-    
+
+    // Disk-backed word index (the 580MB fix): when a .said file carries a WIDX section, open()
+    // stores its decompressed bytes here. Queries read postings in place via WidxReader instead of
+    // the resident `_fast` HashMaps — so a large corpus never re-materializes the word index in RAM.
+    // None => no WIDX (old file / fresh brain) => the resident structures / rebuild path are used.
+    widx_bytes: Option<Vec<u8>>,
+
     // Hybrid search weights
     hybrid_alpha_semantic: f32,
     hybrid_alpha_lexical: f32,
@@ -639,6 +645,7 @@ impl Clone for CrystallineCore {
             word_inverted_fast: self.word_inverted_fast.clone(),
             word_vocab: self.word_vocab.clone(),
             word_to_id: self.word_to_id.clone(),
+            widx_bytes: self.widx_bytes.clone(),
             hybrid_alpha_semantic: self.hybrid_alpha_semantic,
             hybrid_alpha_lexical: self.hybrid_alpha_lexical,
             rerank_depth: self.rerank_depth,
@@ -724,6 +731,7 @@ impl CrystallineCore {
             word_inverted_fast: AHashMap::new(),
             word_vocab: Vec::new(),
             word_to_id: AHashMap::new(),
+            widx_bytes: None,
             hybrid_alpha_semantic: 0.60,
             hybrid_alpha_lexical: 0.40,
             rerank_depth: 100,
@@ -2601,6 +2609,28 @@ impl CrystallineCore {
     /// Matches SAID-LAM-private's `doc_word_tf[doc_idx]` access pattern.
     pub fn get_doc_word_tf(&self, doc_idx: usize) -> Option<&ahash::AHashMap<u32, u32>> {
         self.doc_word_tf_fast.get(doc_idx)
+    }
+
+    /// True when there is no resident word index to serialize (nothing indexed yet).
+    pub fn word_index_is_empty(&self) -> bool {
+        self.word_inverted_fast.is_empty() && self.doc_word_sets_fast.is_empty()
+    }
+
+    /// Attach decompressed WIDX bytes loaded from a `.said` file's WIDX section (open() calls this).
+    pub fn set_widx_bytes(&mut self, bytes: Option<Vec<u8>>) {
+        self.widx_bytes = bytes;
+    }
+
+    /// True if a disk-backed word index is attached (queries can read postings in place).
+    pub fn has_widx(&self) -> bool {
+        self.widx_bytes.is_some()
+    }
+
+    /// Build a borrowing reader over the attached WIDX bytes (cheap — just an offset scan). None if
+    /// no WIDX is attached or the bytes are malformed.
+    pub fn widx_reader(&self) -> Option<crate::word_index::WidxReader<'_>> {
+        let bytes = self.widx_bytes.as_deref()?;
+        crate::word_index::WidxReader::new(bytes).ok()
     }
 
     /// Build a serialization-ready `WordIndex` (WIDX) from the resident BM25 structures. Every list
