@@ -59,6 +59,7 @@ pub mod state;
 pub mod storage;
 pub mod trigram_index;
 pub mod symbol_index;
+pub mod word_index;
 pub mod lens;
 pub mod time_compat;
 #[cfg(feature = "gpu")]
