@@ -2663,6 +2663,30 @@ impl CrystallineCore {
         Vec::new()
     }
 
+    /// True if the resident IDF map is empty (query hasn't hydrated it yet).
+    pub fn word_idf_is_empty(&self) -> bool { self.word_idf_fast.is_empty() }
+
+    /// Load `word_idf` VERBATIM from the attached WIDX (v2) bytes into the resident IDF maps, so a
+    /// cold `said ask` does NOT re-tokenise every doc via rebuild_entity_data (the ~3.7 s cold-CLI
+    /// cost). Returns true if WIDX carried IDF (present + v2). Cheap: a byte-scan, no re-tokenising.
+    pub fn hydrate_word_idf_from_widx(&mut self) -> bool {
+        let Some(bytes) = self.widx_bytes.as_deref() else { return false; };
+        let wi = match crate::word_index::WordIndex::deserialize_raw(bytes) {
+            Ok(w) => w,
+            Err(_) => return false,
+        };
+        if wi.word_idf.is_empty() { return false; } // v1 file → caller falls back to rebuild
+        self.word_idf.clear();
+        self.word_idf_fast.clear();
+        self.word_idf.reserve(wi.word_idf.len());
+        self.word_idf_fast.reserve(wi.word_idf.len());
+        for (w, idf) in wi.word_idf {
+            self.word_idf_fast.insert(w.clone(), idf);
+            self.word_idf.insert(w, idf);
+        }
+        true
+    }
+
     /// Lazily build the resident word_inverted_fast + phonetic_index_fast if they were skipped at
     /// ingest (SAID_SKIP_RESIDENT_WORDIDX) but a query needs them and no WIDX is attached (i.e. a
     /// not-yet-saved in-process brain). Idempotent + cheap when already populated. After save+reopen
@@ -2728,12 +2752,17 @@ impl CrystallineCore {
         let phonetic: Vec<(String, Vec<u32>)> = ph.into_iter()
             .map(|(sx, mut wids)| { wids.sort_unstable(); (sx, wids) })
             .collect();
+        // word_idf VERBATIM (the IDF the ingest computed) so a cold query loads it instead of
+        // re-tokenising every doc. Sorted for a deterministic byte layout.
+        let mut word_idf: Vec<(String, f32)> = self.word_idf.iter().map(|(w, &v)| (w.clone(), v)).collect();
+        word_idf.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         crate::word_index::WordIndex {
             vocab: self.word_vocab.clone(),
             doc_word_sets,
             doc_word_tf,
             word_inverted,
             phonetic,
+            word_idf,
         }
     }
 
@@ -2756,12 +2785,17 @@ impl CrystallineCore {
             .map(|(sx, wids)| { let mut w: Vec<u32> = wids.iter().copied().collect(); w.sort_unstable(); (sx.clone(), w) })
             .collect();
         phonetic.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        // word_idf VERBATIM (the IDF the ingest computed) so a cold query loads it instead of
+        // re-tokenising every doc. Sorted for a deterministic byte layout.
+        let mut word_idf: Vec<(String, f32)> = self.word_idf.iter().map(|(w, &v)| (w.clone(), v)).collect();
+        word_idf.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         crate::word_index::WordIndex {
             vocab: self.word_vocab.clone(),
             doc_word_sets,
             doc_word_tf,
             word_inverted,
             phonetic,
+            word_idf,
         }
     }
 

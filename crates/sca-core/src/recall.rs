@@ -301,11 +301,19 @@ pub fn recall_fused(
         return Vec::new();
     }
 
-    // Equivalent of Python's `ensure_ready()`: make sure entity data is built
-    // from the original texts so the engine can do lexical scoring.
-    if engine.doc_texts_normalized.is_empty() && !engine.doc_texts_original.is_empty() {
-        let t = engine.doc_texts_original.clone();
-        engine.rebuild_entity_data(&t);
+    // Equivalent of Python's `ensure_ready()`: make sure lexical scoring data is available.
+    // FAST PATH (cold `said ask`): if a WIDX section carries word_idf (v2), load it VERBATIM instead
+    // of re-tokenising every doc — rebuild_entity_data was the ~3.7 s cold-CLI cost on a 37k brain.
+    // The doc word-structures are read on demand via the WIDX-aware accessors (docs_for_wid /
+    // doc_has_word), so IDF is the only thing the query still needs eagerly. Falls back to the full
+    // rebuild for pre-WIDX (v1) files or a not-yet-saved in-process brain.
+    if engine.core.word_idf_is_empty() {
+        if !engine.core.hydrate_word_idf_from_widx() {
+            if !engine.doc_texts_original.is_empty() {
+                let t = engine.doc_texts_original.clone();
+                engine.rebuild_entity_data(&t);
+            }
+        }
     }
 
     // ── Layer 1: SCA top-50 ────────────────────────────────────────────────

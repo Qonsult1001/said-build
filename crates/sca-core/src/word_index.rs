@@ -84,9 +84,15 @@ pub struct WordIndex {
     pub word_inverted: Vec<(u32, Vec<u32>)>,
     /// soundex → sorted word-ids (phonetic_index_fast).
     pub phonetic: Vec<(String, Vec<u32>)>,
+    /// word → IDF weight (word_idf), stored VERBATIM so a cold `said ask` loads the exact IDF the
+    /// ingest computed — no re-tokenising 37k docs at query time (that rebuild was the ~3.7 s cold-CLI
+    /// cost). Empty on v1 files → the reader falls back to rebuild. Version-gated (v2).
+    pub word_idf: Vec<(String, f32)>,
 }
 
-const WIDX_VERSION: u8 = 1;
+/// v1: vocab + postings. v2: also carries `word_idf` (so cold query skips the rebuild). A v2 reader
+/// reads v1 files fine (word_idf stays empty → rebuild fallback); a v1 reader stops after phonetic.
+const WIDX_VERSION: u8 = 2;
 
 impl WordIndex {
     /// Serialize to a raw byte buffer (pre-zstd). Layout is length-prefixed throughout so the mmap
@@ -146,6 +152,15 @@ impl WordIndex {
             put_sorted_deltas(&mut out, &sorted);
         }
 
+        // word_idf (v2) — (word string, f32 IDF), stored verbatim (LE bytes). Empty is fine.
+        put_uvarint(&mut out, self.word_idf.len() as u64);
+        for (w, idf) in &self.word_idf {
+            let b = w.as_bytes();
+            put_uvarint(&mut out, b.len() as u64);
+            out.extend_from_slice(b);
+            out.extend_from_slice(&idf.to_le_bytes());
+        }
+
         out
     }
 
@@ -155,7 +170,7 @@ impl WordIndex {
             return Err("WIDX: buffer too short".into());
         }
         let version = data[0];
-        if version != WIDX_VERSION {
+        if version != 1 && version != 2 {
             return Err(format!("WIDX: unsupported version {}", version));
         }
         let mut pos = 4usize;
@@ -216,7 +231,24 @@ impl WordIndex {
             phonetic.push((sx, wids.into_iter().map(|x| x as u32).collect()));
         }
 
-        Ok(WordIndex { vocab, doc_word_sets, doc_word_tf, word_inverted, phonetic })
+        // word_idf (v2 only). v1 files stop here → word_idf empty → rebuild fallback.
+        let mut word_idf = Vec::new();
+        if version >= 2 {
+            let n = get_uvarint(data, &mut pos).ok_or("WIDX: idf count")? as usize;
+            word_idf.reserve(n);
+            for _ in 0..n {
+                let len = get_uvarint(data, &mut pos).ok_or("WIDX: idf word len")? as usize;
+                if pos + len > data.len() { return Err("WIDX: truncated idf word".into()); }
+                let w = String::from_utf8_lossy(&data[pos..pos + len]).into_owned();
+                pos += len;
+                if pos + 4 > data.len() { return Err("WIDX: truncated idf value".into()); }
+                let idf = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+                pos += 4;
+                word_idf.push((w, idf));
+            }
+        }
+
+        Ok(WordIndex { vocab, doc_word_sets, doc_word_tf, word_inverted, phonetic, word_idf })
     }
 }
 
@@ -384,6 +416,7 @@ mod tests {
             doc_word_tf: vec![vec![(0, 3), (2, 1)], vec![(1, 5)], vec![(0, 1), (1, 1), (2, 4)]],
             word_inverted: vec![(0, vec![0, 2]), (1, vec![1, 2]), (2, vec![0, 2])],
             phonetic: vec![("L500".into(), vec![0]), ("A253".into(), vec![1])],
+            word_idf: vec![("account".into(), 1.5), ("ledger".into(), 2.0), ("loan".into(), 1.25)],
         }
     }
 
