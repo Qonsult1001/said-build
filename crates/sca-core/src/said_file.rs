@@ -2508,9 +2508,13 @@ impl SaidFile {
         // recall never re-materializes the corpus in RAM. Absent (offset 0) => readers fall back to
         // rebuild-from-texts (full back-compat).
         let mut refs_offset: u64 = 0;
-        if !self.engine.core.word_index_is_empty() {
+        if self.engine.core.has_per_doc_index() {
             refs_offset = buf.len() as u64;
-            let raw = self.engine.core.to_word_index().serialize_raw();
+            // DERIVE the WIDX from the per-doc word-sets + vocab (transpose), NOT from the resident
+            // word_inverted_fast — so a bulk init that SKIPPED building the ~1.6GB resident inverted
+            // map (the 580MB fix) still writes a complete, correct WIDX. Bit-identical either way
+            // (test derived_word_index_matches_resident).
+            let raw = self.engine.core.word_index_derived().serialize_raw();
             let uncompressed_len = raw.len() as u32;
             let compressed = zstd::bulk::compress(&raw, 15)
                 .map_err(|e| format!("zstd compress WIDX failed: {}", e))?;

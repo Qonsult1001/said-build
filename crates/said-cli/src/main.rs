@@ -2962,6 +2962,14 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     }
 
     // PHASE 2: SCA encoding (flat-memory mmap streaming with progress)
+    // 580MB ceiling: skip building the ~1.6GB resident word_inverted_fast/phonetic maps during this
+    // bulk init — we save() immediately after (Phase 3), and save derives the WIDX word-index section
+    // from the per-doc data, so the resident maps are never needed. A reopened brain reads postings
+    // from WIDX in place. Opt out with SAID_SKIP_RESIDENT_WORDIDX=0. (Recall is bit-identical —
+    // test skip_resident_wordidx_recall_matches_normal.)
+    if std::env::var("SAID_SKIP_RESIDENT_WORDIDX").is_err() {
+        std::env::set_var("SAID_SKIP_RESIDENT_WORDIDX", "1");
+    }
     let t_phase2 = std::time::Instant::now();
     let json_mode = json;
     // Propagate index failure (e.g. an OOM-class allocation error) instead of swallowing it with

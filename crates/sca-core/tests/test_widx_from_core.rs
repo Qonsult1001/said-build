@@ -140,6 +140,50 @@ fn derived_word_index_matches_resident() {
     let _ = std::fs::remove_file(format!("{}.spill", path));
 }
 
+/// The 580MB-fix correctness proof: a brain built with SAID_SKIP_RESIDENT_WORDIDX=1 (so the ~1.6GB
+/// resident word_inverted_fast/phonetic maps are NEVER built), then saved + reopened, must return
+/// recall IDENTICAL to a normal build. Save derives WIDX from the per-doc data; reopened queries read
+/// postings from WIDX. If identical, init can skip the resident maps entirely and hold much less RAM.
+#[test]
+fn skip_resident_wordidx_recall_matches_normal() {
+    let docs = [
+        ("d1", "the loan amortization schedule computes monthly principal and interest"),
+        ("d2", "fica verification checks the customer identity against the credit bureau"),
+        ("d3", "the stored procedure posts a ledger entry per account and audits balance"),
+        ("d4", "interest accrual runs nightly on the business day calendar not utc"),
+        ("d5", "the repayment plan supports early settlement with a rebate calculation"),
+    ];
+    let queries = ["loan amortization principal", "customer identity credit bureau",
+                   "ledger entry account audit", "nightly interest business day", "early settlement rebate"];
+
+    fn build_and_recall(path: &str, skip: bool, docs: &[(&str, &str)], queries: &[&str]) -> Vec<Option<String>> {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}.spill", path));
+        if skip { std::env::set_var("SAID_SKIP_RESIDENT_WORDIDX", "1"); }
+        else { std::env::remove_var("SAID_SKIP_RESIDENT_WORDIDX"); }
+        {
+            let mut b = SaidFile::create(path);
+            assert!(b.auto_load_encoder());
+            for (id, t) in docs { b.remember_with_salience(Some(id), t, None, Pillar::Code, vec![]); }
+            b.build_index().expect("build_index");
+            b.save().expect("save");
+        }
+        std::env::remove_var("SAID_SKIP_RESIDENT_WORDIDX");
+        let mut r = SaidFile::open(path).expect("open");
+        let out: Vec<Option<String>> = queries.iter()
+            .map(|q| { let (c, _) = sca_core::ask::ask(&mut r, q, 3, false, None); c.first().map(|x| x.doc_id.clone()) })
+            .collect();
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}.spill", path));
+        out
+    }
+
+    let normal = build_and_recall("tmp_widx_normal.said", false, &docs, &queries);
+    let skipped = build_and_recall("tmp_widx_skip.said", true, &docs, &queries);
+    assert_eq!(normal, skipped, "recall must be identical: normal build vs skip-resident+WIDX build");
+    assert!(skipped.iter().any(|x| x.is_some()), "some query should return a result");
+}
+
 #[test]
 fn widx_persists_across_save_and_open() {
     let path = "tmp_widx_persist.said";

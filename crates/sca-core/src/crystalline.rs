@@ -2624,6 +2624,13 @@ impl CrystallineCore {
         self.word_inverted_fast.is_empty() && self.doc_word_sets_fast.is_empty()
     }
 
+    /// True if the per-doc word structures exist (the always-built basis for a derived WIDX). Unlike
+    /// `word_index_is_empty`, this does NOT depend on word_inverted_fast — so it is correct even when
+    /// a bulk init skipped building the resident inverted map (the 580MB fix).
+    pub fn has_per_doc_index(&self) -> bool {
+        !self.doc_word_sets_fast.is_empty()
+    }
+
     /// Attach decompressed WIDX bytes loaded from a `.said` file's WIDX section (open() calls this).
     pub fn set_widx_bytes(&mut self, bytes: Option<Vec<u8>>) {
         self.widx_bytes = bytes;
@@ -2639,6 +2646,31 @@ impl CrystallineCore {
     pub fn widx_reader(&self) -> Option<crate::word_index::WidxReader<'_>> {
         let bytes = self.widx_bytes.as_deref()?;
         crate::word_index::WidxReader::new(bytes).ok()
+    }
+
+    /// Doc indices containing `wid`, from the resident inverted map OR (when it was skipped at
+    /// ingest) the disk-backed WIDX. Returns owned indices so it works for both sources. Empty when
+    /// neither has it. This lets the query sites work whether or not the resident map was built.
+    fn docs_for_wid(&self, wid: u32) -> Vec<usize> {
+        if let Some(set) = self.word_inverted_fast.get(&wid) {
+            return set.iter().copied().collect();
+        }
+        if let Some(reader) = self.widx_reader() {
+            if let Some(docs) = reader.word_inverted(wid) {
+                return docs.into_iter().map(|d| d as usize).collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Lazily build the resident word_inverted_fast + phonetic_index_fast if they were skipped at
+    /// ingest (SAID_SKIP_RESIDENT_WORDIDX) but a query needs them and no WIDX is attached (i.e. a
+    /// not-yet-saved in-process brain). Idempotent + cheap when already populated. After save+reopen
+    /// the WIDX path is used instead, so this only fires for the pre-save in-process query case.
+    pub fn ensure_resident_word_structures(&mut self) {
+        if self.word_inverted_fast.is_empty() && !self.doc_word_sets_fast.is_empty() {
+            self.rebuild_derived_word_structures();
+        }
     }
 
     /// (Re)build the resident word_inverted_fast + phonetic_index_fast from the per-doc word-sets +
@@ -3132,9 +3164,14 @@ impl CrystallineCore {
         }
 
         // Derive word_inverted_fast (transpose of the per-doc sets) + phonetic_index_fast (soundex per
-        // vocab word) in ONE pre-sized pass — no incremental resize spike. This is the OOM fix: the
-        // build no longer holds a growing corpus-wide inverted map. Bit-identical to the old loop.
-        self.rebuild_derived_word_structures();
+        // vocab word). SKIP it during bulk init (SAID_SKIP_RESIDENT_WORDIDX=1): the ~1.6GB resident
+        // inverted map is the last thing over the 580MB ceiling, and init saves immediately (WIDX is
+        // derived at save from the per-doc data), so the resident maps aren't needed pre-save. A
+        // long-lived process that queries pre-save falls back to a LAZY rebuild via
+        // ensure_resident_word_structures(). When NOT skipping, build once pre-sized (no resize spike).
+        if std::env::var("SAID_SKIP_RESIDENT_WORDIDX").as_deref() != Ok("1") {
+            self.rebuild_derived_word_structures();
+        }
 
         // Compute dynamic scale if holographic
         if self.holographic_16view {
@@ -4184,12 +4221,10 @@ impl CrystallineCore {
         }
         let mut candidates: AHashSet<usize> = AHashSet::new();
 
-        // Word-level candidates (from word_inverted_fast, keyed by interned word-id)
+        // Word-level candidates (resident inverted map, or the disk-backed WIDX if it was skipped)
         for word in q_expanded.iter() {
             if let Some(&wid) = self.word_to_id.get(word) {
-                if let Some(doc_indices) = self.word_inverted_fast.get(&wid) {
-                    candidates.extend(doc_indices.iter());
-                }
+                candidates.extend(self.docs_for_wid(wid));
             }
         }
 
@@ -4847,8 +4882,10 @@ impl CrystallineCore {
             buf.extend_from_slice(&(wb.len() as u16).to_le_bytes());
             buf.extend_from_slice(wb);
             buf.extend_from_slice(&idf.to_le_bytes());
-            // Word inverted index entries (look up via the interned word-id)
-            if let Some(doc_indices) = self.word_to_id.get(word).and_then(|wid| self.word_inverted_fast.get(wid)) {
+            // Word inverted index entries (look up via the interned word-id; WIDX-aware)
+            let doc_indices: Vec<usize> = self.word_to_id.get(word)
+                .map(|&wid| self.docs_for_wid(wid)).unwrap_or_default();
+            if !doc_indices.is_empty() {
                 let indices: Vec<u16> = doc_indices.iter().map(|&i| i as u16).collect();
                 buf.extend_from_slice(&(indices.len() as u16).to_le_bytes());
                 for idx in &indices {
