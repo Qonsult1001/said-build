@@ -43,15 +43,28 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST OOMs at scale — the RESIDENT WORD INDEX is the blocker (580 MB ceiling not yet met)
-- **STATUS (measured, honest): still OOM-crashes on full Wonga.** Two transient fixes cut steady-state heap
-  from **7.2 GB → 2.56 GB** (7.5×), but the full-Wonga (C#/T-SQL bank, 37,169 frames) ingest STILL aborts
-  with `memory allocation of 3,324,402,560 bytes failed` — a HashMap/Vec **resize-doubling spike** of the
-  resident BM25 word index (a ~1.6 GB structure rehashes to 3.3 GB). The word index is ~70 KB/doc; at 37k
-  docs that is ~2.6 GB resident, which physically cannot fit the 580 MB ceiling. **The only real fix is a
-  disk-backed / mmap word index (SPIMI)** — read postings in place from the file, not resident HashMaps.
-  (In progress.) NOTE: a hard allocation-abort exits the process directly, so even the exit-code fix can't
-  turn it into a clean error — only bounding the allocation (SPIMI) prevents it.
+### 1.6 Large-repo INGEST: crash FIXED, WIDX disk-index shipped — but 580 MB ceiling NOT yet met
+- **STATUS (measured, honest, 2026-07-01).** The CRASH is fixed: full Wonga (37,177 frames) no longer
+  OOM-aborts — it runs through Phase 2/3 (prior runs died at `memory allocation of 3,324,402,560 bytes`).
+  But the **580 MB ceiling is NOT met**: measured peak private heap is still **~3.3 GB**. The progression:
+  - 7.2 GB (original, whole-corpus collects) → 2.56 GB (encode + word-prep streaming) → crash removed
+    (spike fix: word_inverted built pre-sized, not incrementally) → skip-resident (word_inverted/phonetic
+    not built at all in init; WIDX derived at save). Yet peak stayed ~3.3 GB.
+  - **Why the skip-resident fix didn't drop the peak:** the ~1.6 GB `word_inverted_fast` builds in Phase 2,
+    but the peak is already ~2.5–3 GB in **Phase 1**, from structures NOT yet bounded — the per-doc
+    `doc_word_sets_fast` (~800 MB) + `doc_word_tf_fast` (~900 MB), plus the frame pending buffer + encode
+    transients. Each fix removed one O(corpus) consumer; the remaining ones are the per-doc structures.
+- **What SHIPPED + WORKS (real value):** the disk-backed WIDX word-index section
+  (`crates/sca-core/src/word_index.rs`) — serialize (varint-delta postings) + `WidxReader` in-place mmap
+  decode + save/open persistence + WIDX-aware query sites (`docs_for_wid`) + skip building the resident
+  inverted map during init. All **bit-identical recall** (tests `test_widx_from_core`,
+  `skip_resident_wordidx_recall_matches_normal`; lib 98/0; binary regression 15/15). A re-opened brain
+  reads postings from mmap and no longer rebuilds the 2.3 GB word index at query time. The crash that made
+  Wonga totally un-ingestable is gone.
+- **What's LEFT for 580 MB:** apply the SAME SPIMI/mmap pattern to the per-doc structures
+  (`doc_word_sets_fast`, `doc_word_tf_fast` → spill to disk during the merge, derive WIDX from the spilled
+  segments) and stream the Phase-1 frame buffer harder. Same technique, more surface. Until then, a 37k-doc
+  monorepo ingests (crash-free) but at ~3 GB, not 580 MB.
 - **Not duplicated by LAM (checked).** `SAID-ECHO/LAM/LAM`'s word index (`rust_candle/src/crystalline.rs`)
   is the SAME in-RAM `HashMap` inverted index with the SAME OOM and NO persistence; LAM's
   `MMAP_IMPLEMENTATION_*.md` are unbuilt PROPOSALS for dense embeddings, not the sparse word index. So the
