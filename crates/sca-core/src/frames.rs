@@ -767,7 +767,28 @@ impl FrameStore {
         }
         let chunks: Vec<&[(usize, Vec<u8>)]> = raw_frames.chunks(block_size).collect();
         let dict_ref: &[u8] = &dict;
-        let compressed_blocks: Vec<Option<BlockOut>> = chunks
+        // STREAMING compact (bounded memory): the old code par-compressed ALL blocks and collected
+        // every block's compressed output at once (compressed_blocks: Vec<Option<BlockOut>>), holding
+        // the whole corpus's compressed bytes in RAM before the serial merge — on a 37k-frame corpus
+        // that was the ~700MB-1GB save-phase transient. We now process blocks in BOUNDED BATCHES: par-
+        // compress a batch, serially merge it (which moves each block's bytes into `pending` + clears
+        // the raw frame bytes), then DROP the batch before the next. Peak = one batch of compressed
+        // output, not the corpus. Block order + block_id sequence + frame clearing are UNCHANGED, and
+        // zstd is deterministic, so the output .said is byte-identical to the un-batched version.
+        // Batch size derives from SAID_INDEX_BUDGET (bytes) / an estimated per-block cost — no magic.
+        let compress_budget: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok().and_then(|s| s.parse().ok()).filter(|&b: &usize| b > 0)
+            .unwrap_or(200 * 1024 * 1024);
+        let avg_block_bytes = (total_bytes / chunks.len().max(1)).max(1);
+        let block_batch = (compress_budget / avg_block_bytes.max(1)).clamp(1, chunks.len().max(1));
+
+        let mut blocks_created = 0usize;
+        let mut total_compressed: u64 = 0;
+        let mut batch_start = 0usize;
+        while batch_start < chunks.len() {
+            let batch_end = (batch_start + block_batch).min(chunks.len());
+            let batch = &chunks[batch_start..batch_end];
+        let compressed_blocks: Vec<Option<BlockOut>> = batch
             .par_iter()
             .map(|chunk| {
                 // One compressor per task (with the shared dictionary).
@@ -786,40 +807,40 @@ impl FrameStore {
             })
             .collect();
 
-        // Serial merge (in block order) — identical state to the old serial loop.
-        let mut blocks_created = 0usize;
-        let mut total_compressed: u64 = 0;
-        for (chunk, out) in chunks.iter().zip(compressed_blocks.into_iter()) {
-            let Some(out) = out else { continue }; // compressor failed → skip (as before)
+            // Serial merge THIS BATCH (in block order) — identical state to the old serial loop.
+            for (chunk, out) in batch.iter().zip(compressed_blocks.into_iter()) {
+                let Some(out) = out else { continue }; // compressor failed → skip (as before)
 
-            let block_id = blocks_created as u32;
-            let block_idx = self.blocks.len();
+                let block_id = blocks_created as u32;
+                let block_idx = self.blocks.len();
 
-            self.blocks.push(CompressedBlock {
-                id: block_id,
-                offset: 0, // set during flush
-                compressed_len: out.compressed.len() as u32,
-                uncompressed_len: out.uncompressed_len,
-                frame_count: chunk.len() as u16,
-                frame_offsets: out.frame_offsets,
-            });
+                self.blocks.push(CompressedBlock {
+                    id: block_id,
+                    offset: 0, // set during flush
+                    compressed_len: out.compressed.len() as u32,
+                    uncompressed_len: out.uncompressed_len,
+                    frame_count: chunk.len() as u16,
+                    frame_offsets: out.frame_offsets,
+                });
 
-            // Update each frame's metadata to point to this block
-            for (intra_idx, (pending_idx, _)) in chunk.iter().enumerate() {
-                let pending = &mut self.pending[*pending_idx];
-                pending.meta.encoding = FrameEncoding::ZstdDictBlock;
-                self.block_map.insert(pending.meta.id, (block_idx, intra_idx));
+                // Update each frame's metadata to point to this block
+                for (intra_idx, (pending_idx, _)) in chunk.iter().enumerate() {
+                    let pending = &mut self.pending[*pending_idx];
+                    pending.meta.encoding = FrameEncoding::ZstdDictBlock;
+                    self.block_map.insert(pending.meta.id, (block_idx, intra_idx));
+                }
+
+                // First frame in the chunk carries the compressed block bytes; the rest are
+                // cleared (skipped during flush).
+                let first_pending_idx = chunk[0].0;
+                total_compressed += out.compressed.len() as u64;
+                self.pending[first_pending_idx].compressed_data = out.compressed;
+                for (pending_idx, _) in chunk.iter().skip(1) {
+                    self.pending[*pending_idx].compressed_data = Vec::new();
+                }
+                blocks_created += 1;
             }
-
-            // First frame in the chunk carries the compressed block bytes; the rest are
-            // cleared (skipped during flush).
-            let first_pending_idx = chunk[0].0;
-            total_compressed += out.compressed.len() as u64;
-            self.pending[first_pending_idx].compressed_data = out.compressed;
-            for (pending_idx, _) in chunk.iter().skip(1) {
-                self.pending[*pending_idx].compressed_data = Vec::new();
-            }
-            blocks_created += 1;
+            batch_start = batch_end;
         }
 
         // Store dictionary
