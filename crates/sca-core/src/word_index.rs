@@ -220,6 +220,159 @@ impl WordIndex {
     }
 }
 
+/// In-place reader over serialized WIDX bytes (the mmap accessor — SPIMI read side).
+///
+/// Borrows the serialized blob (`&[u8]`, backed by the mmap in production) and, in ONE scan, builds
+/// small offset directories (a byte offset per doc / per word-id / per soundex — kilobytes, not the
+/// gigabytes the resident HashMaps cost). Each lookup then decodes exactly one posting list in place
+/// from the borrowed bytes: RAM stays bounded regardless of corpus size. Returns the SAME lists as
+/// the in-RAM `WordIndex`, so recall is bit-identical.
+pub struct WidxReader<'a> {
+    data: &'a [u8],
+    /// byte offset of each doc's word-set list (index = doc idx).
+    doc_word_set_off: Vec<usize>,
+    /// byte offset of each doc's tf list (index = doc idx).
+    doc_word_tf_off: Vec<usize>,
+    /// (word-id, byte offset of its doc-postings) sorted by word-id for binary search.
+    word_inverted_off: Vec<(u32, usize)>,
+    /// (soundex, byte offset of its word-id list).
+    phonetic_off: Vec<(String, usize)>,
+    /// vocab strings (small relative to postings; kept resident for word_of/word_id_of).
+    vocab: Vec<String>,
+}
+
+impl<'a> WidxReader<'a> {
+    /// Build the offset directory in one scan over the serialized bytes. Does NOT materialize any
+    /// posting list.
+    pub fn new(data: &'a [u8]) -> Result<Self, String> {
+        if data.len() < 4 {
+            return Err("WIDX: buffer too short".into());
+        }
+        if data[0] != WIDX_VERSION {
+            return Err(format!("WIDX: unsupported version {}", data[0]));
+        }
+        let mut pos = 4usize;
+
+        // vocab (kept resident — strings, needed for word<->id)
+        let vocab_n = get_uvarint(data, &mut pos).ok_or("WIDX: vocab count")? as usize;
+        let mut vocab = Vec::with_capacity(vocab_n);
+        for _ in 0..vocab_n {
+            let len = get_uvarint(data, &mut pos).ok_or("WIDX: vocab len")? as usize;
+            if pos + len > data.len() { return Err("WIDX: truncated vocab".into()); }
+            vocab.push(String::from_utf8_lossy(&data[pos..pos + len]).into_owned());
+            pos += len;
+        }
+
+        // doc_word_sets — record each list's offset, then skip it.
+        let dws_n = get_uvarint(data, &mut pos).ok_or("WIDX: dws count")? as usize;
+        let mut doc_word_set_off = Vec::with_capacity(dws_n);
+        for _ in 0..dws_n {
+            doc_word_set_off.push(pos);
+            skip_sorted_deltas(data, &mut pos).ok_or("WIDX: skip dws")?;
+        }
+
+        // doc_word_tf — record offset, skip (entries × (wid-delta, count)).
+        let dtf_n = get_uvarint(data, &mut pos).ok_or("WIDX: dtf count")? as usize;
+        let mut doc_word_tf_off = Vec::with_capacity(dtf_n);
+        for _ in 0..dtf_n {
+            doc_word_tf_off.push(pos);
+            let entries = get_uvarint(data, &mut pos).ok_or("WIDX: tf entries")? as usize;
+            for _ in 0..entries {
+                get_uvarint(data, &mut pos).ok_or("WIDX: tf wid")?;
+                get_uvarint(data, &mut pos).ok_or("WIDX: tf count")?;
+            }
+        }
+
+        // word_inverted — decode the delta'd word-id (needed for the lookup key) + record posting off.
+        let wi_n = get_uvarint(data, &mut pos).ok_or("WIDX: wi count")? as usize;
+        let mut word_inverted_off = Vec::with_capacity(wi_n);
+        let mut prev_wid = 0u32;
+        for _ in 0..wi_n {
+            let d = get_uvarint(data, &mut pos).ok_or("WIDX: wi wid delta")? as u32;
+            prev_wid += d;
+            word_inverted_off.push((prev_wid, pos));
+            skip_sorted_deltas(data, &mut pos).ok_or("WIDX: skip wi docs")?;
+        }
+
+        // phonetic — record (soundex, off), skip the word-id list.
+        let ph_n = get_uvarint(data, &mut pos).ok_or("WIDX: ph count")? as usize;
+        let mut phonetic_off = Vec::with_capacity(ph_n);
+        for _ in 0..ph_n {
+            let len = get_uvarint(data, &mut pos).ok_or("WIDX: soundex len")? as usize;
+            if pos + len > data.len() { return Err("WIDX: truncated soundex".into()); }
+            let sx = String::from_utf8_lossy(&data[pos..pos + len]).into_owned();
+            pos += len;
+            phonetic_off.push((sx, pos));
+            skip_sorted_deltas(data, &mut pos).ok_or("WIDX: skip ph wids")?;
+        }
+
+        Ok(WidxReader {
+            data,
+            doc_word_set_off,
+            doc_word_tf_off,
+            word_inverted_off,
+            phonetic_off,
+            vocab,
+        })
+    }
+
+    pub fn vocab_len(&self) -> usize { self.vocab.len() }
+    pub fn num_docs(&self) -> usize { self.doc_word_set_off.len() }
+
+    /// word-id → word string.
+    pub fn word_of(&self, wid: u32) -> Option<&str> {
+        self.vocab.get(wid as usize).map(|s| s.as_str())
+    }
+    /// word string → word-id (linear scan of vocab; callers cache when hot).
+    pub fn word_id_of(&self, word: &str) -> Option<u32> {
+        self.vocab.iter().position(|w| w == word).map(|i| i as u32)
+    }
+
+    /// doc idx → sorted word-ids (decoded in place).
+    pub fn doc_word_set(&self, doc_idx: usize) -> Option<Vec<u32>> {
+        let mut pos = *self.doc_word_set_off.get(doc_idx)?;
+        get_sorted_deltas(self.data, &mut pos).map(|v| v.into_iter().map(|x| x as u32).collect())
+    }
+
+    /// doc idx → sorted (word-id, tf).
+    pub fn doc_word_tf(&self, doc_idx: usize) -> Option<Vec<(u32, u32)>> {
+        let mut pos = *self.doc_word_tf_off.get(doc_idx)?;
+        let entries = get_uvarint(self.data, &mut pos)? as usize;
+        let mut out = Vec::with_capacity(entries);
+        let mut prev = 0u32;
+        for _ in 0..entries {
+            let d = get_uvarint(self.data, &mut pos)? as u32;
+            let count = get_uvarint(self.data, &mut pos)? as u32;
+            prev += d;
+            out.push((prev, count));
+        }
+        Some(out)
+    }
+
+    /// word-id → sorted doc indices (binary search the directory, decode in place).
+    pub fn word_inverted(&self, wid: u32) -> Option<Vec<u32>> {
+        let i = self.word_inverted_off.binary_search_by_key(&wid, |&(w, _)| w).ok()?;
+        let mut pos = self.word_inverted_off[i].1;
+        get_sorted_deltas(self.data, &mut pos).map(|v| v.into_iter().map(|x| x as u32).collect())
+    }
+
+    /// soundex → sorted word-ids.
+    pub fn phonetic(&self, soundex: &str) -> Option<Vec<u32>> {
+        let (_, off) = self.phonetic_off.iter().find(|(s, _)| s == soundex)?;
+        let mut pos = *off;
+        get_sorted_deltas(self.data, &mut pos).map(|v| v.into_iter().map(|x| x as u32).collect())
+    }
+}
+
+/// Skip a [count][delta-varints] list without decoding it (advance `*pos`).
+fn skip_sorted_deltas(data: &[u8], pos: &mut usize) -> Option<()> {
+    let n = get_uvarint(data, pos)? as usize;
+    for _ in 0..n {
+        get_uvarint(data, pos)?;
+    }
+    Some(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +408,42 @@ mod tests {
         let mut bytes = sample().serialize_raw();
         bytes[0] = 99;
         assert!(WordIndex::deserialize_raw(&bytes).is_err());
+    }
+
+    #[test]
+    fn mmap_reader_matches_in_ram() {
+        let wi = sample();
+        let bytes = wi.serialize_raw();
+        let r = WidxReader::new(&bytes).expect("reader");
+
+        assert_eq!(r.vocab_len(), wi.vocab.len());
+        assert_eq!(r.num_docs(), wi.doc_word_sets.len());
+
+        // vocab <-> id
+        for (i, w) in wi.vocab.iter().enumerate() {
+            assert_eq!(r.word_of(i as u32), Some(w.as_str()));
+            assert_eq!(r.word_id_of(w), Some(i as u32));
+        }
+        assert_eq!(r.word_id_of("nonexistent"), None);
+
+        // per-doc word sets + tf — identical to the in-RAM lists
+        for (d, expect) in wi.doc_word_sets.iter().enumerate() {
+            assert_eq!(r.doc_word_set(d).as_ref(), Some(expect), "doc_word_set doc {}", d);
+        }
+        for (d, expect) in wi.doc_word_tf.iter().enumerate() {
+            assert_eq!(r.doc_word_tf(d).as_ref(), Some(expect), "doc_word_tf doc {}", d);
+        }
+
+        // inverted postings by word-id (binary search)
+        for (wid, docs) in &wi.word_inverted {
+            assert_eq!(r.word_inverted(*wid).as_ref(), Some(docs), "word_inverted wid {}", wid);
+        }
+        assert_eq!(r.word_inverted(9999), None);
+
+        // phonetic
+        for (sx, wids) in &wi.phonetic {
+            assert_eq!(r.phonetic(sx).as_ref(), Some(wids), "phonetic {}", sx);
+        }
+        assert_eq!(r.phonetic("ZZZZ"), None);
     }
 }
