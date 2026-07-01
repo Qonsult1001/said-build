@@ -18,6 +18,7 @@ blake3 = "1.5"
 pathdiff = "0.2.3"
 said-forge = { path = "../said-forge", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 
 # Cross-platform config dir lookup (used on non-Windows in resolve.rs).
 [target.'cfg(not(target_os = "windows"))'.dependencies]

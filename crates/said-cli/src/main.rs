@@ -2291,6 +2291,23 @@ fn text_extension(ext: &str) -> bool {
 /// multi-GB passage explosion — the real cause of the "word index" OOM. Code/SQL files stay UNCAPPED
 /// (a big source file is legitimate and AST-chunks cleanly). Override the cap with SAID_TEXT_MAX_BYTES
 /// (0 disables). Default 5 MB — generous for real config/docs, far below any data dump.
+/// Per-system streaming-spill budget: `clamp(available_RAM × 12%, 16 MB, 512 MB)`.
+/// Fraction + floor + ceiling are the industry consensus (Elasticsearch/Lucene 10% of heap; Lucene's
+/// 16 MB IndexWriter floor; a conservative 512 MB ceiling since spill cost rises beyond it). Reads
+/// AVAILABLE (not total) RAM so a busy host budgets down. Falls back to 512 MB if RAM can't be read.
+fn auto_spill_budget() -> usize {
+    const FLOOR: u64 = 16 * 1024 * 1024;
+    const CEILING: u64 = 512 * 1024 * 1024;
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available = sys.available_memory(); // bytes (sysinfo ≥0.30)
+    if available == 0 {
+        return CEILING as usize; // couldn't read RAM — keep the safe high default
+    }
+    let target = (available as f64 * 0.12) as u64;
+    target.clamp(FLOOR, CEILING) as usize
+}
+
 fn should_enroll(path: &Path) -> bool {
     let ext = match path.extension().and_then(|e| e.to_str()) {
         Some(e) => e.to_lowercase(),
@@ -2702,18 +2719,19 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // (legacy hold-in-RAM). Must be set BEFORE the phase-1 ingest loop so every
     // remember_as honours it.
     //
-    // Default 512 MB — deliberately HIGH. Measured: spilling has real overhead
-    // (mmap of the spill file + save-time re-pack page it back), so on small/medium
-    // repos where `pending` is only a few hundred MB it RAISES peak RSS without
-    // helping (Amortization 918 frames: spill-off 533MB vs 32MB-budget 657MB — the
-    // peak there is the encode/save transient, NOT pending). The spill only pays off
-    // on genuinely huge corpora (full Wonga, 35K frames, pending → GBs → the OOM).
-    // A high budget means normal repos never spill (zero overhead) while the
-    // pathological case still stays bounded. Lower it via env for memory-tight hosts.
+    // PER-SYSTEM auto budget (research-grounded, matches Elasticsearch/Lucene's percent-of-heap +
+    // Lucene's 16 MB floor + a conservative 512 MB ceiling; see docs). budget = clamp(available_RAM
+    // × 12%, 16 MB, 512 MB). WHY a fraction not a fixed value: a fixed 512 MB wastes RAM on a 4 GB
+    // phone yet under-budgets a 256 GB server. WHY clamp HIGH: spilling has real cost (measured 14×
+    // slower read on Wonga; Spark/PostgreSQL guidance = "budget high, avoid spilling unless forced"),
+    // so on a capable machine (≥ ~4 GB) the budget hits the 512 MB ceiling and the pathological case
+    // stays bounded WITHOUT penalising normal repos; only a genuinely low-RAM device drops below the
+    // ceiling and spills earlier — the 580 MB-class ceiling is the low-RAM-device GUARANTEE, not a
+    // tax on workstations. Override with SAID_SPILL_BUDGET (bytes); 0 disables (legacy hold-in-RAM).
     let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
-        .unwrap_or(512 * 1024 * 1024);
+        .unwrap_or_else(auto_spill_budget);
     if spill_budget > 0 {
         brain.set_stream_spill_budget(spill_budget);
     }
@@ -11903,8 +11921,17 @@ mod forge_cli {
 
 #[cfg(test)]
 mod junk_dir_tests {
-    use super::{is_junk_dir, should_enroll};
+    use super::{is_junk_dir, should_enroll, auto_spill_budget};
     use std::io::Write;
+
+    // Per-system spill budget: clamp(available_RAM * 12%, 16MB, 512MB). Must always land in range on
+    // any host the test runs on, and never return the disable value (0).
+    #[test]
+    fn auto_spill_budget_is_clamped() {
+        let b = auto_spill_budget();
+        assert!(b >= 16 * 1024 * 1024, "budget must be >= 16MB floor, got {}", b);
+        assert!(b <= 512 * 1024 * 1024, "budget must be <= 512MB ceiling, got {}", b);
+    }
 
     // The REAL cause of the Wonga "word index" OOM: 3 GB of african_bank_data/source/*.csv (an 831 MB
     // transaction export) was ingested because .csv is in PLAIN_TEXT_EXTENSIONS — char-chunked into a
