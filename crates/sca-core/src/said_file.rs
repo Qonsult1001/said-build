@@ -2837,7 +2837,9 @@ impl SaidFile {
         let mut frame_entities: Vec<(String, Vec<String>)> = Vec::new();      // (doc_id, entities_lc)
         let mut entity_frames: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
         let mut titles: Vec<(String, String)> = Vec::new();                    // (title_concept_lc, doc_id)
-        let mut frame_token_sets: Vec<std::collections::HashSet<String>> = Vec::new(); // per-frame body tokens
+        // NOTE: we do NOT store a per-frame token set here — that was a whole-corpus accumulator (a
+        // HashSet<String> per frame, ~GB at 37k). The title-mention step below tokenizes each body ON
+        // THE FLY and drops the tokens, so only ONE frame's tokens are ever in RAM.
         for (doc_id, title, _tags) in &metas {
             if let Some(t) = title {
                 let base = std::path::Path::new(t.trim()).file_stem()
@@ -2846,14 +2848,6 @@ impl SaidFile {
                 if tl.len() >= 4 { titles.push((tl, doc_id.clone())); }
             }
             let body = self.frames.read_frame_text(doc_id, &data).unwrap_or_default();
-            let body_lc = body.to_lowercase();
-            // Tokenize on the SAME word-char class contains_whole_word uses (alphanumeric + '_').
-            let token_set: std::collections::HashSet<String> = body_lc
-                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
-            frame_token_sets.push(token_set);
             let ents = Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME);
             let idx = frame_entities.len();
             for e in &ents { entity_frames.entry(e.clone()).or_default().push(idx); }
@@ -2886,11 +2880,15 @@ impl SaidFile {
                 sep_titles.push(tt);
             }
         }
-        for (fi, (doc_id, _ents)) in frame_entities.iter().enumerate() {
-            let tokens = &frame_token_sets[fi];
-            // single-token titles: O(1) membership per distinct body token.
-            for tok in tokens {
-                if let Some(matches) = title_index.get(tok.as_str()) {
+        for (doc_id, _ents) in frame_entities.iter() {
+            // Tokenize THIS body on the fly (word-char runs, matching contains_whole_word) and drop it
+            // after — bounded to one frame's tokens, not all 37k frames' token sets. Dedup within the
+            // frame so a repeated token doesn't push duplicate edges (the apply loop dedups anyway).
+            let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
+            let mut seen_tok: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for tok in body_lc.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                if tok.is_empty() || !seen_tok.insert(tok) { continue; }
+                if let Some(matches) = title_index.get(tok) {
                     for (title_lc, target_id) in matches {
                         if target_id == doc_id { continue; }
                         edges.push((doc_id.clone(), title_lc.clone()));
@@ -2898,13 +2896,10 @@ impl SaidFile {
                 }
             }
             // rare separator-bearing titles: exact whole-word check against this body only.
-            if !sep_titles.is_empty() {
-                let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
-                for (title_lc, target_id) in &sep_titles {
-                    if target_id == doc_id { continue; }
-                    if Self::contains_whole_word(&body_lc, title_lc) {
-                        edges.push((doc_id.clone(), title_lc.clone()));
-                    }
+            for (title_lc, target_id) in &sep_titles {
+                if target_id == doc_id { continue; }
+                if Self::contains_whole_word(&body_lc, title_lc) {
+                    edges.push((doc_id.clone(), title_lc.clone()));
                 }
             }
         }
