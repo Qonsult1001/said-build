@@ -2285,6 +2285,38 @@ fn text_extension(ext: &str) -> bool {
     PLAIN_TEXT_EXTENSIONS.contains(&ext)
 }
 
+/// Enroll a file for ingest? Filters by extension AND — for non-code plain-text/data files (csv, txt,
+/// xml, …) — by SIZE. A large CSV/TXT is a DATA DUMP, not knowledge: e.g. the Wonga bank repo carries
+/// 3 GB of `african_bank_data/source/*.csv` (an 831 MB transaction export), which char-chunks into a
+/// multi-GB passage explosion — the real cause of the "word index" OOM. Code/SQL files stay UNCAPPED
+/// (a big source file is legitimate and AST-chunks cleanly). Override the cap with SAID_TEXT_MAX_BYTES
+/// (0 disables). Default 5 MB — generous for real config/docs, far below any data dump.
+fn should_enroll(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e.to_lowercase(),
+        None => return false,
+    };
+    let is_code = code_extension(&ext);
+    let is_textish = text_extension(&ext) || doc_extension(&ext);
+    if !is_code && !is_textish {
+        return false;
+    }
+    // Size cap applies ONLY to non-code text/data files.
+    if !is_code {
+        let cap: u64 = std::env::var("SAID_TEXT_MAX_BYTES")
+            .ok().and_then(|s| s.parse().ok())
+            .unwrap_or(5 * 1024 * 1024);
+        if cap > 0 {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.len() > cap {
+                    return false; // data dump — skip
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Binary document formats that `init` can ingest when the `docs` feature is built —
 /// extracted to text via `document_ingest` (DOCX/PDF) rather than decoded as raw text.
 /// Enables `said init <dir-of-docx>` to build a queryable brain from a document corpus
@@ -2436,15 +2468,8 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     let mut files = Vec::new();
     walk_dir(&dir_path, &mut files);
 
-    // Filter to known extensions
-    let files: Vec<PathBuf> = files.into_iter().filter(|p| {
-        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower) || doc_extension(&ext_lower)
-        } else {
-            false
-        }
-    }).collect();
+    // Filter to known extensions (+ skip oversized non-code data dumps, e.g. huge CSVs).
+    let files: Vec<PathBuf> = files.into_iter().filter(|p| should_enroll(p)).collect();
 
     // Open or create. If file has zero frames, start fresh to avoid mmap issues
     // (compact on empty mmap data produces corrupt blocks)
@@ -11885,7 +11910,36 @@ mod forge_cli {
 
 #[cfg(test)]
 mod junk_dir_tests {
-    use super::is_junk_dir;
+    use super::{is_junk_dir, should_enroll};
+    use std::io::Write;
+
+    // The REAL cause of the Wonga "word index" OOM: 3 GB of african_bank_data/source/*.csv (an 831 MB
+    // transaction export) was ingested because .csv is in PLAIN_TEXT_EXTENSIONS — char-chunked into a
+    // multi-GB passage explosion. should_enroll caps non-code text/data files (default 5 MB) so data
+    // dumps are skipped, while code files stay uncapped.
+    #[test]
+    fn should_enroll_skips_big_data_files_keeps_code() {
+        let dir = std::env::temp_dir().join(format!("said_enroll_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = 6 * 1024 * 1024; // 6 MB > 5 MB cap
+
+        // a big CSV (data dump) -> skipped
+        let csv = dir.join("dump.csv");
+        std::fs::File::create(&csv).unwrap().write_all(&vec![b'a'; big]).unwrap();
+        assert!(!should_enroll(&csv), "a 6MB CSV data dump must be skipped");
+
+        // a big .cs (source) -> kept (code is uncapped)
+        let cs = dir.join("Big.cs");
+        std::fs::File::create(&cs).unwrap().write_all(&vec![b'x'; big]).unwrap();
+        assert!(should_enroll(&cs), "a large source file must still be enrolled");
+
+        // a small CSV (real config-ish) -> kept
+        let small_csv = dir.join("small.csv");
+        std::fs::File::create(&small_csv).unwrap().write_all(b"a,b,c\n1,2,3\n").unwrap();
+        assert!(should_enroll(&small_csv), "a small CSV must be enrolled");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // The Wonga/African-bank ingest OOMed (2.2GB alloc in index_batch) NOT because of an
     // engine flaw -- all other languages ingest fine -- but because the .NET/SQL repo carried
