@@ -52,6 +52,14 @@ If you change a limitation here, update the matching roadmap entry in the same c
   disk-backed / mmap word index (SPIMI)** — read postings in place from the file, not resident HashMaps.
   (In progress.) NOTE: a hard allocation-abort exits the process directly, so even the exit-code fix can't
   turn it into a clean error — only bounding the allocation (SPIMI) prevents it.
+- **Not duplicated by LAM (checked).** `SAID-ECHO/LAM/LAM`'s word index (`rust_candle/src/crystalline.rs`)
+  is the SAME in-RAM `HashMap` inverted index with the SAME OOM and NO persistence; LAM's
+  `MMAP_IMPLEMENTATION_*.md` are unbuilt PROPOSALS for dense embeddings, not the sparse word index. So the
+  new WIDX section (`crates/sca-core/src/word_index.rs`) is the first real disk-backed inverted-index IO —
+  legitimate, not a reinvention. **Read side DONE** (WIDX serialize + `WidxReader` in-place mmap decode +
+  save/open persistence + a re-opened brain skips the rebuild). **Remaining:** the first-time `init` still
+  builds the index in RAM inside `add_docs_quantized` (BEFORE save), so it needs a SEGMENTED build that
+  spills postings to disk in bounded chunks — true single-pass SPIMI — to hold 580 MB on the FIRST build.
 - **Memory progress so far (the transient half).** The encode + word-prep phases previously each did one
   `par_iter().collect()` over the WHOLE corpus. Two fixes landed:
   - **Build-artifact skip** — `is_junk_dir` now skips .NET/SQL build dirs (`bin`, `obj`, `Debug`,
