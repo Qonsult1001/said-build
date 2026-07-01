@@ -2666,15 +2666,8 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     let mut files = Vec::new();
     walk_dir_gitignore(&dir_path, &dir_path, &gitignore_patterns, &mut files);
 
-    // Filter to indexable extensions
-    let files: Vec<PathBuf> = files.into_iter().filter(|p| {
-        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower) || doc_extension(&ext_lower)
-        } else {
-            false
-        }
-    }).collect();
+    // Filter to indexable extensions (+ skip oversized non-code data dumps, e.g. huge CSVs).
+    let files: Vec<PathBuf> = files.into_iter().filter(|p| should_enroll(p)).collect();
 
     let total_files = files.len();
     if !json {
