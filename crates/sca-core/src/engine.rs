@@ -946,9 +946,47 @@ impl ScaEngine {
     /// split_whitespace + lowercase + len>=3. NO punctuation stripping.
     fn simple_tokenize(text: &str) -> Vec<String> {
         text.split_whitespace()
-            .map(|w| w.to_lowercase())
+            .flat_map(Self::split_identifier)
             .filter(|w| w.len() >= 3)
             .collect()
+    }
+
+    /// Split a whitespace-token into sub-tokens the way GitHub Blackbird / Elasticsearch's code
+    /// analyzers do: on `_`/`-`/punctuation AND camelCase AND letter↔digit boundaries, lowercasing
+    /// each part. This bounds the BM25 vocabulary to real WORD PARTS instead of whole identifiers —
+    /// code has a near-infinite identifier vocabulary ("Big Code != Big Vocabulary", Karampatsis
+    /// ICSE'20; identifier splitting cuts vocab ~90%), which on SQL DDL exploded the vocab to 177 MB
+    /// (every `nbd_New_Business_Application_Detail` column a unique term). e.g.
+    ///   `nbd_New_Business_Application_Detail` → [nbd, new, business, application, detail]
+    ///   `getUserName2` → [get, user, name] (the trailing digit is a boundary; "2" is < len 3)
+    /// A plain English word (no separators / case runs) returns itself lowercased, so natural-language
+    /// recall is unchanged. Deterministic; callers still apply the len>=3 filter.
+    pub fn split_identifier(tok: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut prev: Option<char> = None;
+        let flush = |cur: &mut String, out: &mut Vec<String>| {
+            if !cur.is_empty() { out.push(std::mem::take(cur).to_lowercase()); }
+        };
+        for c in tok.chars() {
+            if !c.is_alphanumeric() {
+                // separator (_, -, ., etc.) → boundary
+                flush(&mut cur, &mut out);
+                prev = None;
+                continue;
+            }
+            if let Some(p) = prev {
+                let camel = p.is_lowercase() && c.is_uppercase();          // fooBar
+                let digit_edge = p.is_alphabetic() != c.is_alphabetic();   // abc123 / 123abc
+                if camel || digit_edge {
+                    flush(&mut cur, &mut out);
+                }
+            }
+            cur.push(c);
+            prev = Some(c);
+        }
+        flush(&mut cur, &mut out);
+        out
     }
 
     /// Extract entities and filter by IDF — only keep high-IDF (rare) entities.
@@ -1144,6 +1182,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_identifier_bounds_the_code_vocab() {
+        // snake_case + the leading short part
+        assert_eq!(ScaEngine::split_identifier("nbd_New_Business_Application_Detail"),
+                   vec!["nbd","new","business","application","detail"]);
+        // camelCase
+        assert_eq!(ScaEngine::split_identifier("getUserName"), vec!["get","user","name"]);
+        // digit boundary
+        assert_eq!(ScaEngine::split_identifier("Fact20230601"), vec!["fact","20230601"]);
+        // a plain English word is unchanged (lowercased) -> natural-language recall preserved
+        assert_eq!(ScaEngine::split_identifier("amortization"), vec!["amortization"]);
+        // mixed separators
+        assert_eq!(ScaEngine::split_identifier("usp-Generate.WeeklyReport"),
+                   vec!["usp","generate","weekly","report"]);
+    }
+
+    #[test]
+    fn simple_tokenize_splits_and_filters() {
+        // whole doc: identifiers split, len>=3 filter applied (so "get" kept, single/2-char dropped)
+        let t = ScaEngine::simple_tokenize("CREATE TABLE nbd_New_Business x_y");
+        assert!(t.contains(&"create".to_string()) && t.contains(&"table".to_string()));
+        assert!(t.contains(&"business".to_string()) && t.contains(&"new".to_string()));
+        assert!(!t.iter().any(|w| w == "x" || w == "y"), "single chars filtered by len>=3");
+    }
+
+    #[test]
     fn test_extract_entities() {
         let entities = ScaEngine::extract_entities(
             "Where was the director of film The Central Park Five born?"
@@ -1250,12 +1313,14 @@ mod tests {
 
     #[test]
     fn test_simple_tokenize() {
-        // Matches Python: split_whitespace + lowercase + len>=3, NO punctuation strip
+        // Now: split_whitespace + IDENTIFIER SPLIT (on punctuation/camelCase/digit) + lowercase +
+        // len>=3. Punctuation is a boundary (was previously preserved) — this bounds the code vocab
+        // (see split_identifier_bounds_the_code_vocab) and matches how code analyzers tokenize.
         let tokens = ScaEngine::simple_tokenize("The quick brown Fox! jumps...");
         assert!(tokens.contains(&"quick".to_string()));
         assert!(tokens.contains(&"brown".to_string()));
-        assert!(tokens.contains(&"fox!".to_string())); // punctuation preserved
+        assert!(tokens.contains(&"fox".to_string()));   // trailing '!' stripped as a boundary
         assert!(tokens.contains(&"the".to_string()));
-        assert!(tokens.contains(&"jumps...".to_string())); // punctuation preserved
+        assert!(tokens.contains(&"jumps".to_string())); // trailing '...' stripped as a boundary
     }
 }

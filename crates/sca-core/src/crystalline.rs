@@ -3154,9 +3154,13 @@ impl CrystallineCore {
             let prepared: Vec<DocWords> = chunk
                 .par_iter()
                 .map(|text| {
+                    // MUST match ScaEngine::simple_tokenize EXACTLY (sub-token identifier splitting +
+                    // lowercase + len>=3) or the lexical index diverges from the engine's IDF/vocab
+                    // and recall drops. Uses the same shared splitter (bounds the code vocab — see
+                    // engine::split_identifier).
                     let words: Vec<String> = text
                         .split_whitespace()
-                        .map(|w| w.to_lowercase())
+                        .flat_map(crate::engine::ScaEngine::split_identifier)
                         .filter(|w| w.len() >= 3)
                         .collect();
                     let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());

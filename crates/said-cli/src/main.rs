@@ -2558,6 +2558,20 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
 
     let mut added = 0u64;
     let mut skipped = 0u64;
+    // Content-hash dedup set. Seeded from the brain's existing frames (cross-run dedup) and then
+    // updated as we go (INTRA-run dedup): a repo with content-identical files at different paths —
+    // e.g. duplicated nested trees like `Database1/Database1/…` or `wow go go/wow go go/…` in the
+    // Wonga corpus — would otherwise ingest every copy, doubling frames + exploding the token vocab
+    // (SQL schema is vocab-dense). This also replaces the old O(N) `active_doc_ids().any()` scan per
+    // file (O(N²) total) with an O(1) HashSet lookup.
+    let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for did in brain.frames.active_doc_ids() {
+        if let Some(m) = brain.frames.get_meta(&did) {
+            for t in &m.tags {
+                if let Some(h) = t.strip_prefix("blake3:") { seen_hashes.insert(h.to_string()); }
+            }
+        }
+    }
 
     for file_path in &files {
         let file_bytes = match std::fs::read(file_path) {
@@ -2565,15 +2579,12 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
             Err(_) => { skipped += 1; continue; }
         };
         let hash = blake3::hash(&file_bytes);
-        let hash_tag = format!("blake3:{}", hash.to_hex());
+        let hash_hex = hash.to_hex().to_string();
+        let hash_tag = format!("blake3:{}", hash_hex);
 
-        // Check if already indexed with same hash
-        let already_indexed = brain.frames.active_doc_ids().iter().any(|did| {
-            brain.frames.get_meta(did)
-                .map(|m| m.tags.iter().any(|t| t == &hash_tag))
-                .unwrap_or(false)
-        });
-        if already_indexed {
+        // Skip if this exact content was already ingested — in a PRIOR run (seeded above) OR earlier
+        // in THIS run (intra-run dedup of duplicate copies).
+        if !seen_hashes.insert(hash_hex) {
             skipped += 1;
             continue;
         }
