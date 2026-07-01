@@ -2291,22 +2291,60 @@ fn text_extension(ext: &str) -> bool {
 /// multi-GB passage explosion — the real cause of the "word index" OOM. Code/SQL files stay UNCAPPED
 /// (a big source file is legitimate and AST-chunks cleanly). Override the cap with SAID_TEXT_MAX_BYTES
 /// (0 disables). Default 5 MB — generous for real config/docs, far below any data dump.
-/// Per-system streaming-spill budget: `clamp(available_RAM × 12%, 16 MB, 512 MB)`.
-/// Fraction + floor + ceiling are the industry consensus (Elasticsearch/Lucene 10% of heap; Lucene's
-/// 16 MB IndexWriter floor; a conservative 512 MB ceiling since spill cost rises beyond it). Reads
-/// AVAILABLE (not total) RAM so a busy host budgets down. Falls back to 512 MB if RAM can't be read.
-fn auto_spill_budget() -> usize {
-    const FLOOR: u64 = 16 * 1024 * 1024;
-    const CEILING: u64 = 512 * 1024 * 1024;
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let available = sys.available_memory(); // bytes (sysinfo ≥0.30)
-    if available == 0 {
-        return CEILING as usize; // couldn't read RAM — keep the safe high default
+/// ONE coordinated ingestion memory budget (the SPIMI "single accountant" — Lucene's IndexWriter /
+/// RocksDB's memtable model). Before this, three independent budgets (frame spill, encode window, word
+/// index) each enforced the SAME "peak RAM = buffer" invariant separately, so they could STACK to ~3×
+/// the intended peak. Now one total budget is computed per-device and SPLIT across the three ingest
+/// phases, so total peak ≈ the single `total` number on any machine.
+///
+///   total = clamp(available_RAM × 12%, 16 MB, 512 MB)   (Elasticsearch/Lucene 10% of heap; Lucene's
+///           16 MB IndexWriter floor; a 512 MB ceiling since spill cost rises beyond it, and staying
+///           HIGH means small/medium repos never spill — spill costs ~14× throughput.)
+///   frames 40% · encode 40% · word-index 20%            (frames + encode are the big transients;
+///           the word-index build is leaner, matching Lucene's docs-vs-postings heap split.)
+struct IngestBudget { total: usize, frames: usize, encode: usize, word_index: usize }
+
+impl IngestBudget {
+    fn resolve() -> Self {
+        const FLOOR: u64 = 16 * 1024 * 1024;
+        const CEILING: u64 = 512 * 1024 * 1024;
+        // Explicit total override wins; else per-device auto.
+        let total: usize = match std::env::var("SAID_INGEST_BUDGET").ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+            Some(b) => b.clamp(FLOOR, CEILING) as usize,
+            None => {
+                let mut sys = sysinfo::System::new();
+                sys.refresh_memory();
+                let available = sys.available_memory(); // bytes
+                if available == 0 { CEILING as usize }
+                else { ((available as f64 * 0.12) as u64).clamp(FLOOR, CEILING) as usize }
+            }
+        };
+        IngestBudget {
+            total,
+            frames: (total as f64 * 0.40) as usize,
+            encode: (total as f64 * 0.40) as usize,
+            word_index: (total as f64 * 0.20) as usize,
+        }
     }
-    let target = (available as f64 * 0.12) as u64;
-    target.clamp(FLOOR, CEILING) as usize
+
+    /// Publish the sub-budgets into the env vars sca-core reads, so all three ingest phases draw from
+    /// the ONE coordinated budget instead of three independent maxes. Explicit per-phase overrides
+    /// (SAID_SPILL_BUDGET / SAID_INDEX_BUDGET already set by the user) are respected — only unset ones
+    /// are filled in.
+    fn apply(&self) {
+        if std::env::var("SAID_SPILL_BUDGET").is_err() {
+            std::env::set_var("SAID_SPILL_BUDGET", self.frames.to_string());
+        }
+        if std::env::var("SAID_INDEX_BUDGET").is_err() {
+            // encode + word-index phases both read SAID_INDEX_BUDGET; give them the larger (encode)
+            // slice as the window budget — the word-index build is derived + windowed under it.
+            std::env::set_var("SAID_INDEX_BUDGET", self.encode.to_string());
+        }
+    }
 }
+
+/// Back-compat shim: the frame spill sub-budget from the coordinated IngestBudget.
+fn auto_spill_budget() -> usize { IngestBudget::resolve().frames }
 
 fn should_enroll(path: &Path) -> bool {
     let ext = match path.extension().and_then(|e| e.to_str()) {
@@ -2719,15 +2757,12 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // (legacy hold-in-RAM). Must be set BEFORE the phase-1 ingest loop so every
     // remember_as honours it.
     //
-    // PER-SYSTEM auto budget (research-grounded, matches Elasticsearch/Lucene's percent-of-heap +
-    // Lucene's 16 MB floor + a conservative 512 MB ceiling; see docs). budget = clamp(available_RAM
-    // × 12%, 16 MB, 512 MB). WHY a fraction not a fixed value: a fixed 512 MB wastes RAM on a 4 GB
-    // phone yet under-budgets a 256 GB server. WHY clamp HIGH: spilling has real cost (measured 14×
-    // slower read on Wonga; Spark/PostgreSQL guidance = "budget high, avoid spilling unless forced"),
-    // so on a capable machine (≥ ~4 GB) the budget hits the 512 MB ceiling and the pathological case
-    // stays bounded WITHOUT penalising normal repos; only a genuinely low-RAM device drops below the
-    // ceiling and spills earlier — the 580 MB-class ceiling is the low-RAM-device GUARANTEE, not a
-    // tax on workstations. Override with SAID_SPILL_BUDGET (bytes); 0 disables (legacy hold-in-RAM).
+    // ONE coordinated ingest budget (the SPIMI "single accountant"): compute the per-device total
+    // once and publish the frame/encode/word-index sub-budgets into the env vars each phase reads, so
+    // the three phases draw from ONE budget instead of three independent maxes that could stack to ~3×
+    // peak. Explicit SAID_SPILL_BUDGET / SAID_INDEX_BUDGET overrides are respected. See docs (streaming
+    // memory model). SAID_INGEST_BUDGET overrides the total.
+    IngestBudget::resolve().apply();
     let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
@@ -11929,8 +11964,30 @@ mod junk_dir_tests {
     #[test]
     fn auto_spill_budget_is_clamped() {
         let b = auto_spill_budget();
-        assert!(b >= 16 * 1024 * 1024, "budget must be >= 16MB floor, got {}", b);
+        assert!(b >= 16 * 1024 * 1024 * 40 / 100, "frame sub-budget must be >= 40% of 16MB floor, got {}", b);
         assert!(b <= 512 * 1024 * 1024, "budget must be <= 512MB ceiling, got {}", b);
+    }
+
+    // The unified ingest budget: total is clamped to [16MB, 512MB], and the three sub-budgets sum to
+    // (approximately) the total — proving one coordinated accountant, not three independent maxes.
+    #[test]
+    fn ingest_budget_splits_one_total() {
+        let b = super::IngestBudget::resolve();
+        assert!(b.total >= 16 * 1024 * 1024 && b.total <= 512 * 1024 * 1024, "total clamped, got {}", b.total);
+        let sum = b.frames + b.encode + b.word_index;
+        // 40+40+20 = 100%; allow small rounding drift.
+        assert!(sum <= b.total + 8 && sum + b.total / 20 >= b.total, "sub-budgets must sum ~= total: {}+{}+{}={} vs {}", b.frames, b.encode, b.word_index, sum, b.total);
+        assert!(b.frames >= b.word_index, "frames slice >= word-index slice");
+    }
+
+    // An explicit SAID_INGEST_BUDGET total must be honoured (clamped) and split.
+    #[test]
+    fn ingest_budget_honours_explicit_total() {
+        std::env::set_var("SAID_INGEST_BUDGET", (200 * 1024 * 1024).to_string());
+        let b = super::IngestBudget::resolve();
+        std::env::remove_var("SAID_INGEST_BUDGET");
+        assert_eq!(b.total, 200 * 1024 * 1024, "explicit total honoured");
+        assert_eq!(b.frames, (200 * 1024 * 1024) * 40 / 100);
     }
 
     // The REAL cause of the Wonga "word index" OOM: 3 GB of african_bank_data/source/*.csv (an 831 MB
