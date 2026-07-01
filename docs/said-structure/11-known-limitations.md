@@ -43,7 +43,7 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST: crash FIXED, WIDX disk-index shipped — but 580 MB ceiling NOT yet met
+### 1.6 Large-repo INGEST: crash + Phase-3 HANGS fixed, ingests end-to-end — 580 MB peak still open on low-RAM
 - **STATUS (measured, honest, 2026-07-01).** The REAL headline cause was **CSV DATA DUMPS**, not the word
   index. Wonga's actual code is only **82 MB** (.cs + .sql, 11,843 files); it also carried **3.8 GB of
   `african_bank_data/source/*.csv`** (an 831 MB transaction export + 63 more >5 MB) that were ingested
@@ -56,13 +56,29 @@ If you change a limitation here, update the matching roadmap entry in the same c
   [skip-resident works], `doc_word_sets=20 MB`, `doc_word_tf=38 MB`) — **UNDER the 580 MB ceiling**; frame
   store `pending=285 MB`. So the word index AND the frame buffer are both fine. (An earlier note here
   guessed the per-doc structures were 800/900 MB — WRONG, they are 20/38 MB; corrected by the mem-report.)
-- **NOT YET DONE / open (honest):** peak private heap was still **~2 GB** in Phase 2/3, and the last logged
-  run **did NOT save a populated brain** — it reached OKF (`6274 link edges`) then the run was interrupted
-  during Phase 3 (compact/OKF/harvest/save) before the save completed. So: **(a)** a full end-to-end
-  populated-brain run at 37k frames is NOT yet confirmed, and **(b)** the ~2 GB peak is a **Phase-3
-  transient** (compact block-dict repack OR the OKF `build_concept_links` / harvest pass), NOT the word
-  index (459 MB) or frames (285 MB). NEXT (a sniper shot, recorded in memory `large-repo-ingest-too-slow`):
-  re-run with `SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0` — if peak drops to ~500 MB the culprit is
+- **PHASE-3 HANGS FIXED — full-defaults Wonga now ingests END-TO-END (milestone).** Two O(N²) passes hung
+  Phase 3 on 37k frames; both fixed with record-linkage BLOCKING (Ravikumar VLDB'03 / Papadakis 2013),
+  deterministic + bit-identical:
+  - **OKF** (`build_concept_links`, said_file.rs) — the title-mention step was O(frames × titles) = 1.37 B
+    pairs + a body decompress per frame. Now a token index + O(1) set-membership (a title is a body word-
+    token). Same 6,274 edges. (36c7b84)
+  - **Harvest** (`harvest_scan`, harvest.rs) — skeleton clustering was all-pairs Jaccard = ~105 M comps on
+    ~14.5 k functions. Now blocked by shared call-token (Jaccard ≥ 0.70 ⇒ must share a call). Same
+    clusters. (b509fd1)
+  - **Proof:** full-defaults run (OKF on + harvest on + auto-spill) COMPLETED — `[okf] 6274 edges` +
+    `[harvest] 771 blueprints` + `Compacted + saved`, exit 0, a **82.3 MB brain, 37,790 memories, 14,560
+    symbols**. Recall verified (`amortization schedule` → the real `AmortizationSchedule.cs` constructor,
+    score 1.00). First true full-config 37 k-frame Wonga brain.
+- **Spill budget now PER-SYSTEM** (4e9b1f1): `clamp(available_RAM × 12%, 16 MB, 512 MB)` via `sysinfo`
+  (Elasticsearch/Lucene/DuckDB precedent). 580 MB is the low-RAM-device guarantee (auto-spill there);
+  capable machines stay at the ceiling and don't force-spill (spill costs ~14× read time — Spark/PostgreSQL
+  "budget high, avoid spilling").
+- **REMAINING for 580 MB on low-RAM devices:** peak on a high-RAM machine is still ~2 GB, from the
+  **compact transient** (`frames.rs::compact_block_dict`): `raw_frames` holds all frames' decompressed
+  bytes at once + a second full `flat` copy for zstd dictionary training + all compressed blocks collected
+  before merge. NOT the word index (459 MB) or frames (285 MB). Fix: window the block compression + drop
+  the redundant `flat` full-copy. (Recorded in memory `large-repo-ingest-too-slow`.) The sniper-shot A/B
+  that isolated this: `SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0` — if peak drops to ~500 MB the culprit is
   OKF/harvest (make it streaming); if still ~2 GB it is `compact_block_dict` (bound the repack).
 - **What SHIPPED + WORKS (real value):** the disk-backed WIDX word-index section
   (`crates/sca-core/src/word_index.rs`) — serialize (varint-delta postings) + `WidxReader` in-place mmap

@@ -95,18 +95,19 @@ Four mechanisms promoted from the novel-mechanisms chapter as concrete work item
 
 ## Ingestion
 
-- [ ] **🔴 HIGH PRIORITY — large-repo ingest: crash fixed + 20× faster, 580 MB ceiling NOT yet met**
-  (known-limitation [1.6](11-known-limitations.md)). **Crash + speed: DONE** — the real cause was 3.8 GB of
-  CSV DATA DUMPS (`african_bank_data/*.csv`), now skipped by `should_enroll` (5 MB cap on non-code files);
-  plus `is_junk_dir` skips .NET/SQL build artifacts, encode + word-prep stream in bounded windows
-  (`SAID_INDEX_BUDGET`), and the word index is disk-backed (WIDX / skip-resident). Result: no OOM crash,
-  Phase-1 read 200–370 s → 14.4 s, word index 459 MB (< 580 MB). **580 MB peak: NOT met** — peak is still
-  ~2 GB, from a **Phase-3 transient** (compact block-dict repack OR OKF `build_concept_links`/harvest), NOT
-  the word index or frames. And a full **populated-brain** run at 37 k frames is not yet confirmed end to
-  end. **Remaining actions:** (1) isolate the Phase-3 ~2 GB (`SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0`
-  A/B) then bound it (streaming OKF/harvest, or a bounded compact repack); (2) confirm a full populated
-  37 k-frame brain saves; (3) parallelize Phase-1 read+chunk for more speed; (4) incremental + resumable
-  init (BLAKE3 fast path). **Target:** 37 k-frame code brain within the 580 MB ceiling, re-init in seconds.
+- [ ] **🟡 large-repo ingest: crash + Phase-3 hangs FIXED, ingests end-to-end — 580 MB peak open on low-RAM**
+  (known-limitation [1.6](11-known-limitations.md)). **DONE:** (a) CSV data-dump exclusion (`should_enroll`
+  5 MB cap) — the real crash cause; (b) OKF title-scan O(N²)→linear + harvest clustering O(N²)→blocked (both
+  record-linkage blocking, deterministic) — the two Phase-3 hangs; (c) per-system spill budget
+  (`clamp(RAM×12%, 16 MB, 512 MB)`, sysinfo); (d) WIDX disk-backed word index. **Proven:** full-defaults
+  Wonga (OKF + harvest + auto-spill) ingests END-TO-END — 82.3 MB brain, 37,790 memories, 14,560 symbols,
+  recall verified. Phase-1 read 200–370 s → 14 s. **Still open:** peak on a high-RAM machine is ~2 GB, from
+  the **compact transient** (`frames.rs::compact_block_dict`: `raw_frames` all-frames-decompressed + a
+  second `flat` copy for zstd dict training + all compressed blocks collected before merge) — NOT the word
+  index (459 MB) or frames (285 MB). **Remaining actions:** (1) window the block compression + drop the
+  `flat` full-copy (the last item to hit 580 MB on low-RAM devices); (2) parallelize Phase-1 read+chunk for
+  more speed; (3) incremental + resumable init (BLAKE3 fast path). **Target:** 37 k-frame code brain within
+  the 580 MB ceiling on low-RAM devices, re-init in seconds.
 - [ ] **pdfium fallback** — bundled slow rasterizer when `pdfium.dll` not found at runtime.
 - [ ] **Whisper GPU cross-platform** — Metal (macOS) + CUDA/ROCm (Linux) via sherpa-rs features.
 - [ ] **More tree-sitter languages** — Kotlin, Swift, Scala, Ruby, PHP.
