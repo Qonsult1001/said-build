@@ -703,11 +703,16 @@ impl FrameStore {
 
         // Collect indices of pending frames to re-pack into blocks.
         // Both Active and Tombstone participate so lineage is preserved.
-        for (i, pending) in self.pending.iter().enumerate() {
+        // MOVE the bytes out of self.pending (mem::take) instead of CLONING them — self.pending
+        // already holds every frame's decompressed bytes (the whole corpus), so cloning here made a
+        // SECOND full corpus copy (the ~550MB@13k / ~1.5GB@37k compact-phase transient — the blind
+        // spot in the earlier compress-only windowing). The moved-out slot is dead until the merge
+        // below rewrites pending[first].compressed_data, so this is safe + bit-identical.
+        for (i, pending) in self.pending.iter_mut().enumerate() {
             if pending.meta.status != FrameStatus::Deleted
                 && pending.meta.encoding == FrameEncoding::Plain
             {
-                raw_frames.push((i, pending.compressed_data.clone()));
+                raw_frames.push((i, std::mem::take(&mut pending.compressed_data)));
             }
         }
 
