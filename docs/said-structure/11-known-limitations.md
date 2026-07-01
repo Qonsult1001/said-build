@@ -43,7 +43,35 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST: crash + Phase-3 HANGS fixed, ingests end-to-end — 580 MB peak still open on low-RAM
+### 1.6 Large-repo INGEST: crash FIXED, ingests end-to-end + recalls — ~1.4 GB structural peak (budget-invariant) still open on low-RAM
+
+- **UPDATE (deterministic re-measurement, 2026-07-01).** The 37 k Wonga corpus now **ingests fully and
+  recalls correctly**: 37,162 frames → 65 MB brain in ~1 min, cold `ask "amortization schedule calculation"`
+  returns the exact `AmortizationSchedule::Build` method at score 1.00 in 3.4 s. **The OOM crash is gone
+  on any box with >2 GB free.** One more transient was found + fixed this pass: the encode window stored
+  every passage embedding (`DocEnc.passages: Vec<Vec<f32>>`) — replaced with an incremental `passage_sum`
+  fold (bit-identical), which cut the 13 k-SQL encode transient 786 → 233 MB (commit 812e178).
+- **The remaining peak is a STRUCTURAL FLOOR, not a single accumulator, and it is BUDGET-INVARIANT.**
+  Deterministic `PeakWorkingSet64` (monotonic, poll-timing-independent) = **~1.44 GB**, repeatable. It is
+  **not one spike** — it's a broad ~1.08 GB resident plateau across the whole read/index phase that then
+  climbs to ~1.15–1.44 GB during compact. Proven by A/B:
+  - `SAID_INGEST_BUDGET=100 MB` (forced tiny) → **still peaked 1,408 MB**. The budget bounds the spill/encode
+    *transients*, which are no longer the dominant cost at 37 k; it cannot touch the floor.
+  - `mimalloc` as global allocator → peak got **WORSE** (~2.0 GB, pre-committed arenas), so it is **not**
+    system-heap retention. Reverted.
+  - `SAID_MEM_REPORT` at 37 k → the resident lexical index is only **~142 MB** (`doc_word_sets=29 MB`,
+    `doc_word_tf=39 MB`, `vocab=74 MB`); the skip-resident inverted map is 0 MB (works). So the floor is the
+    **aggregate of several modest resident copies of the corpus coexisting during init** — frames `pending`
+    (~285 MB for 130 MB of source), the mmap'd `self.data`, the word index (142 MB), the quantized matrix,
+    plus per-batch transients riding on top — none individually large, ~1 GB in sum.
+- **Owner decision (2026-07-01): SHIP the working fix.** The crash-fix + correct recall is the real value;
+  driving the ~1.4 GB floor to ~500 MB requires restructuring `init` so frames-pending + mmap + index do
+  not all coexist (compact per-batch during read, drop the pending buffer, derive WIDX from spilled
+  segments — true single-pass SPIMI). That is real surgery with careful bit-identity verification, deferred.
+  Until then: a 37 k-doc monorepo ingests crash-free + recalls at ~1.4 GB, needs a box with >2 GB free.
+
+<details><summary>Earlier investigation notes (kept for history — the CSV/O(N²)/WIDX work still stands)</summary>
+
 - **STATUS (measured, honest, 2026-07-01).** The REAL headline cause was **CSV DATA DUMPS**, not the word
   index. Wonga's actual code is only **82 MB** (.cs + .sql, 11,843 files); it also carried **3.8 GB of
   `african_bank_data/source/*.csv`** (an 831 MB transaction export + 63 more >5 MB) that were ingested
@@ -127,6 +155,8 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Target** — a 13k-file repo should init in **single-digit minutes within the 580 MB ceiling**, and
   re-init in seconds. Memory target met; speed target pending.
 - **Roadmap §** — [Retrieval / fast large-repo ingest](12-roadmap.md#retrieval) — **HIGH PRIORITY.**
+
+</details>
 
 ## 2. Pillars + memory model
 
