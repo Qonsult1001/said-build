@@ -2263,8 +2263,15 @@ fn cmd_add(
 const SQL_EXTENSIONS: &[&str] = &["sql", "ddl", "tsql"];
 
 // Pure-text formats with no AST chunker; whole-file storage at ingest.
+// `.csv` is DELIBERATELY EXCLUDED: CSV is a data-EXPORT format, not searchable code/text. The Wonga
+// bank repo's "Wonga Compressed" dir carries 1,137 CSV transaction-dumps each UNDER the 5 MB per-file
+// cap (85 MB total) that char-chunked into ~346k passages — measured as the sole cause of that dir's
+// 750 MB ingest spike, while every code/SQL-only dir (incl. heavy-SQL AB) peaked ≤202 MB. The per-file
+// size cap can't catch this (each file is individually small); the right fix is excluding the TYPE.
+// Data you genuinely want searchable should be ingested as text, not left as a raw multi-MB CSV dump.
+// Opt back in with SAID_INGEST_CSV=1 (still subject to the SAID_TEXT_MAX_BYTES per-file cap).
 const PLAIN_TEXT_EXTENSIONS: &[&str] = &[
-    "txt", "html", "xml", "csv", "cfg", "ini",
+    "txt", "html", "xml", "cfg", "ini",
 ];
 
 /// File-enrollment filter for `init` (which extensions get walked + ingested).
@@ -2282,7 +2289,15 @@ fn code_extension(ext: &str) -> bool {
 }
 
 fn text_extension(ext: &str) -> bool {
-    PLAIN_TEXT_EXTENSIONS.contains(&ext)
+    if PLAIN_TEXT_EXTENSIONS.contains(&ext) {
+        return true;
+    }
+    // CSV is excluded by default (data dumps — see PLAIN_TEXT_EXTENSIONS note). Opt back in explicitly;
+    // it still passes through the SAID_TEXT_MAX_BYTES per-file cap in should_enroll().
+    if ext == "csv" && std::env::var("SAID_INGEST_CSV").as_deref() == Ok("1") {
+        return true;
+    }
+    false
 }
 
 /// Enroll a file for ingest? Filters by extension AND — for non-code plain-text/data files (csv, txt,
@@ -12001,30 +12016,34 @@ mod junk_dir_tests {
         assert_eq!(b.frames, (200 * 1024 * 1024) * 40 / 100);
     }
 
-    // The REAL cause of the Wonga "word index" OOM: 3 GB of african_bank_data/source/*.csv (an 831 MB
-    // transaction export) was ingested because .csv is in PLAIN_TEXT_EXTENSIONS — char-chunked into a
-    // multi-GB passage explosion. should_enroll caps non-code text/data files (default 5 MB) so data
-    // dumps are skipped, while code files stay uncapped.
+    // The REAL cause of the Wonga ingest SPIKE (isolated per-dir): CSV DATA DUMPS. The "Wonga Compressed"
+    // dir carried 1,137 CSV transaction-exports EACH UNDER the 5 MB per-file cap (85 MB total) that
+    // char-chunked into ~346k passages — the sole cause of that dir's 750 MB peak (every code/SQL-only
+    // dir, incl. heavy-SQL AB, peaked ≤202 MB). The per-file cap can't catch a swarm of small-ish CSVs;
+    // the fix is excluding the TYPE. CSV is now skipped by default (opt in with SAID_INGEST_CSV=1).
     #[test]
-    fn should_enroll_skips_big_data_files_keeps_code() {
+    fn should_enroll_skips_csv_data_dumps_keeps_code() {
         let dir = std::env::temp_dir().join(format!("said_enroll_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let big = 6 * 1024 * 1024; // 6 MB > 5 MB cap
+        std::env::remove_var("SAID_INGEST_CSV"); // default policy for this assertion
 
-        // a big CSV (data dump) -> skipped
-        let csv = dir.join("dump.csv");
-        std::fs::File::create(&csv).unwrap().write_all(&vec![b'a'; big]).unwrap();
-        assert!(!should_enroll(&csv), "a 6MB CSV data dump must be skipped");
+        // even a SMALL CSV is skipped by default — CSV is a data-export type, not searchable text.
+        // (This is the fix: a swarm of small-ish CSV dumps was the memory spike; a per-file size cap
+        // can't catch them, so the TYPE is excluded.)
+        let small_csv = dir.join("small.csv");
+        std::fs::File::create(&small_csv).unwrap().write_all(b"a,b,c\n1,2,3\n").unwrap();
+        assert!(!should_enroll(&small_csv), "CSV must be skipped by default (data-export type)");
 
         // a big .cs (source) -> kept (code is uncapped)
+        let big = 6 * 1024 * 1024; // 6 MB > 5 MB text cap
         let cs = dir.join("Big.cs");
         std::fs::File::create(&cs).unwrap().write_all(&vec![b'x'; big]).unwrap();
         assert!(should_enroll(&cs), "a large source file must still be enrolled");
 
-        // a small CSV (real config-ish) -> kept
-        let small_csv = dir.join("small.csv");
-        std::fs::File::create(&small_csv).unwrap().write_all(b"a,b,c\n1,2,3\n").unwrap();
-        assert!(should_enroll(&small_csv), "a small CSV must be enrolled");
+        // a big TXT (still a capped text type) -> skipped over the 5 MB cap
+        let txt = dir.join("dump.txt");
+        std::fs::File::create(&txt).unwrap().write_all(&vec![b'a'; big]).unwrap();
+        assert!(!should_enroll(&txt), "a 6MB TXT data dump must be skipped by the size cap");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
