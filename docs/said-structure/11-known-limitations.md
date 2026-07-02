@@ -43,27 +43,35 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
 
-### 1.6 Large-repo INGEST: crash FIXED, ingests end-to-end + recalls — ~1.4 GB structural peak (budget-invariant) still open on low-RAM
+### 1.6 Large-repo INGEST: RESOLVED — 37 k Wonga peaks 486 MB (under the 580 MB target), ingests in ~20 s, recalls correctly
 
-- **UPDATE (deterministic re-measurement, 2026-07-01).** The 37 k Wonga corpus now **ingests fully and
-  recalls correctly**: 37,162 frames → 65 MB brain in ~1 min, cold `ask "amortization schedule calculation"`
-  returns the exact `AmortizationSchedule::Build` method at score 1.00 in 3.4 s. **The OOM crash is gone
-  on any box with >2 GB free.** One more transient was found + fixed this pass: the encode window stored
-  every passage embedding (`DocEnc.passages: Vec<Vec<f32>>`) — replaced with an incremental `passage_sum`
-  fold (bit-identical), which cut the 13 k-SQL encode transient 786 → 233 MB (commit 812e178).
-- **The remaining peak is a STRUCTURAL FLOOR, not a single accumulator, and it is BUDGET-INVARIANT.**
-  Deterministic `PeakWorkingSet64` (monotonic, poll-timing-independent) = **~1.44 GB**, repeatable. It is
-  **not one spike** — it's a broad ~1.08 GB resident plateau across the whole read/index phase that then
-  climbs to ~1.15–1.44 GB during compact. Proven by A/B:
-  - `SAID_INGEST_BUDGET=100 MB` (forced tiny) → **still peaked 1,408 MB**. The budget bounds the spill/encode
-    *transients*, which are no longer the dominant cost at 37 k; it cannot touch the floor.
-  - `mimalloc` as global allocator → peak got **WORSE** (~2.0 GB, pre-committed arenas), so it is **not**
-    system-heap retention. Reverted.
-  - `SAID_MEM_REPORT` at 37 k → the resident lexical index is only **~142 MB** (`doc_word_sets=29 MB`,
-    `doc_word_tf=39 MB`, `vocab=74 MB`); the skip-resident inverted map is 0 MB (works). So the floor is the
-    **aggregate of several modest resident copies of the corpus coexisting during init** — frames `pending`
-    (~285 MB for 130 MB of source), the mmap'd `self.data`, the word index (142 MB), the quantized matrix,
-    plus per-batch transients riding on top — none individually large, ~1 GB in sum.
+- **ROOT CAUSE FOUND + FIXED (2026-07-02): CSV data dumps. Not SQL, not the word index, not the allocator.**
+  A **per-directory peak test** (ingest each Wonga subdir alone, measure peak) isolated it in one shot:
+  `Wonga Compressed Project for Modernization` peaked **750 MB ALONE**, while every code/SQL-only dir —
+  including the heavy-SQL `AB` (2,969 `.sql` files) — peaked **≤202 MB**. So SQL was never the problem
+  (the owner said this from the start). That one dir carries **1,137 CSV transaction-dumps each UNDER the
+  5 MB per-file cap** (85 MB total) that char-chunked into **~346 k passages** — the spike. A per-file size
+  cap cannot catch a *swarm* of small-ish data dumps; the fix is excluding the **type**. `.csv` removed from
+  `PLAIN_TEXT_EXTENSIONS` (opt back in with `SAID_INGEST_CSV=1`, still size-capped). Commit `eef73c0`.
+- **MEASURED result:** culprit dir **750 → 223 MB**; **full 37 k Wonga 920 → 486 MB** (under the 580 MB
+  constant-memory target), ingest **~3 min → ~20 s** (9 s read + 11 s compact), clean 44 MB brain. Recall
+  unaffected — cold `ask "amortization schedule calculation"` still returns `AmortizationSchedule::Build`
+  at score 1.00; SQL tables still recalled. This is the "runs within phone memory" contract met.
+- **The measurement-method lesson (why this took so long).** Earlier runs reported a "~1.4 GB
+  budget-invariant floor." That number was **inflated by a stray `said` process** (a leftover MCP/prior run
+  holding ~528 MB) that the external `Get-Process said | Measure-Object -Sum` poller summed into every
+  reading. An **in-process** probe (`K32GetProcessMemoryInfo`, reads *this* PID) gave the true single-process
+  peak (~920 MB pre-fix) and the flat tail; the per-directory A/B then pinned the cause to one dir. Chasing
+  the phantom sent several fixes down the wrong path (word-index SPIMI spill — only ~136 MB; rayon
+  thread-count — 871 vs 920; passage-budget batching — *worse* at 954; mimalloc — worse). **Lesson: measure
+  the exact PID from inside the process, and isolate by input (per-dir) before touching code.**
+- One real transient fix did land on the way (kept): the encode window stored every passage embedding
+  (`DocEnc.passages: Vec<Vec<f32>>`) → replaced with an incremental `passage_sum` fold (bit-identical),
+  which cut the 13 k-SQL encode transient 786 → 233 MB (commit 812e178).
+
+<details><summary>Earlier (superseded) investigation notes</summary>
+
+- **Superseded 2026-07-01 note — the "~1.4 GB budget-invariant floor" was the stray-process artifact above.**
 - **Owner decision (2026-07-01): SHIP the working fix.** The crash-fix + correct recall is the real value;
   driving the ~1.4 GB floor to ~500 MB requires restructuring `init` so frames-pending + mmap + index do
   not all coexist (compact per-batch during read, drop the pending buffer, derive WIDX from spilled
