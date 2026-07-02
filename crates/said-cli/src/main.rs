@@ -2306,60 +2306,44 @@ fn text_extension(ext: &str) -> bool {
 /// multi-GB passage explosion — the real cause of the "word index" OOM. Code/SQL files stay UNCAPPED
 /// (a big source file is legitimate and AST-chunks cleanly). Override the cap with SAID_TEXT_MAX_BYTES
 /// (0 disables). Default 5 MB — generous for real config/docs, far below any data dump.
-/// ONE coordinated ingestion memory budget (the SPIMI "single accountant" — Lucene's IndexWriter /
-/// RocksDB's memtable model). Before this, three independent budgets (frame spill, encode window, word
-/// index) each enforced the SAME "peak RAM = buffer" invariant separately, so they could STACK to ~3×
-/// the intended peak. Now one total budget is computed per-device and SPLIT across the three ingest
-/// phases, so total peak ≈ the single `total` number on any machine.
+/// ONE ingestion memory budget — the spill safety-net for low-RAM / mobile devices.
 ///
-///   total = clamp(available_RAM × 12%, 16 MB, 512 MB)   (Elasticsearch/Lucene 10% of heap; Lucene's
-///           16 MB IndexWriter floor; a 512 MB ceiling since spill cost rises beyond it, and staying
-///           HIGH means small/medium repos never spill — spill costs ~14× throughput.)
-///   frames 40% · encode 40% · word-index 20%            (frames + encode are the big transients;
-///           the word-index build is leaner, matching Lucene's docs-vs-postings heap split.)
-struct IngestBudget { total: usize, frames: usize, encode: usize, word_index: usize }
-
-impl IngestBudget {
-    fn resolve() -> Self {
-        const FLOOR: u64 = 16 * 1024 * 1024;
-        const CEILING: u64 = 512 * 1024 * 1024;
-        // Explicit total override wins; else per-device auto.
-        let total: usize = match std::env::var("SAID_INGEST_BUDGET").ok().and_then(|s| s.trim().parse::<u64>().ok()) {
-            Some(b) => b.clamp(FLOOR, CEILING) as usize,
-            None => {
-                let mut sys = sysinfo::System::new();
-                sys.refresh_memory();
-                let available = sys.available_memory(); // bytes
-                if available == 0 { CEILING as usize }
-                else { ((available as f64 * 0.12) as u64).clamp(FLOOR, CEILING) as usize }
-            }
-        };
-        IngestBudget {
-            total,
-            frames: (total as f64 * 0.40) as usize,
-            encode: (total as f64 * 0.40) as usize,
-            word_index: (total as f64 * 0.20) as usize,
-        }
-    }
-
-    /// Publish the sub-budgets into the env vars sca-core reads, so all three ingest phases draw from
-    /// the ONE coordinated budget instead of three independent maxes. Explicit per-phase overrides
-    /// (SAID_SPILL_BUDGET / SAID_INDEX_BUDGET already set by the user) are respected — only unset ones
-    /// are filled in.
-    fn apply(&self) {
-        if std::env::var("SAID_SPILL_BUDGET").is_err() {
-            std::env::set_var("SAID_SPILL_BUDGET", self.frames.to_string());
-        }
-        if std::env::var("SAID_INDEX_BUDGET").is_err() {
-            // encode + word-index phases both read SAID_INDEX_BUDGET; give them the larger (encode)
-            // slice as the window budget — the word-index build is derived + windowed under it.
-            std::env::set_var("SAID_INDEX_BUDGET", self.encode.to_string());
+/// This used to be a 3-way "accountant" (frames 40% / encode 40% / word-index 20%) built to stop three
+/// budgets stacking to ~3× peak. Measured reality (per-directory A/B on the 37k Wonga corpus): the peak
+/// is ~505 MB regardless of the budget — disabling it entirely gave the SAME 505 MB / 124 s. The peak is
+/// set by the corpus + the fixed process baseline, not by these knobs, so the elaborate split was dead
+/// weight. What DOES matter is the spill FLOOR on a genuine low-RAM device (a phone with <1 GB free): the
+/// frame `pending` buffer must be allowed to flush to disk before it exhausts RAM. So we keep ONE simple
+/// per-device budget and publish it to the sca-core env vars; no split, no stacking to reason about.
+///
+///   budget = clamp(available_RAM × 12%, 16 MB, 512 MB)   (Elasticsearch/Lucene ~10% of heap; Lucene's
+///            16 MB IndexWriter floor; 512 MB ceiling — above it spill cost rises and big-RAM machines
+///            never need to spill anyway.) Override with SAID_INGEST_BUDGET (bytes).
+fn ingest_budget() -> usize {
+    const FLOOR: u64 = 16 * 1024 * 1024;
+    const CEILING: u64 = 512 * 1024 * 1024;
+    match std::env::var("SAID_INGEST_BUDGET").ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(b) => b.clamp(FLOOR, CEILING) as usize,
+        None => {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_memory();
+            let available = sys.available_memory(); // bytes
+            if available == 0 { CEILING as usize }
+            else { ((available as f64 * 0.12) as u64).clamp(FLOOR, CEILING) as usize }
         }
     }
 }
 
-/// Back-compat shim: the frame spill sub-budget from the coordinated IngestBudget.
-fn auto_spill_budget() -> usize { IngestBudget::resolve().frames }
+/// Publish the single budget to the env vars sca-core reads (frame spill + index window). Explicit user
+/// overrides (SAID_SPILL_BUDGET / SAID_INDEX_BUDGET) are respected — only unset ones are filled in.
+fn apply_ingest_budget() {
+    let b = ingest_budget().to_string();
+    if std::env::var("SAID_SPILL_BUDGET").is_err() { std::env::set_var("SAID_SPILL_BUDGET", &b); }
+    if std::env::var("SAID_INDEX_BUDGET").is_err() { std::env::set_var("SAID_INDEX_BUDGET", &b); }
+}
+
+/// The frame spill budget (same single per-device budget).
+fn auto_spill_budget() -> usize { ingest_budget() }
 
 fn should_enroll(path: &Path) -> bool {
     let ext = match path.extension().and_then(|e| e.to_str()) {
@@ -2788,7 +2772,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // the three phases draw from ONE budget instead of three independent maxes that could stack to ~3×
     // peak. Explicit SAID_SPILL_BUDGET / SAID_INDEX_BUDGET overrides are respected. See docs (streaming
     // memory model). SAID_INGEST_BUDGET overrides the total.
-    IngestBudget::resolve().apply();
+    apply_ingest_budget();
     let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
@@ -11994,26 +11978,23 @@ mod junk_dir_tests {
         assert!(b <= 512 * 1024 * 1024, "budget must be <= 512MB ceiling, got {}", b);
     }
 
-    // The unified ingest budget: total is clamped to [16MB, 512MB], and the three sub-budgets sum to
-    // (approximately) the total — proving one coordinated accountant, not three independent maxes.
+    // ONE ingest budget (the mobile spill safety-net), clamped to [16MB, 512MB]. The old 3-way split was
+    // removed — measured no-op on peak (per-dir A/B: 505MB with or without) — so we assert the single
+    // clamped value, not sub-budgets.
     #[test]
-    fn ingest_budget_splits_one_total() {
-        let b = super::IngestBudget::resolve();
-        assert!(b.total >= 16 * 1024 * 1024 && b.total <= 512 * 1024 * 1024, "total clamped, got {}", b.total);
-        let sum = b.frames + b.encode + b.word_index;
-        // 40+40+20 = 100%; allow small rounding drift.
-        assert!(sum <= b.total + 8 && sum + b.total / 20 >= b.total, "sub-budgets must sum ~= total: {}+{}+{}={} vs {}", b.frames, b.encode, b.word_index, sum, b.total);
-        assert!(b.frames >= b.word_index, "frames slice >= word-index slice");
+    fn ingest_budget_is_clamped() {
+        std::env::remove_var("SAID_INGEST_BUDGET");
+        let b = super::ingest_budget();
+        assert!(b >= 16 * 1024 * 1024 && b <= 512 * 1024 * 1024, "budget clamped, got {}", b);
     }
 
-    // An explicit SAID_INGEST_BUDGET total must be honoured (clamped) and split.
+    // An explicit SAID_INGEST_BUDGET must be honoured (clamped to the [16MB,512MB] range).
     #[test]
-    fn ingest_budget_honours_explicit_total() {
+    fn ingest_budget_honours_explicit() {
         std::env::set_var("SAID_INGEST_BUDGET", (200 * 1024 * 1024).to_string());
-        let b = super::IngestBudget::resolve();
+        let b = super::ingest_budget();
         std::env::remove_var("SAID_INGEST_BUDGET");
-        assert_eq!(b.total, 200 * 1024 * 1024, "explicit total honoured");
-        assert_eq!(b.frames, (200 * 1024 * 1024) * 40 / 100);
+        assert_eq!(b, 200 * 1024 * 1024, "explicit budget honoured");
     }
 
     // The REAL cause of the Wonga ingest SPIKE (isolated per-dir): CSV DATA DUMPS. The "Wonga Compressed"
