@@ -359,8 +359,10 @@ pub struct DeleteTool {
     /// Delete all frames created before this date (YYYY-MM-DD format)
     #[serde(default)]
     pub before_date: Option<String>,
-    /// Only delete frames matching this tag (e.g., "ingest:code", "module:card")
-    /// If omitted, applies to all frames matching the time criteria
+    /// Only delete frames matching this tag (e.g. "project:wonga", "ingest:code", "module:card").
+    /// Can be used ALONE to remove an entire project — `delete(tag_filter: "project:xyz")` tombstones
+    /// every frame carrying that tag (the portable-brain project-wipe). Combined with a time criterion,
+    /// it narrows the time-based delete to that tag.
     #[serde(default)]
     pub tag_filter: Option<String>,
     /// Dry run — show what WOULD be deleted without actually deleting

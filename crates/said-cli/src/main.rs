@@ -2791,6 +2791,16 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // across all sources (code dirs, docs, emails, media mounts).
     let source_tag = format!("source:{}", dir_path.to_string_lossy().replace('\\', "/"));
 
+    // PROJECT SCOPE on the INIT path (the keystone gap — was only on cmd_add_dir). When SAID_PROJECT is
+    // set, every ingested code frame gets `project:<name>` + `link:project-<name>` — so recall can scope
+    // to one project AND `delete(tag_filter: project:<name>)` / `wipe --project` can remove the whole
+    // project. Without this, `init` (the MCP + CLI ingest path) produced UN-tagged frames, so
+    // project-scoping and remove-a-project silently found nothing. Empty when SAID_PROJECT is unset.
+    let project_tags: Vec<String> = match sca_core::project::current_project() {
+        Some(p) => vec![sca_core::project::project_tag(&p), sca_core::project::project_link_tag(&p)],
+        None => Vec::new(),
+    };
+
     // Track which rel_paths we see this run so we can tombstone deleted files
     // at the end (anything tagged with this source_tag but not touched).
     let mut seen_rel_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2926,6 +2936,11 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                         brain.add_tag(&doc_id, &source_tag);
                         brain.add_tag(&doc_id, "ingest:code");
                         brain.add_tag(&doc_id, &hash_tag);
+                        // project:<name> + link:project-<name> — so this frame is scopable + deletable
+                        // by project (the init-path keystone fix).
+                        for ptag in &project_tags {
+                            brain.add_tag(&doc_id, ptag);
+                        }
                         if let Some(ref ctag) = client_tag {
                             brain.add_tag(&doc_id, ctag);
                         }
@@ -2999,6 +3014,7 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         let kind_tag = if code_extension(&ext) { "ingest:code" } else { "ingest:text" };
         brain.add_tag(&rel_path, kind_tag);
         brain.add_tag(&rel_path, &hash_tag);
+        for ptag in &project_tags { brain.add_tag(&rel_path, ptag); }
         if let Some(ref ctag) = client_tag {
             brain.add_tag(&rel_path, ctag);
         }

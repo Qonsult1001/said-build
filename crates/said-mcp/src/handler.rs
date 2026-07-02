@@ -2531,6 +2531,31 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             )]));
         }
 
+        // Mode 2b: TAG-ONLY deletion (no time criterion) — the "remove a project" path.
+        // `delete(tag_filter: "project:xyz")` tombstones every frame carrying that tag. This is the
+        // portable-brain project-wipe (matches the CLI `wipe --project`), exposed on the MCP surface.
+        if let Some(ref tag) = t.tag_filter {
+            let all_frames = brain.frames.get_all_frames();
+            let to_delete: Vec<String> = all_frames.iter()
+                .filter(|m| m.status == sca_core::frames::FrameStatus::Active
+                    && m.tags.iter().any(|x| x == tag))
+                .map(|m| m.doc_id.clone())
+                .collect();
+
+            if t.dry_run.unwrap_or(false) {
+                let mut output = format!("[DRY RUN] Would delete {} frames tagged `{}`:\n", to_delete.len(), tag);
+                for did in to_delete.iter().take(20) { output.push_str(&format!("  {}\n", did)); }
+                if to_delete.len() > 20 { output.push_str(&format!("  ... and {} more\n", to_delete.len() - 20)); }
+                return Ok(CallToolResult::text_content(vec![TextContent::from(output)]));
+            }
+            let mut deleted = 0;
+            for did in &to_delete { if brain.tombstone_frame(did) { deleted += 1; } }
+            if deleted > 0 { brain.save().map_err(|e| CallToolError::from_message(e))?; }
+            return Ok(CallToolResult::text_content(vec![TextContent::from(
+                format!("Deleted {} frames tagged `{}` (tombstoned — preserved in history)", deleted, tag),
+            )]));
+        }
+
         Ok(CallToolResult::text_content(vec![TextContent::from(
             "No deletion criteria specified. Use doc_id, older_than_days, or before_date.".to_string(),
         )]))
