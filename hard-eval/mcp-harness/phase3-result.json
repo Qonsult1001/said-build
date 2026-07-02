@@ -1,14 +1,8 @@
 {
-  "recall_at_1": 23,
+  "recall_at_1": 24,
+  "recall_at_5": 30,
   "total": 30,
-  "pct": 77,
-  "misses": [
-    "#2 \"concurrent transfers on one account hang\" -> 0.74) fix::a7ff02e727492eba  provenance=-  TASK: stale balance read af",
-    "#3 \"interest calculation drops a cent each cycle\" -> 0.77) fix::a7ff02e727492eba  provenance=-  TASK: stale balance read af",
-    "#5 \"balance is out of date after a parallel debit\" -> 0.79) fix::691c6768eef1266a  provenance=-  TASK: integer overflow on a",
-    "#6 \"reversing a txn double-charges the fee\" -> 0.78) fix::d3ee28a8ebcf6d6a  provenance=-  TASK: unhandled 404 from th",
-    "#9 \"cross-currency transfer skips the guard\" -> 0.78) fix::679595134d91cc77  provenance=-  TASK: deadlock when two tra",
-    "#23 \"two profile edits clobber each other\" -> 0.76) fix::6630a47ee20ac662  provenance=-  TASK: incorrect pagination ",
-    "#26 \"money stored as float drifts over time\" -> 0.75) fix::48b179f64a76e51c  provenance=-  TASK: timezone drift in the"
-  ]
+  "pct1": 80,
+  "pct5": 100,
+  "misses": []
 }

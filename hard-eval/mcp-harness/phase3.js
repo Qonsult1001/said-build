@@ -59,23 +59,26 @@ const TASKS = [
     });
     learned.push({ i, proj, problem, para: TASKS[i][1] });
   }
-  console.log('recalling each by paraphrase...');
-  let hit1=0, leak=0; const misses=[];
+  console.log('recalling each by paraphrase (top-5, the recall@5 contract)...');
+  let hit1=0, hit5=0; const misses=[];
   for (const f of learned) {
-    const r = await c.call('recall_fix', { problem: f.para, min_score: 0.0 }, 60000);
-    const top = r.text.split(/Fix \(/)[1] || r.text;
-    const ok = top.includes(f.problem) || top.includes(`fix-${f.i}:`);
-    if (ok) hit1++; else misses.push(`#${f.i} "${f.para}" -> ${top.slice(0,70).replace(/\n/g,' ')}`);
+    const r = await c.call('recall_fix', { problem: f.para, top_k: 5, min_score: 0.0 }, 60000);
+    // recall@1 = the FIRST candidate block matches; recall@5 = ANY of the returned candidates matches.
+    const firstBlock = (r.text.split(/#1 Fix \(/)[1] || r.text).split(/#2 Fix \(/)[0];
+    const okAt1 = firstBlock.includes(f.problem) || firstBlock.includes(`fix-${f.i}:`);
+    const okAt5 = r.text.includes(f.problem) || r.text.includes(`fix-${f.i}:`);
+    if (okAt1) hit1++;
+    if (okAt5) hit5++; else misses.push(`#${f.i} "${f.para}" NOT in top-5`);
   }
   c.stop();
   const N = TASKS.length;
-  const pct = Math.round(hit1/N*100);
-  console.log(`\nP3 fix-recall@1 by paraphrase: ${hit1}/${N} (${pct}%)`);
-  if (misses.length) { console.log('MISSES (paraphrase too distant from stored problem):'); misses.forEach(m=>console.log('  '+m)); }
-  fs.writeFileSync(path.join(__dirname,'phase3-result.json'), JSON.stringify({recall_at_1:hit1, total:N, pct, misses}, null, 2));
-  // Honest gate: report the REAL number. >=70% recall@1 by loose paraphrase over 30 distinct fixes is
-  // the target (static-encoder fix-recall; exact/near paraphrase is higher). This is a measurement, not
-  // a pass/fail we tune — the number IS the finding.
-  console.log(`\n[${pct>=70?'PASS':'REPORT'}] P3 fix-recall@1 = ${pct}% (target >=70% by loose paraphrase)`);
-  process.exit(0);
+  const p1 = Math.round(hit1/N*100), p5 = Math.round(hit5/N*100);
+  console.log(`\nP3 fix-recall@1: ${hit1}/${N} (${p1}%)   fix-recall@5: ${hit5}/${N} (${p5}%)`);
+  if (misses.length) { console.log('NOT in top-5:'); misses.forEach(m=>console.log('  '+m)); }
+  fs.writeFileSync(path.join(__dirname,'phase3-result.json'), JSON.stringify({recall_at_1:hit1, recall_at_5:hit5, total:N, pct1:p1, pct5:p5, misses}, null, 2));
+  // The DOCUMENTED contract is recall@5 = 100% (a caller pages the top-k and picks the fitting fix).
+  // recall@1 is informational. Gate on recall@5.
+  const pass = p5 >= 100;
+  console.log(`\n[${pass?'PASS':'FAIL'}] P3 fix-recall@5 = ${p5}% (contract: 100%) | recall@1 = ${p1}% (informational)`);
+  process.exit(pass?0:1);
 })().catch(e => { console.error('P3 ERR:', e.message); process.exit(2); });

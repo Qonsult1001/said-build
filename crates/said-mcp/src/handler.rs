@@ -1456,23 +1456,31 @@ impl SaidServerHandler {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
         let min = t.min_score.unwrap_or(0.45);
-        match sca_core::ask::recall_coding_fix(&mut brain, &t.problem, min) {
-            Some(hit) => {
-                let label = brain.frames.get_meta(&hit.doc_id)
-                    .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned())
-                    .unwrap_or_else(|| "-".into());
-                let body = format!(
-                    "Fix ({:.2}) {}  provenance={}\n\n{}\n\n## Verified change-set\n{}",
-                    hit.score, hit.doc_id, label, hit.note, hit.edits_json,
-                );
-                Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
-            }
-            None => Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+        // TOP-K (recall@k contract, doc: "measured recall@5 = 100% at 1000 records"). Returning ONLY
+        // rank-1 meant that when a semantically-adjacent fix out-scored the right one, the caller could
+        // not page down -> the right learning was unreachable via MCP. We return the top-k candidates so
+        // the agent picks the one whose TASK/change-set fits — the same "several returned, you choose"
+        // contract recall_blueprint already uses. Default k=5.
+        let k = t.top_k.unwrap_or(5).max(1) as usize;
+        let hits = sca_core::ask::recall_coding_fixes(&mut brain, &t.problem, k, min);
+        if hits.is_empty() {
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
                 "No known fix above score {:.2} for \"{}\" — drive your own LLM, then store \
                  the verified result with learn_fix.",
                 min, t.problem,
-            ))])),
+            ))]));
         }
+        let mut body = format!("{} candidate fix(es) for \"{}\" (highest first — pick the one whose TASK fits):\n", hits.len(), t.problem);
+        for (i, hit) in hits.iter().enumerate() {
+            let label = brain.frames.get_meta(&hit.doc_id)
+                .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned())
+                .unwrap_or_else(|| "-".into());
+            body.push_str(&format!(
+                "\n#{} Fix ({:.2}) {}  provenance={}\n{}\n## Verified change-set\n{}\n",
+                i + 1, hit.score, hit.doc_id, label, hit.note, hit.edits_json,
+            ));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
     }
 
     fn handle_learn_fix(&self, t: LearnFixTool) -> Result<CallToolResult, CallToolError> {

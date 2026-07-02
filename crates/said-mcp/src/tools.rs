@@ -1115,6 +1115,11 @@ pub struct RecallFixTool {
     /// Minimum match confidence to return a fix (default 0.45). Below it: no match.
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// How many candidate fixes to return, highest-score first (default 5). Several are returned so
+    /// YOU pick the one whose TASK/change-set fits — when a similar problem out-scores the exact one,
+    /// the right fix is often rank 2-3 (the documented recall@5 = 100% contract).
+    #[serde(default)]
+    pub top_k: Option<u32>,
 }
 
 #[mcp_tool(
