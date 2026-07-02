@@ -1521,11 +1521,20 @@ impl FrameStore {
     }
 
     pub fn read_frame(&mut self, doc_id: &str, file_data: &[u8]) -> Option<Vec<u8>> {
-        // Check pending frames first (not yet flushed to file)
-        // Clone data out to avoid borrow conflict with &mut self for block cache
-        let pending_match = self.pending.iter().find(|p| {
-            p.meta.doc_id == doc_id && p.meta.status == FrameStatus::Active
-        }).map(|p| (p.meta.clone(), p.compressed_data.clone()));
+        // Check pending frames first (not yet flushed to file).
+        // O(1) lookup via doc_id_map, NOT a linear `pending.iter().find()`. The linear scan was an
+        // O(N²) trap during build_index: reading all N pending frames' text (one read_frame each) ×
+        // scanning up to N pending per read = ~N² comparisons. Measured on Wonga: each dir alone
+        // ingested in ~13 s (≤12k frames) but the full 37k took 458 s — 10× the sum of the parts,
+        // the O(N²) signature. doc_id_map stores `frames.len() + pending_idx` (see push at the
+        // supersede/insert site), so a pending frame is at `map[doc_id] - frames.len()`. Same lookup
+        // supersede() already uses. Falls through to the committed-frame path if not pending.
+        let frame_count = self.frames.len();
+        let pending_match = self.doc_id_map.get(doc_id)
+            .and_then(|&global_idx| global_idx.checked_sub(frame_count))
+            .and_then(|pending_idx| self.pending.get(pending_idx))
+            .filter(|p| p.meta.doc_id == doc_id && p.meta.status == FrameStatus::Active)
+            .map(|p| (p.meta.clone(), p.compressed_data.clone()));
 
         if let Some((meta, on_disk)) = pending_match {
             if meta.encoding == FrameEncoding::ZstdDictBlock {
