@@ -47,6 +47,46 @@
 </table>
 <p class="note"><span class="pass">PASS</span> — all 4 projects ingested and project-tagged in one shared portable brain.</p>
 
+<h2>Complete MCP tool coverage — every feature, via the live server</h2>
+<p class="note">All 29 non-forge MCP tools exercised end-to-end through the <code>said-mcp</code> JSON-RPC server on a 2-project brain (~9k frames). <b>29/29 pass</b>, total wall 90.5 s. Latency + response-token cost measured per call.</p>
+<div class="grid">
+  <div class="card"><div class="n">29 / 29</div><div class="l">MCP tools pass</div></div>
+  <div class="card"><div class="n">7</div><div class="l">real bugs found &amp; fixed</div></div>
+  <div class="card"><div class="n">~4 ms</div><div class="l">median warm-recall call</div></div>
+</div>
+<table>
+<tr><th>Category</th><th>Tool</th><th>Latency</th><th>Resp tokens</th><th></th></tr>
+<tr><td rowspan="2">Lifecycle / ingest</td><td><code>init</code> (per project)</td><td>16.4 s</td><td>171</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>status</code></td><td>1 ms</td><td>188</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Memory</td><td><code>remember</code> (Episodic)</td><td>4.3 s</td><td>41</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>remember</code> (Semantic pillar)</td><td>4.2 s</td><td>41</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>remember</code> (Procedural pillar)</td><td>4.4 s</td><td>42</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>get</code> (by doc_id)</td><td>0 ms</td><td>12</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Recall</td><td><code>ask</code> (semantic)</td><td>19.6 s*</td><td>615</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>ask</code> (pillar-scoped)</td><td>3.7 s</td><td>631</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>search</code></td><td>156 ms</td><td>1455</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>sym</code> (symbol-exact)</td><td>0 ms</td><td>798</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Forgetting / escalate</td><td><code>salience</code> (low band)</td><td>0 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>salience</code> (high → escalate)</td><td>0 ms</td><td>33</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Blueprints</td><td><code>harvest_blueprints</code></td><td>5.2 s</td><td>6053</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>recall_blueprint</code></td><td>48 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>learn_blueprint</code> (keep-first)</td><td>949 ms</td><td>35</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>learn_blueprint</code> (verified upgrade)</td><td>4.3 s</td><td>37</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Coding fixes</td><td><code>learn_fix</code></td><td>4.8 s</td><td>34</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>recall_fix</code> (top-k, float rerank)</td><td>360 ms</td><td>91</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Graph / navigation</td><td><code>list_concepts</code></td><td>6 ms</td><td>1509</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>overview</code></td><td>265 ms</td><td>282</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="3">Session memory</td><td><code>journal</code></td><td>1.4 s</td><td>68</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>session_end</code></td><td>1.4 s</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>history</code> (lineage)</td><td>5 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Consolidation</td><td><code>dream</code> (clustering)</td><td>4.3 s</td><td>38</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Persistence</td><td><code>snapshot</code></td><td>665 ms</td><td>285</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="3">Project scope / delete</td><td><code>delete</code> (dry-run, by project)</td><td>2 ms</td><td>263</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>delete</code> (real, by project tag)</td><td>1.3 s</td><td>19</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>delete verify (counts before/after)</td><td>—</td><td>—</td><td><span class="pill ok">PASS</span></td></tr>
+</table>
+<p class="note">* <code>ask</code>/<code>init</code>/<code>harvest</code> include one-time work (encoder load, AST chunk, cluster mining); steady-state recall (<code>sym</code>/<code>search</code>/<code>recall_blueprint</code>/<code>recall_fix</code>/<code>list_concepts</code>) is single-digit-ms to sub-second. Pillars covered: Episodic · Semantic · Procedural (+ Code/External/Document/Memory on the ingest path). Forge tools (SDLC sync) are a separate surface, out of scope here.</p>
+
 <h2>Phase 2 — Scope · Delete-by-project · Blueprints (all via MCP)</h2>
 <table>
 <tr><th>Proof</th><th>Result</th><th>Status</th></tr>
@@ -103,9 +143,11 @@
 <tr><td>2</td><td>MCP <code>delete</code> tool rejected <code>tag_filter</code> alone (required a time criterion)</td><td>couldn't remove a project via MCP</td><td>added tag-only delete mode; verified via MCP: 139/139 of a project removed, other intact</td></tr>
 <tr><td>3</td><td>UX sharp edge: a shared <code>label</code> collapses all fixes to one id (label = stable task-id)</td><td>learning many fixes under one label silently overwrites</td><td>documented; harness omits label → distinct ids</td></tr>
 <tr><td>4</td><td>MCP <code>recall_fix</code> returned only rank-1, not the top-K</td><td>when a similar fix out-scored the exact one, the agent couldn't page down</td><td>return top-5 (+ <code>top_k</code> arg)</td></tr>
-<tr><td>5</td><td>coding-fix recall was scored on the 1-bit fingerprint and BYPASSED the documented float-cosine rerank <code>ask</code> uses</td><td>synonym-swapped paraphrases (float↔floating-point) couldn't be bridged → recall capped ~80%</td><td>apply the whitened float rerank to fix candidates (re-encode query+task text) → 15/15 (100%) recall@1 on varied gaps, 0 false-pos, twins preserved</td></tr>
+<tr><td>5</td><td>coding-fix recall was scored on the 1-bit fingerprint and BYPASSED the documented float-cosine rerank <code>ask</code> uses</td><td>synonym-swapped paraphrases (float↔floating-point) couldn't be bridged → recall capped ~80%</td><td>apply the whitened float rerank to fix candidates → 15/15 (100%) recall@1 on varied gaps, 0 false-pos, twins preserved</td></tr>
+<tr><td>6</td><td>a 2nd <code>init &lt;other-dir&gt;</code> WIPED the 1st project's symbol index (rebuilt from this-run's pending symbols alone; dedup-skipped files never re-recorded)</td><td>multi-project brains lost code intelligence on all but the last project (<code>sym Account</code> 10→0)</td><td>merge persisted + pending symbols on rebuild → both projects' symbols coexist (10→10)</td></tr>
+<tr><td>7</td><td><code>recall_fix</code> re-encoded every candidate over an over-wide ask pool (I introduced this with fix #5)</td><td>&gt;60 s on a harvested multi-project brain</td><td>bound ask fetch + rerank to top-64 → 360 ms, correctness preserved (still 15/15)</td></tr>
 </table>
-<p class="note"><b>The pattern behind all 5:</b> each looked like "a limit to accept" but was a real bug where a documented mechanism wasn't wired into the specific path. Pushing past "that's just the ceiling" found the actual fix every time.</p>
+<p class="note"><b>The pattern behind all 7:</b> most looked like "a limit to accept" but were real bugs where a documented mechanism wasn't wired into the specific path — or (bugs 6–7) things the narrow 9-tool suite never touched. Expanding to <b>every</b> MCP tool + multi-project state is what surfaced them. Pushing past "that's just the ceiling" found the actual fix every time.</p>
 
 <div class="foot">
 Generated by <code>hard-eval/mcp-harness/</code> — driven end-to-end through the live <code>said-mcp</code> JSON-RPC server.
