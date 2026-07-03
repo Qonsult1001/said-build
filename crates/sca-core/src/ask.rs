@@ -1067,6 +1067,19 @@ pub fn fix_edits(body: &str) -> String {
     after.split(FIX_ACTION_SEP).next().unwrap_or(after).trim().to_string()
 }
 
+/// The `TASK:` line of a stored fix note (the original problem text), for the lexical fallback.
+/// Falls back to the whole note if no explicit TASK line.
+fn fix_task_text(body: &str) -> String {
+    let note = fix_note(body);
+    for line in note.lines() {
+        if let Some(rest) = line.trim().strip_prefix("TASK:") {
+            return rest.trim().to_string();
+        }
+    }
+    note
+}
+
+
 /// LEARN — store a verified coding iteration into the shared learning store.
 /// `note` is the human-readable story (sections like FILES/STEPS/ERRORS/LEARNINGS,
 /// or a full 10-section iteration note); `edits_json` is the verified change-set.
@@ -1186,7 +1199,11 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     // arXiv 2104.08821; cross-query non-comparability / QB-Norm), so we gate on whether it STANDS OUT
     // from the pool, not on a fixed floor. Documented enhancement (docs/11-known-limitations §dynamic
     // cutoff: "if top is 0.5 and rank 2 is 0.49, widen").
-    let pool = best_coding_fixes(brain, problem, fetch_k.max(8));
+    // Paging (k>1) over-fetches a MUCH wider pool: at scale (33k frames) the exact fix can sit at rank
+    // 6-12 behind semantically-adjacent fixes, so a pool of only ~8 misses it. Fetch k*8 (min 40) so the
+    // top-k the caller pages actually contains the right fix. k==1 keeps the tight pool for the gate.
+    let pool_want = if k > 1 { fetch_k.saturating_mul(8).max(40) } else { fetch_k.max(8) };
+    let pool = best_coding_fixes(brain, problem, pool_want);
 
     // PER-QUERY DISTRIBUTIONAL GATE. Keep a candidate if EITHER:
     //   (a) it clears the absolute floor (a confident hit — the fast, unchanged path), OR
@@ -1197,7 +1214,19 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     //       near-identical fixes are both present (the LRU/LFU twin case), the top does NOT stand out, so
     //       the absolute floor remains the gate and the twin-discrimination contract is preserved.
     // No hard-coded magic threshold: the gate is RELATIVE to each query's own candidate spread.
-    let gate_keep: std::collections::HashSet<String> = {
+    //
+    // PAGING MODE (k > 1): the caller wants to SEE several candidates and pick the fitting one (the
+    // recall@5 = 100% contract). The precision "standout" gate below is built for k=1 ("give me THE
+    // confident fix, or nothing") and it wrongly cuts the exact fix when it sits at rank 2-3 among
+    // near-ties — exactly the case paging exists to rescue. So when k > 1 we KEEP the raw top-k by
+    // score (still honoring min_score + the lang guarantee), and only apply the standout gate at k==1.
+    let paging = k > 1;
+    let gate_keep: std::collections::HashSet<String> = if paging {
+        // raw top-k by score; keep anything at or above a light floor (min_score*0.5) so the exact fix
+        // at a moderate score is never gated out, but pure noise still doesn't fill the list.
+        let floor = (min_score * 0.5).max(0.0);
+        pool.iter().filter(|(_, s)| *s >= floor).map(|(d, _)| d.clone()).collect()
+    } else {
         let mut keep: std::collections::HashSet<String> = pool.iter()
             .filter(|(_, s)| *s >= min_score).map(|(d, _)| d.clone()).collect();
         if let Some((top_id, top_s)) = pool.first().cloned() {
@@ -1567,15 +1596,78 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
     // fix candidates ourselves below (rel_conf + semantic + intent fingerprints), so we want the FULL
     // semantic-led pool here, not the abstention-trimmed top-K.
     let (fusion_cands, _kw) = ask(brain, problem, fetch, true, None);
-    let ranked: Vec<(String, f32)> = fusion_cands.iter()
+    let mut ranked: Vec<(String, f32)> = fusion_cands.iter()
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
         .map(|c| (c.doc_id.clone(), c.confidence))
         .collect();
+
+    // LEXICAL + OKF FALLBACK (scoped to the FIX STORE only — never touches global recall). At scale the
+    // dense `ask` window is dominated by code frames, so a loosely-worded fix query can miss its fix
+    // frame entirely even when they share tokens ("leap-day date parsing" vs "date parse ... 29th of
+    // February"). We ALSO scan every fix:: frame's TASK text for token overlap with the query and UNION
+    // those in as candidates (with a modest confidence). The LLM then decides among @1/@5/@10 — the
+    // documented contract (recall returns candidates; the model picks). This makes a fix REACHABLE via
+    // lexical/wiki even when the fingerprint doesn't rank it, without changing global `ask` behavior.
+    //
+    // REACHABILITY (paging, k > 1): the 1-bit fingerprint that `ask` uses to build its candidate window
+    // discards per-dim magnitude, so a synonym-swapped paraphrase ("floating point" vs stored "float",
+    // "wraps around" vs "overflow") can miss its fix frame ENTIRELY — it never enters the pool, so no
+    // rerank can rescue it. In paging mode we therefore UNION IN every fix:: frame as a candidate (they
+    // are few — this is the fix store, not the whole corpus), and let the FLOAT-COSINE rerank below rank
+    // them by true latent similarity. k==1 (the abstention/confident-answer contract) keeps ONLY the
+    // dense-neighborhood candidates, so an unrelated query still returns "No known fix".
+    if k > 1 {
+        let already: std::collections::HashSet<String> = ranked.iter().map(|(d, _)| d.clone()).collect();
+        let fix_ids: Vec<String> = brain.frames.get_all_frames().iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active
+                && m.doc_id.starts_with("fix::")
+                && !already.contains(&m.doc_id))
+            .map(|m| m.doc_id.clone())
+            .collect();
+        // seed with a low base conf; the float rerank decides their real rank.
+        for did in fix_ids { ranked.push((did, 0.05)); }
+    }
+
     if ranked.is_empty() {
         return Vec::new();
     }
     let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
+
+    // FLOAT-COSINE RERANK (the documented recall@1 0.195→0.855 mechanism, roadmap 2026-06-22 / 14.1 /
+    // 14.8) — applied to fix candidates, which previously scored ONLY on the 1-bit fingerprint and so
+    // could not bridge synonym swaps. Re-encode the query + each candidate's TASK text and score by
+    // WHITENED float cosine (anisotropy/all-but-the-top correction, same as the `ask` rerank). This is
+    // the full-magnitude 64-dim signal the 1-bit throws away. Cheap: a handful of re-encodes (~µs each).
+    let float_cos: HashMap<String, f32> = {
+        let mut m = HashMap::new();
+        if let Some(q_emb) = brain.engine.encode_query(problem) {
+            let mu = brain.engine.core.get_corpus_mean().to_vec();
+            let sd = brain.engine.core.get_corpus_std().to_vec();
+            let whiten = |v: &[f32]| -> Vec<f32> {
+                if mu.len() == v.len() {
+                    v.iter().enumerate().map(|(d, x)| (x - mu[d]) / sd.get(d).copied().unwrap_or(1.0).max(1e-6)).collect()
+                } else { v.to_vec() }
+            };
+            let cos = |a: &[f32], b: &[f32]| -> f32 {
+                let (mut d, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+                for i in 0..a.len().min(b.len()) { d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+                d / (na.sqrt().max(1e-12) * nb.sqrt().max(1e-12))
+            };
+            let q_c = whiten(&q_emb);
+            // gather candidate TASK texts first (immutable), then encode (no borrow conflict).
+            let tasks: Vec<(String, String)> = ranked.iter()
+                .map(|(d, _)| (d.clone(), fix_task_text(&brain.get(d).unwrap_or_default())))
+                .collect();
+            for (did, task) in tasks {
+                if task.is_empty() { continue; }
+                if let Some(c_emb) = brain.engine.encode_query(&task) {
+                    m.insert(did, cos(&q_c, &whiten(&c_emb)));
+                }
+            }
+        }
+        m
+    };
 
     // SEMANTIC discriminator: pure-semantic 1-bit fingerprint of the FULL problem
     // against every frame — separates near-twins (LRU vs LFU) where words tie.
@@ -1610,15 +1702,22 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
         // neighborhood gets a weak one, so twin discrimination is preserved (the LRU/LFU case still
         // splits on the within-neighborhood fingerprint+intent terms).
         let ask_spine = conf / top_conf;
-        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) };
-        // ask confidence = right neighborhood (spine); the semantic fingerprint of the
-        // PROBLEM (meaning) + the action fingerprint (isolated INTENT) pick the right
-        // one within it. Weighted comparably so an adversarial twin (an LFU fix that
-        // mentions "least-recently-used") is out-voted by intent.
-        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
+        // fcos = whitened FLOAT cosine (the full-magnitude semantic signal). It's the documented bridge
+        // for synonym swaps the 1-bit fingerprint can't see, so it's the PRIMARY neighborhood measure
+        // when present; fall back to the fingerprint/ask spine when the encoder is unavailable.
+        let fcos = float_cos.get(doc_id).copied();
+        let rel_conf = match fcos {
+            Some(fc) => fc.max(0.0),
+            None => if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) },
+        };
+        // Neighborhood (float cosine, primary) × discriminators (semantic fingerprint of the PROBLEM +
+        // action fingerprint for INTENT). The float cosine ranks synonym-swapped matches correctly; the
+        // fingerprints still split adversarial same-neighborhood twins (LRU vs LFU) on intent.
+        let sem_signal = fcos.map(|f| f.max(semantic)).unwrap_or(semantic);
+        let score = rel_conf * (0.3 + 0.4 * sem_signal + 0.3 * intent);
         if dbg {
-            eprintln!("[fix-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
-                doc_id, conf, rel_conf, semantic, intent, score);
+            eprintln!("[fix-score] {} ask={:.3} fcos={:?} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
+                doc_id, conf, fcos, rel_conf, semantic, intent, score);
         }
         (doc_id.clone(), score)
     }).collect();
