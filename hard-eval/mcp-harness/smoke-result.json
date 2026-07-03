@@ -3,13 +3,13 @@
     "phase": "P1",
     "name": "ingest+status",
     "pass": true,
-    "detail": "8781 memories, 10.5MB, 24.6s"
+    "detail": "8781 memories, 10.5MB, 50.2s"
   },
   {
     "phase": "P2",
     "name": "ask ledger entry",
     "pass": true,
-    "detail": "120ms, resp≈611tok"
+    "detail": "133ms, resp≈611tok"
   },
   {
     "phase": "P2",
@@ -21,13 +21,13 @@
     "phase": "P2b",
     "name": "harvest_blueprints",
     "pass": true,
-    "detail": "355 blueprints learned, 4249ms"
+    "detail": "355 blueprints learned, 4253ms"
   },
   {
     "phase": "P2b",
     "name": "recall_blueprint",
     "pass": true,
-    "detail": "19ms"
+    "detail": "13ms"
   },
   {
     "phase": "P3",
