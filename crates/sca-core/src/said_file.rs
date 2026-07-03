@@ -2311,16 +2311,38 @@ impl SaidFile {
         }
         tidx.finalize();
 
-        // 2) Symbol index — consume pending_symbols, resolving doc_id -> pos
+        // 2) Symbol index — MERGE the persisted symbols (from a prior init/save) with this run's
+        // pending_symbols, then re-resolve every doc_id -> the CURRENT frame position.
+        //
+        // BUG FIXED (multi-project init wiped symbols): a second `init <other-dir>` dedup-skips the first
+        // project's unchanged files, so pending_symbols holds ONLY the new dir's symbols. Rebuilding the
+        // index from pending ALONE dropped the first project's symbols entirely (`sym Account` → 0 after
+        // ingesting a second, unrelated project). We now carry forward the existing symbol_index's
+        // entries (keyed by their doc_id via the PREVIOUS build's pos→doc_id map, still in
+        // self.trigram_doc_ids at this point) for every frame that is STILL active, and union pending on
+        // top. Positions are re-resolved against the fresh doc_id_to_pos, so a moved frame still points
+        // right. Frames that were deleted/tombstoned drop out naturally (their doc_id isn't active).
+        let mut merged: Vec<(String, String, crate::symbol_index::SymbolKind, u32, u32)> = Vec::new();
+        if let Some(prev) = self.symbol_index.take() {
+            for (name, entries) in prev.all_entries() {
+                for e in entries {
+                    if let Some(doc_id) = self.trigram_doc_ids.get(e.doc_index as usize) {
+                        merged.push((name.clone(), doc_id.clone(), e.kind, e.start_line, e.end_line));
+                    }
+                }
+            }
+        }
+        merged.extend(std::mem::take(&mut self.pending_symbols));
+
         let mut sidx = crate::symbol_index::SymbolIndex::new();
-        let pending = std::mem::take(&mut self.pending_symbols);
-        for (name, doc_id, kind, start_line, end_line) in pending {
+        // Dedup: a re-recorded symbol (same name+doc_id+start) shouldn't double-insert.
+        let mut seen: std::collections::HashSet<(String, String, u32)> = std::collections::HashSet::new();
+        for (name, doc_id, kind, start_line, end_line) in merged {
+            if !seen.insert((name.clone(), doc_id.clone(), start_line)) { continue; }
             if let Some(&pos) = doc_id_to_pos.get(doc_id.as_str()) {
                 sidx.add(&name, pos, kind, start_line, end_line);
             }
-            // Symbols whose doc_id isn't in the current active set are
-            // silently dropped (frame was deleted after the symbol was
-            // recorded, e.g. blake3 dedup kicked in).
+            // Symbols whose doc_id isn't in the current active set are silently dropped (frame deleted).
         }
 
         self.trigram_index = Some(tidx);
