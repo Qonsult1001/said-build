@@ -1,0 +1,122 @@
+{
+  "rows": [
+    {
+      "tool": "sym",
+      "query": "Account",
+      "ms": 1,
+      "resp_tokens": 798,
+      "claim": "#12 sym <1ms"
+    },
+    {
+      "tool": "sym",
+      "query": "LedgerEntry",
+      "ms": 0,
+      "resp_tokens": 775,
+      "claim": "#12 sym <1ms"
+    },
+    {
+      "tool": "sym",
+      "query": "encode_query",
+      "ms": 0,
+      "resp_tokens": 43,
+      "claim": "#12 sym <1ms"
+    },
+    {
+      "tool": "sym",
+      "query": "LoanAccount",
+      "ms": 5,
+      "resp_tokens": 41,
+      "claim": "#12 sym <1ms"
+    },
+    {
+      "tool": "sym",
+      "query": "handle_ask",
+      "ms": 0,
+      "resp_tokens": 21,
+      "claim": "#12 sym <1ms"
+    },
+    {
+      "tool": "ask",
+      "query": "loan amortization schedule",
+      "ms": 4484,
+      "resp_tokens": 674,
+      "claim": "#10 semantic recall"
+    },
+    {
+      "tool": "ask",
+      "query": "error handling retry",
+      "ms": 2945,
+      "resp_tokens": 652,
+      "claim": "#10 semantic recall"
+    },
+    {
+      "tool": "ask",
+      "query": "MCP tool dispatch",
+      "ms": 3320,
+      "resp_tokens": 591,
+      "claim": "#10 semantic recall"
+    },
+    {
+      "tool": "ask",
+      "query": "vulnerability advisory",
+      "ms": 3115,
+      "resp_tokens": 679,
+      "claim": "#10 semantic recall"
+    },
+    {
+      "tool": "ask",
+      "query": "how are repayments allocated",
+      "ms": 2591,
+      "resp_tokens": 39,
+      "claim": "#10 semantic recall"
+    },
+    {
+      "tool": "search",
+      "query": "settlement ledger",
+      "ms": 2683,
+      "resp_tokens": 1366,
+      "claim": "#11 lexical 0.03ms"
+    },
+    {
+      "tool": "search",
+      "query": "float rounding money",
+      "ms": 2611,
+      "resp_tokens": 947,
+      "claim": "#11 lexical 0.03ms"
+    },
+    {
+      "tool": "search",
+      "query": "concurrency deadlock",
+      "ms": 2691,
+      "resp_tokens": 1282,
+      "claim": "#11 lexical 0.03ms"
+    },
+    {
+      "tool": "recall_fix",
+      "query": "floating point currency drift",
+      "ms": 2128,
+      "resp_tokens": 86,
+      "claim": "#44 float rerank"
+    },
+    {
+      "tool": "list_concepts",
+      "query": "(all)",
+      "ms": 13,
+      "resp_tokens": 4364,
+      "claim": "#100 OKF graph"
+    }
+  ],
+  "summary": {
+    "brain_MB": 163.1,
+    "frames": 46656,
+    "bytes_per_frame": 3666,
+    "latency_median_ms": {
+      "sym": 0,
+      "ask": 3115,
+      "search": 2683,
+      "recall_fix": 2128,
+      "list_concepts": 13
+    },
+    "fingerprint_vs_float_ratio": 21
+  }
+}
