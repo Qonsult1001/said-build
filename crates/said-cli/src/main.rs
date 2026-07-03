@@ -2350,13 +2350,22 @@ fn should_enroll(path: &Path) -> bool {
         Some(e) => e.to_lowercase(),
         None => return false,
     };
+    // .json EXCLUDED by default (same class as .csv): JSON is registered as a code grammar
+    // (tree-sitter-json), so code_extension("json")==true and the non-code size cap below does NOT
+    // apply -> a data-dump JSON is ingested UNCAPPED. Measured wall: Advisory/Vulncheck/mitre-cve.json
+    // (1.4 GB CVE dump) drove `said init` to ~4.9 GB RAM. Real source is rarely a giant JSON; a big
+    // JSON is almost always a data export, not code. Skipped by default (proper size-aware fix parked,
+    // like CSV). Opt back in with SAID_INGEST_JSON=1 (then still subject to the size cap logic below).
+    if ext == "json" && std::env::var("SAID_INGEST_JSON").as_deref() != Ok("1") {
+        return false;
+    }
     let is_code = code_extension(&ext);
     let is_textish = text_extension(&ext) || doc_extension(&ext);
     if !is_code && !is_textish {
         return false;
     }
-    // Size cap applies ONLY to non-code text/data files.
-    if !is_code {
+    // Size cap applies to non-code text/data files AND to opted-in JSON (data-shaped, not source).
+    if !is_code || ext == "json" {
         let cap: u64 = std::env::var("SAID_TEXT_MAX_BYTES")
             .ok().and_then(|s| s.parse().ok())
             .unwrap_or(5 * 1024 * 1024);
@@ -12041,6 +12050,19 @@ mod junk_dir_tests {
         let txt = dir.join("dump.txt");
         std::fs::File::create(&txt).unwrap().write_all(&vec![b'a'; big]).unwrap();
         assert!(!should_enroll(&txt), "a 6MB TXT data dump must be skipped by the size cap");
+
+        // JSON is a code-grammar ext but a data-export type: a giant JSON (1.4GB CVE dump) blew RAM
+        // to ~5GB because code exts bypass the cap. Skipped by default (like CSV); even a small one.
+        std::env::remove_var("SAID_INGEST_JSON");
+        let small_json = dir.join("config.json");
+        std::fs::File::create(&small_json).unwrap().write_all(b"{\"a\":1}").unwrap();
+        assert!(!should_enroll(&small_json), "JSON must be skipped by default (data-export type)");
+        // opted in, a BIG json is still capped (can't reopen the 1.4GB hole).
+        std::env::set_var("SAID_INGEST_JSON", "1");
+        let big_json = dir.join("dump.json");
+        std::fs::File::create(&big_json).unwrap().write_all(&vec![b'{'; big]).unwrap();
+        assert!(!should_enroll(&big_json), "even opted-in, a 6MB JSON is capped");
+        std::env::remove_var("SAID_INGEST_JSON");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
