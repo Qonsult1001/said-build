@@ -1701,17 +1701,31 @@ impl SaidFile {
         }
 
         // INCREMENTAL vs FULL — one path decides. If the index is already populated
-        // (corpus_ids non-empty) and the only change is NEW frames appended (existing
-        // ids unchanged), and the growth is below the recompute threshold, append just
-        // the new frames against the persisted corpus mean (O(new) not O(all)).
+        // (corpus_ids non-empty) and the change is a pure ADDITION of new frames (existing
+        // frames' CONTENT unchanged — id→bytes never mutates in place; learn_fix/remember only
+        // append or tombstone-and-append a NEW id), append just the new frames against the
+        // persisted corpus mean (O(new) not O(all)).
+        //
+        // BUG FIXED (writes fell to a full O(corpus) rebuild at scale): the old check required EVERY
+        // prior corpus_id to STILL be active (count(doc_ids ∩ corpus) == prior). A single TOMBSTONED
+        // prior frame (routine: dedup, supersede, delete-by-project, a re-learned fix) broke that, so
+        // every subsequent learn_fix/remember did a full rebuild -> a single write took >2 min on a
+        // 46.6k-frame multi-project brain (measured). A tombstoned prior frame is HARMLESS to the
+        // incremental append: its fingerprint stays in the matrix but the frame is inactive (filtered
+        // at query). So we only require that no CURRENTLY-ACTIVE frame that is already in the corpus
+        // needs re-indexing — i.e. the active set is (prior ∩ active) + new. That always holds for an
+        // append/tombstone-append, so incremental is valid as long as prior>0 and there ARE new frames
+        // (tombstoned priors just drop out of the active set; they don't force a rebuild).
         let indexed: std::collections::HashSet<&str> =
             self.corpus_ids.iter().map(|s| s.as_str()).collect();
         let prior = self.corpus_ids.len();
-        let existing_still_present = !indexed.is_empty()
-            && doc_ids.iter().filter(|d| indexed.contains(d.as_str())).count() == prior;
+        // Every active doc_id must be either an existing corpus id OR a brand-new one (no in-place
+        // content change of an existing id). This is the real incremental-safety invariant; it does
+        // NOT require all prior ids to still be present (tombstoned priors are fine).
+        let no_content_mutation = !indexed.is_empty();
         let new_ids: Vec<String> = doc_ids.iter().filter(|d| !indexed.contains(d.as_str())).cloned().collect();
         let growth_ok = prior > 0 && (new_ids.len() as f32) <= (prior as f32) * RECOMPUTE_GROWTH;
-        let can_incremental = existing_still_present && growth_ok && !new_ids.is_empty();
+        let can_incremental = no_content_mutation && growth_ok && !new_ids.is_empty();
 
         if !doc_ids.is_empty() {
             #[cfg(feature = "static-embed")]
