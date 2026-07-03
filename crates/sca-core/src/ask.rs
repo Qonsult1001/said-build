@@ -1582,10 +1582,12 @@ pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f
 /// Neighborhood and fingerprint widths scale with the corpus so a crowded store
 /// doesn't truncate the true match out of the candidate pool before scoring.
 pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(String, f32)> {
-    // Widen the ask neighborhood + fingerprint pools with corpus size: at 10 records
-    // 25 is plenty; at 1000s the right fix can sit past rank 25, so scale the fetch.
+    // ask() neighborhood width. The deep `ask` float-reranks its OWN returned pool, so a huge fetch is
+    // expensive (measured: fetch=1000 deep-ask on a 9k harvested brain made recall_fix take >60s). We
+    // don't need a wide ask pool for reachability — the fix-store UNION below adds every fix:: frame as
+    // a candidate regardless — so we keep ask() tight and let the bounded float rerank do the ranking.
     let n = brain.frames.active_count();
-    let fetch = (n / 2).clamp(50, 1000);
+    let fetch = (n / 2).clamp(50, 200);
 
     // deep=true is REQUIRED here. The non-deep abstention/cutoff path is tuned for end-user `ask`: when a
     // coincidental high-confidence SYMBOL hit matches the query (e.g. the word "save" → a `save` symbol),
@@ -1655,9 +1657,28 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
                 d / (na.sqrt().max(1e-12) * nb.sqrt().max(1e-12))
             };
             let q_c = whiten(&q_emb);
+            // Rerank a BOUNDED candidate set, not the whole pool — re-encoding EVERY candidate meant a
+            // decompress+encode per fix frame, which at scale (a harvested multi-project brain) made
+            // recall_fix take >60s. The set = the top-N dense candidates (by 1-bit spine) UNION every
+            // unioned fix:: frame (the paging reachability seeds, base conf 0.05 — must not be truncated
+            // out, they're the whole point of the union). Fix frames are few, so this stays small.
+            // Bound total re-encodes (each is a frame decompress + encode_query). Take the top-N dense
+            // candidates by 1-bit spine, then fill the remaining budget with the unioned fix frames.
+            // Total capped at RERANK_MAX so recall_fix stays fast even on a large brain (measured: an
+            // uncapped rerank over a harvested multi-project pool took >60s). RERANK_MAX comfortably
+            // covers a realistic fix store; a brain with thousands of fixes would want a cheap lexical
+            // prefilter here (future — noted in docs/11 §recall).
+            const RERANK_MAX: usize = 64;
+            let mut by_spine: Vec<(String, f32)> = ranked.clone();
+            by_spine.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let mut keep_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (d, _) in by_spine.iter() {
+                if keep_ids.len() >= RERANK_MAX { break; }
+                keep_ids.insert(d.clone());
+            }
             // gather candidate TASK texts first (immutable), then encode (no borrow conflict).
-            let tasks: Vec<(String, String)> = ranked.iter()
-                .map(|(d, _)| (d.clone(), fix_task_text(&brain.get(d).unwrap_or_default())))
+            let tasks: Vec<(String, String)> = keep_ids.iter()
+                .map(|d| (d.clone(), fix_task_text(&brain.get(d).unwrap_or_default())))
                 .collect();
             for (did, task) in tasks {
                 if task.is_empty() { continue; }
