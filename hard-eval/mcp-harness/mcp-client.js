@@ -38,13 +38,30 @@ class McpClient {
 
   _onData(chunk) {
     this.buf += chunk.toString('utf8');
-    let nl;
-    while ((nl = this.buf.indexOf('\n')) >= 0) {
-      const line = this.buf.slice(0, nl).trim().replace(/^﻿/, '');
-      this.buf = this.buf.slice(nl + 1);
-      if (!line.startsWith('{')) continue;
+    // Frame by BALANCED BRACES, not by '\n'. The server's tool responses embed RAW newlines inside
+    // JSON string values (e.g. harvest's multi-line text), so line-splitting fragments a big response
+    // and JSON.parse fails on every fragment -> the whole reply is silently dropped and the id stays
+    // pending (manifests as a 60s timeout on the NEXT call). Scan for a complete top-level JSON object.
+    let start;
+    while ((start = this.buf.indexOf('{')) >= 0) {
+      let depth = 0, inStr = false, esc = false, end = -1;
+      for (let i = start; i < this.buf.length; i++) {
+        const ch = this.buf[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+        } else {
+          if (ch === '"') inStr = true;
+          else if (ch === '{') depth++;
+          else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+      }
+      if (end < 0) break; // incomplete object — wait for more data
+      const jsonStr = this.buf.slice(start, end + 1);
+      this.buf = this.buf.slice(end + 1);
       let msg;
-      try { msg = JSON.parse(line); } catch { continue; }
+      try { msg = JSON.parse(jsonStr); } catch { continue; }
       if (msg.id != null && this.pending.has(msg.id)) {
         const p = this.pending.get(msg.id);
         this.pending.delete(msg.id);

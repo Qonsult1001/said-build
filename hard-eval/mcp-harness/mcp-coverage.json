@@ -1,0 +1,272 @@
+{
+  "rows": [
+    {
+      "tool": "init",
+      "category": "ingest",
+      "ms": 16411,
+      "req_tokens": 11,
+      "resp_tokens": 171,
+      "pass": true,
+      "note": "âœ“ Ingest complete â€” brain populated.  Brain:      G:/dev"
+    },
+    {
+      "tool": "status",
+      "category": "lifecycle",
+      "ms": 1,
+      "req_tokens": 1,
+      "resp_tokens": 188,
+      "pass": true,
+      "note": "Brain is POPULATED and ready to query.  Next steps: â€¢ over"
+    },
+    {
+      "tool": "init(projB)",
+      "category": "scope",
+      "ms": 13015,
+      "req_tokens": 14,
+      "resp_tokens": 174,
+      "pass": true,
+      "note": "âœ“ Ingest complete â€” brain populated.  Brain:      G:/dev"
+    },
+    {
+      "tool": "remember(Episodic)",
+      "category": "memory",
+      "ms": 4258,
+      "req_tokens": 23,
+      "resp_tokens": 41,
+      "pass": true,
+      "note": "âœ“ Saved to brain (memory #9265, pillar=episodic). salience"
+    },
+    {
+      "tool": "remember(Semantic)",
+      "category": "pillar",
+      "ms": 4244,
+      "req_tokens": 23,
+      "resp_tokens": 41,
+      "pass": true,
+      "note": "âœ“ Saved to brain (memory #9266, pillar=semantic). salience"
+    },
+    {
+      "tool": "remember(Procedural)",
+      "category": "pillar",
+      "ms": 4378,
+      "req_tokens": 25,
+      "resp_tokens": 42,
+      "pass": true,
+      "note": "âœ“ Saved to brain (memory #9267, pillar=procedural). salien"
+    },
+    {
+      "tool": "get",
+      "category": "memory",
+      "ms": 0,
+      "req_tokens": 4,
+      "resp_tokens": 12,
+      "pass": true,
+      "note": "On 2026-07-03 the prod deploy failed at step 3"
+    },
+    {
+      "tool": "ask",
+      "category": "recall",
+      "ms": 19553,
+      "req_tokens": 10,
+      "resp_tokens": 615,
+      "pass": true,
+      "note": "Ask: \"ledger entry posting\"  (5 results, keywords: ledger, e"
+    },
+    {
+      "tool": "ask(pillar)",
+      "category": "pillar",
+      "ms": 3661,
+      "req_tokens": 16,
+      "resp_tokens": 631,
+      "pass": true,
+      "note": "Ask: \"key rotation procedure\"  (4 results, keywords: key, ro"
+    },
+    {
+      "tool": "search",
+      "category": "recall",
+      "ms": 156,
+      "req_tokens": 11,
+      "resp_tokens": 1455,
+      "pass": true,
+      "note": "1. [score=5.059] src/global/WebRequestOrchestration/WebReque"
+    },
+    {
+      "tool": "sym",
+      "category": "code",
+      "ms": 0,
+      "req_tokens": 5,
+      "resp_tokens": 798,
+      "pass": true,
+      "note": "1. method Account @ src/global/AccountManagement/AccountMana"
+    },
+    {
+      "tool": "salience(low)",
+      "category": "forgetting",
+      "ms": 0,
+      "req_tokens": 4,
+      "resp_tokens": 29,
+      "pass": true,
+      "note": "salience=0 band=low tags=[salience:low] Recommendation: do N"
+    },
+    {
+      "tool": "salience(high)",
+      "category": "escalate",
+      "ms": 0,
+      "req_tokens": 29,
+      "resp_tokens": 33,
+      "pass": true,
+      "note": "salience=53 band=medium tags=[salience:medium, explicit] Rec"
+    },
+    {
+      "tool": "harvest_blueprints",
+      "category": "blueprint",
+      "ms": 5153,
+      "req_tokens": 11,
+      "resp_tokens": 6053,
+      "pass": true,
+      "note": "Harvested 355 blueprint(s) from 2180 files (5044 functions s"
+    },
+    {
+      "tool": "recall_blueprint",
+      "category": "blueprint",
+      "ms": 48,
+      "req_tokens": 13,
+      "resp_tokens": 29,
+      "pass": true,
+      "note": "No known blueprint above score 0.00 for \"ensure entity\" — de"
+    },
+    {
+      "tool": "learn_blueprint",
+      "category": "blueprint",
+      "ms": 949,
+      "req_tokens": 28,
+      "resp_tokens": 35,
+      "pass": true,
+      "note": "Blueprint shape::b58444207f41dd1b kept-first (no-op; origina"
+    },
+    {
+      "tool": "learn_blueprint(upgrade)",
+      "category": "blueprint",
+      "ms": 4286,
+      "req_tokens": 35,
+      "resp_tokens": 37,
+      "pass": true,
+      "note": "Blueprint shape::b58444207f41dd1b auto-updated (verified bui"
+    },
+    {
+      "tool": "learn_fix",
+      "category": "fix",
+      "ms": 4752,
+      "req_tokens": 39,
+      "resp_tokens": 34,
+      "pass": true,
+      "note": "Learned fix fix::533c863e8945ec1d (provenance: -). Stored in"
+    },
+    {
+      "tool": "recall_fix",
+      "category": "fix",
+      "ms": 360,
+      "req_tokens": 24,
+      "resp_tokens": 91,
+      "pass": true,
+      "note": "1 candidate fix(es) for \"using floating point for currency c"
+    },
+    {
+      "tool": "list_concepts",
+      "category": "graph",
+      "ms": 6,
+      "req_tokens": 1,
+      "resp_tokens": 1509,
+      "pass": true,
+      "note": "[   {     \"concept\": \"project-proja\",     \"memories\": 8383  "
+    },
+    {
+      "tool": "overview",
+      "category": "navigation",
+      "ms": 265,
+      "req_tokens": 1,
+      "resp_tokens": 282,
+      "pass": true,
+      "note": "Monolith Overview ================= Brain:   coverage.said O"
+    },
+    {
+      "tool": "journal",
+      "category": "session",
+      "ms": 1424,
+      "req_tokens": 23,
+      "resp_tokens": 68,
+      "pass": true,
+      "note": "âœ“ Journal entry saved.  Doc ID:   mem/2026-07-03/coverage-"
+    },
+    {
+      "tool": "session_end",
+      "category": "session",
+      "ms": 1383,
+      "req_tokens": 19,
+      "resp_tokens": 29,
+      "pass": true,
+      "note": "âœ“ session_end logged (memory #9273). Brain has 9265 memori"
+    },
+    {
+      "tool": "history",
+      "category": "versioning",
+      "ms": 5,
+      "req_tokens": 4,
+      "resp_tokens": 29,
+      "pass": true,
+      "note": "History for 'ep1': 2 version(s)  v0: frame_id=8858 [tombston"
+    },
+    {
+      "tool": "dream",
+      "category": "consolidation",
+      "ms": 4256,
+      "req_tokens": 1,
+      "resp_tokens": 38,
+      "pass": true,
+      "note": "âœ“ dream cycle 1 complete (0 ms) candidates_examined   = 0 "
+    },
+    {
+      "tool": "snapshot",
+      "category": "persistence",
+      "ms": 665,
+      "req_tokens": 5,
+      "resp_tokens": 285,
+      "pass": true,
+      "note": "âœ“ Module 'projA' extracted.  â”€â”€â”€ From the snapshot t"
+    },
+    {
+      "tool": "delete(dry-run)",
+      "category": "delete",
+      "ms": 2,
+      "req_tokens": 12,
+      "resp_tokens": 263,
+      "pass": true,
+      "note": "[DRY RUN] Would delete 77 frames tagged `project:projB`:   C"
+    },
+    {
+      "tool": "delete(project)",
+      "category": "delete",
+      "ms": 1310,
+      "req_tokens": 12,
+      "resp_tokens": 19,
+      "pass": true,
+      "note": "Deleted 77 frames tagged `project:projB` (tombstoned — prese"
+    },
+    {
+      "tool": "delete verify",
+      "category": "delete",
+      "ms": 0,
+      "req_tokens": 0,
+      "resp_tokens": 0,
+      "pass": true,
+      "note": "9265->9188 (projB removed, projA intact)"
+    }
+  ],
+  "summary": {
+    "pass": 29,
+    "tot": 29,
+    "totMs": 90541,
+    "avgMs": 3773,
+    "totResp": 13031
+  }
+}
