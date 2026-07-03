@@ -15,9 +15,14 @@ function passk(n,c,k){ if(n<k) return (c>0?1:0); if(c==0) return 0; return 1 - c
 function sd(sum,sq,m,  v){ if(m<2)return 0; v=(sq-sum*sum/m)/(m-1); return v>0?sqrt(v):0 }
 NR==1{ next }
 {
-  arm=$1; task=$2; turns=$4; correct=$6; abst=$7; valid=$8; ag=$9
+  arm=$1; task=$2; turns=$4; cost=$5; correct=$6; abst=$7; valid=$8; ag=$9
   if(valid!="VALID"){ inv[arm"|"task]++; invtot++; next }   # EXCLUDE failed runs
   n[arm"|"task]++; ntot[arm]++
+  # Cost-of-Pass accumulators (docs/23 axis-2): amortize over ALL valid samples (failures included),
+  # then divide by R=pass@1 in END. Two denominators: dollars (total_cost_usd) and turns. Dollars go
+  # n/a if ANY valid sample lacks a real cost (never fabricate a $ figure — docs/23 anti-hallucination).
+  turnsum[arm"|"task]+=turns; vcnt[arm"|"task]++
+  if(cost=="NA" || cost==""){ costna[arm"|"task]=1 } else { costsum[arm"|"task]+=cost }
   # across-sample correctness distribution per arm (docs/23: report mean +/- spread, not single runs;
   # there is NO RNG seed loop — .said is deterministic, the external LLM variance shows up across samples)
   cc1=(correct=="1")?1:0; csum[arm]+=cc1; csq[arm]+=cc1*cc1; cm[arm]++
@@ -50,6 +55,28 @@ END{
       bt=(tcnt[bk]>0?tsum[bk]/tcnt[bk]:0); mt=(tcnt[mk]>0?tsum[mk]/tcnt[mk]:0)
       d=(bt>0?100*(mt-bt)/bt:0)
       printf "  %-10s baseline=%.1ft  memory=%.1ft  delta=%+.0f%%\n",t,bt,mt,d
+    }
+  }
+  printf "\n=== co-solved Cost-of-Pass = (mean cost over all valid samples)/R  [2504.13359] ===\n"
+  printf "    (R = pass@1; amortized over failures; $ = n/a if any valid sample lacked a cost)\n"
+  for(t in tasks){
+    bk="baseline|"t; mk="memory|"t
+    if((c[bk]+0)>0 && (c[mk]+0)>0){
+      # R per arm on this task = pass@1 = c/n
+      bR=(n[bk]>0?c[bk]/n[bk]:0); mR=(n[mk]>0?c[mk]/n[mk]:0)
+      # turns Cost-of-Pass: mean turns over all valid samples / R (always available)
+      btC=(bR>0 && vcnt[bk]>0 ? (turnsum[bk]/vcnt[bk])/bR : 0)
+      mtC=(mR>0 && vcnt[mk]>0 ? (turnsum[mk]/vcnt[mk])/mR : 0)
+      dt=(btC>0?100*(mtC-btC)/btC:0)
+      # dollar Cost-of-Pass: n/a if either arm had any NA-cost valid sample
+      if(costna[bk] || costna[mk]){
+        printf "  %-10s CoP$: baseline=n/a  memory=n/a   CoP-turns: baseline=%.1f  memory=%.1f  delta=%+.0f%%\n",t,btC,mtC,dt
+      } else {
+        bC=(bR>0 && vcnt[bk]>0 ? (costsum[bk]/vcnt[bk])/bR : 0)
+        mC=(mR>0 && vcnt[mk]>0 ? (costsum[mk]/vcnt[mk])/mR : 0)
+        dc=(bC>0?100*(mC-bC)/bC:0)
+        printf "  %-10s CoP$: baseline=$%.4f  memory=$%.4f  delta=%+.0f%%   CoP-turns: baseline=%.1f  memory=%.1f  delta=%+.0f%%\n",t,bC,mC,dc,btC,mtC,dt
+      }
     }
   }
   printf "\n=== abstention (generic over abstain_gold rows: clean give-up = CORRECT) ===\n"

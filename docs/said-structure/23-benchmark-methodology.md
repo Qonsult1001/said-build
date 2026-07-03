@@ -24,10 +24,15 @@ the hard stratum — a gap that persists at high k = memory solves what baseline
 (arXiv:2406.12045) for reliability (all k succeed), not just luck.
 
 ### 2. Convergence cost on CO-SOLVED tasks — turns-to-first-success / Cost-of-Pass  [arXiv:2504.13359]
-On the subset **both arms eventually solve**, compare **turns-to-first-success** and
-**Cost-of-Pass = C/R** (expected attempts to first success = 1/R). This is the "baseline eventually
-solves it too — count the turns" comparison. Reflexion (arXiv:2303.11366) is the precedent: success as a
-**learning curve over trials**, not a single shot.
+On the subset **both arms eventually solve**, compare **turns-to-first-success** and **Cost-of-Pass**.
+`bench_aggregate.sh` reports Cost-of-Pass as **(mean cost over ALL valid samples) / R** (R = pass@1),
+amortizing failed attempts — so a low success rate makes each eventual pass expensive (the paper's point,
+and what distinguishes it from raw turns). It is reported in **two denominators**: **dollars**
+(`total_cost_usd`) and **turns**; the dollar figure prints **n/a** if any counted sample lacked a real
+cost (we never fabricate a $ number). This is the "baseline eventually solves it too — count the *cost* to
+converge, not just did-it" comparison, and it captures that the memory arm front-loads recall tokens but
+converges in cheaper attempts (a stronger claim than equal-turns). Reflexion (arXiv:2303.11366) is the
+precedent: success as a **learning curve over trials**, not a single shot.
 
 ### 3. Abstention correctness — give up vs grind  [arXiv:2207.05221, 2006.09462]
 An agent should **abstain when P(success)×value < cost of continuing.** Early abstention is
@@ -120,8 +125,8 @@ verify-bodies gate (#8 guard) before running, an explicit abstention probe (a qu
 file/fix — correct iff the agent gives up cleanly), and a PER-TASK prompt suffix (give-up hint ONLY on the
 abstention probe; neutral elsewhere). A failed/timed-out run is retried then marked INVALID and EXCLUDED
 (never scored correct=0). Outputs per-sample turns/cost/correct/abstained/valid →
-`bench_aggregate.sh` computes pass@k (INVALID excluded) + co-solved turns + abstention, partitioned into
-the three buckets.
+`bench_aggregate.sh` computes pass@k (INVALID excluded) + co-solved turns + **co-solved Cost-of-Pass
+(dollars & turns, amortized/R)** + abstention, partitioned into the three buckets.
 
 ## Lessons that produced this protocol (from docs/20 v1–v7, the A1–A5 runs)
 
