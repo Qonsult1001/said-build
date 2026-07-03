@@ -33,7 +33,7 @@
   <div class="card"><div class="n">46,656</div><div class="l">frames · 12 projects · one file</div></div>
   <div class="card"><div class="n">132 MB</div><div class="l">portable brain on disk</div></div>
   <div class="card"><div class="n">≤1,016 MB</div><div class="l">peak RAM (steady, all 12)</div></div>
-  <div class="card"><div class="n">11</div><div class="l">real findings (8 fixed)</div></div>
+  <div class="card"><div class="n">11</div><div class="l">real findings (9 fixed)</div></div>
 </div>
 
 <h2>How far can we go? — incremental ingest until the wall</h2>
@@ -89,9 +89,9 @@
 <tr><td>8</td><td>Giant JSON data dumps ingested uncapped (1.4 GB CVE dump → 4.9 GB RAM); json is a code-grammar so it bypassed the size cap</td><td><span class="pill g">FIXED — skip .json (like CSV), Advisory 4923→114 MB</span></td></tr>
 <tr><td>9</td><td><b>Abstention weak</b>: returns unrelated memories at score &gt;1.0 for never-stored queries instead of declining</td><td><span class="pill r">OPEN — parked for grill</span></td></tr>
 <tr><td>10</td><td><code>recall_fix</code> ~7.5 s at 46.6k (float-rerank union + deep ask scale with brain size)</td><td><span class="pill a">OPEN — tuning</span></td></tr>
-<tr><td>11</td><td><b>WRITES don't scale</b>: a single <code>learn-fix</code>/<code>remember</code> takes &gt;2 min at 46.6k — every write does a full O(corpus) index rebuild. (doc-19 "flat 160–190 ms/store" was measured at 42→202 frames.)</td><td><span class="pill r">OPEN — the headline architectural item</span></td></tr>
+<tr><td>11</td><td><b>Writes fell to a full rebuild at scale</b>: a single <code>learn-fix</code>/<code>remember</code> took &gt;2 min at 46.6k. The incremental append path (O(new)) EXISTS but a too-strict precondition (all prior frames still active) meant a single tombstoned frame (dedup/supersede/delete — the mega-brain had 40) forced a full O(corpus) rebuild per write.</td><td><span class="pill g">FIXED — tolerate tombstoned priors → &gt;2 min → 21.5 s @36.5k / 4 s @8.7k</span></td></tr>
 </table>
-<p class="note"><b>Finding #11 is the most valuable result of the whole run.</b> Reads scale fine (sym sub-ms, ask sub-second warm) and ingest is bounded (12 projects proven) — but <b>writes</b> (learn-fix/remember) rebuild the whole index each time, so at 46.6k frames a single write is &gt;2 min. That's the line between "a live memory you write to constantly" and "a build-once, read-many index." Fix: incremental/deferred index update on write. Only massive-scale testing surfaces this.</p>
+<p class="note"><b>Finding #11 was the most valuable result of the whole run — and it's now fixed.</b> The incremental write path was always there and correct; it was being <i>bypassed</i> because the "is this a pure append?" check demanded every prior frame still be active, which a single tombstone (routine) broke. Relaxing it to tolerate tombstoned priors (harmless — inactive, filtered at query) restores the O(new) path: a write at 36.5k frames dropped from &gt;2 min to <b>21.5 s</b> (8.7k: 4 s). Only massive multi-project scale — where tombstones accumulate — surfaced this.</p>
 
 <h2>vs the published memory literature (arXiv / Mem0)</h2>
 <table>
