@@ -36,8 +36,8 @@
   <div class="card"><div class="n">11</div><div class="l">real findings (9 fixed)</div></div>
 </div>
 
-<h2>How far can we go? — incremental ingest until the wall</h2>
-<p class="note">Projects added one-by-one into one brain, measured after each. Peak RAM stayed bounded across 12 unrelated codebases — the flat-streaming contract at true multi-project scale.</p>
+<h2>How far can we go? — incremental ingest, and what the "wall" really was</h2>
+<p class="note">Projects added one-by-one into one brain, measured after each. Peak RAM stayed bounded across 12 unrelated codebases — the flat-streaming contract at true multi-project scale. The apparent "wall" (bottom row) turned out to be a <b>data-dump artifact, not a scale ceiling</b> — see the note below the table.</p>
 <table>
 <tr><th>Project (cumulative)</th><th>Frames</th><th>Brain MB</th><th>Ingest</th><th>Peak MB</th><th>Recall</th></tr>
 <tr><td>Vivere → MCP (5 small/mid)</td><td>10,541</td><td>15</td><td>—</td><td>195</td><td class="ok-txt">✓</td></tr>
@@ -45,9 +45,9 @@
 <tr><td>+ Wonga (12k files)</td><td>43,040</td><td>122</td><td>423 s</td><td>684</td><td class="ok-txt">✓</td></tr>
 <tr><td>+ AlphaGo (13k files)</td><td>45,331</td><td>137</td><td>212 s</td><td>955</td><td class="ok-txt">✓</td></tr>
 <tr><td>+ NeoroCore (16k files)</td><td>46,656</td><td>138</td><td>247 s</td><td>1,016</td><td class="ok-txt">✓</td></tr>
-<tr><td class="bad-txt">+ SAID-ECHO (37k files) — THE WALL</td><td class="bad-txt">timeout</td><td>—</td><td class="bad-txt">&gt;20 min</td><td class="bad-txt">2,696</td><td>—</td></tr>
+<tr><td>+ SAID-ECHO (41k src files) — <b>THE "WALL" WAS JSON</b></td><td>88,286</td><td>133</td><td>3,061 s*</td><td class="ok-txt">1,556</td><td class="ok-txt">✓</td></tr>
 </table>
-<p class="note">* a mid-run <code>stats</code> read during a compact reported a transient low count; frames recovered and grew (not data loss). <b>The wall:</b> SAID-ECHO's 37k files (heavy/nested content) exceeded the 2.5 GB + 20-min bounds in one shot. <b>Empirical answer: 12 diverse projects / 46,656 frames / 132 MB / ~1 GB RAM is solid; a single 37k-file heavy project is the ceiling for one-shot ingest.</b></p>
+<p class="note"><b>The "wall" was never scale — it was 3.5 GB of JSON data dumps.</b> The original SAID-ECHO timeout (&gt;20 min / 2,696 MB) predated the finding-#8 JSON-skip fix. Re-run with the fixed binary: the tree has <b>345,457 files</b>, but <code>is_junk_dir</code> + the #8 <code>.json</code> skip drop it to <b>41,002 enrollable source files</b> — because SAID-ECHO carries <b>3,502 MB of JSON</b>, dominated by a single <b>2.6 GB <code>longmemeval_m_cleaned.json</code></b> benchmark dump (+265 MB, +245 MB more). With those excluded it ingests <b>fully to 88,286 frames / 133 MB</b>, peak RAM <b>1,556 MB then falling</b> — never near the old 2,696 MB ceiling. Recall verified on the finished brain (<code>sym</code> 0.02 ms, <code>ask</code> @1.00). <b>* honest caveat:</b> the 3,061 s (~51 min) wall-time is the <b>separate finding-#11 build-speed issue</b> — this binary predates the #11 incremental-write fix, so it did a full O(corpus) index build; it is a speed cost, NOT the RAM wall. <b>Empirical answer: the ceiling was a data-dump artifact, not a project size. With #8, a 41k-source-file / 88k-frame project ingests at ~1.5 GB RAM.</b></p>
 
 <h2>Per-call latency &amp; tokens — measured at 46,656 frames</h2>
 <table>
