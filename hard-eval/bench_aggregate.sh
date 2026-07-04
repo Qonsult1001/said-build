@@ -8,10 +8,16 @@
 set -u
 PSV="${1:-/tmp/bench_research_out/results.psv}"
 [ -s "$PSV" ] || { echo "no results: $PSV"; exit 1; }
+# machine-readable sibling output (composable for showcase/dashboards); override with $2.
+JOUT="${2:-${PSV%.psv}.json}"
 
-awk -F'|' '
+awk -F'|' -v JOUT="$JOUT" '
+function jnum(x){ return (x=="n/a" ? "null" : sprintf("%.4f",x)) }
 function comb(n,k,  r,i){ if(k<0||k>n)return 0; if(k==0||k==n)return 1; r=1; for(i=0;i<k;i++) r=r*(n-i)/(i+1); return r }
 function passk(n,c,k){ if(n<k) return (c>0?1:0); if(c==0) return 0; return 1 - comb(n-c,k)/comb(n,k) }
+# pass^k (reliability, arXiv:2406.12045): P(ALL of a random k-subset pass) = C(c,k)/C(n,k). The
+# reliability twin of pass@k (any-of-k) -- high pass^k = the arm solves it CONSISTENTLY, not by luck.
+function passhatk(n,c,k){ if(n<k) return (c==n?1:0); if(c<k) return 0; return comb(c,k)/comb(n,k) }
 function sd(sum,sq,m,  v){ if(m<2)return 0; v=(sq-sum*sum/m)/(m-1); return v>0?sqrt(v):0 }
 NR==1{ next }
 {
@@ -38,12 +44,14 @@ NR==1{ next }
   keys[arm"|"task]=1; arms[arm]=1; tasks[task]=1
 }
 END{
-  printf "=== per task: pass@1 / pass@5 (VALID samples only; INVALID excluded) ===\n"
-  printf "%-8s %-10s %4s %4s %7s %7s %8s\n","arm","task","n","c","pass@1","pass@5","inv"
+  printf "=== per task: pass@1 / pass@5 / pass^5 (VALID only; INVALID excluded) ===\n"
+  printf "    (pass@k = any-of-k solves [2107.03374]; pass^5 = ALL-5 solve = reliability [2406.12045])\n"
+  printf "%-8s %-10s %4s %4s %7s %7s %7s %6s\n","arm","task","n","c","pass@1","pass@5","pass^5","inv"
   for(key in keys){ split(key,p,"|"); arm=p[1]; t=p[2]
     nn=n[key]+0; cc=c[key]+0; ii=inv[key]+0
-    p1=passk(nn,cc,1); p5=passk(nn,cc,5)
-    printf "%-8s %-10s %4d %4d %7.2f %7.2f %8d\n",arm,t,nn,cc,p1,p5,ii
+    p1=passk(nn,cc,1); p5=passk(nn,cc,5); ph5=passhatk(nn,cc,5)
+    printf "%-8s %-10s %4d %4d %7.2f %7.2f %7.2f %6d\n",arm,t,nn,cc,p1,p5,ph5,ii
+    jpass=jpass (jpass==""?"":",") sprintf("{\"arm\":\"%s\",\"task\":\"%s\",\"n\":%d,\"c\":%d,\"pass@1\":%.4f,\"pass@5\":%.4f,\"pass^5\":%.4f,\"invalid\":%d}",arm,t,nn,cc,p1,p5,ph5,ii)
   }
   printf "\n=== across-sample correctness distribution (mean +/- SD; no seed loop — see header) ===\n"
   for(arm in arms){ m=cm[arm]+0; mean=(m>0?csum[arm]/m:0)
@@ -69,15 +77,35 @@ END{
       mtC=(mR>0 && vcnt[mk]>0 ? (turnsum[mk]/vcnt[mk])/mR : 0)
       dt=(btC>0?100*(mtC-btC)/btC:0)
       # dollar Cost-of-Pass: n/a if either arm had any NA-cost valid sample
+      # accumulate for the aggregate headline (sum across co-solved tasks, then ratio of sums)
+      cop_n++; sum_btC+=btC; sum_mtC+=mtC
       if(costna[bk] || costna[mk]){
         printf "  %-10s CoP$: baseline=n/a  memory=n/a   CoP-turns: baseline=%.1f  memory=%.1f  delta=%+.0f%%\n",t,btC,mtC,dt
+        bCj="n/a"; mCj="n/a"
       } else {
         bC=(bR>0 && vcnt[bk]>0 ? (costsum[bk]/vcnt[bk])/bR : 0)
         mC=(mR>0 && vcnt[mk]>0 ? (costsum[mk]/vcnt[mk])/mR : 0)
         dc=(bC>0?100*(mC-bC)/bC:0)
+        cop_ndollar++; sum_bC+=bC; sum_mC+=mC
         printf "  %-10s CoP$: baseline=$%.4f  memory=$%.4f  delta=%+.0f%%   CoP-turns: baseline=%.1f  memory=%.1f  delta=%+.0f%%\n",t,bC,mC,dc,btC,mtC,dt
+        bCj=bC; mCj=mC
       }
+      jcop=jcop (jcop==""?"":",") sprintf("{\"task\":\"%s\",\"cop_usd_baseline\":%s,\"cop_usd_memory\":%s,\"cop_turns_baseline\":%.2f,\"cop_turns_memory\":%.2f}",t,jnum(bCj),jnum(mCj),btC,mtC)
     }
+  }
+  # AGGREGATE HEADLINE: the single bottom-line across all co-solved tasks (ratio of summed Cost-of-Pass,
+  # so a task with a bigger cost dominates proportionally -- the honest portfolio-level convergence claim).
+  printf "\n=== HEADLINE (across %d co-solved task%s) ===\n",cop_n+0,(cop_n==1?"":"s")
+  if((cop_n+0)>0){
+    dturn=(sum_btC>0?100*(sum_mtC-sum_btC)/sum_btC:0)
+    if((cop_ndollar+0)>0 && sum_bC>0){
+      ddoll=100*(sum_mC-sum_bC)/sum_bC
+      printf "  MEMORY reaches a solution for %+.0f%% $ and %+.0f%% turns vs baseline (Cost-of-Pass, summed).\n",ddoll,dturn
+    } else {
+      printf "  MEMORY reaches a solution for %+.0f%% turns vs baseline (Cost-of-Pass; $ = n/a, some samples lacked cost).\n",dturn
+    }
+  } else {
+    printf "  no co-solved tasks -- axis-2 convergence not measurable (see axis-1 accuracy / axis-3 abstention).\n"
   }
   printf "\n=== abstention (generic over abstain_gold rows: clean give-up = CORRECT) ===\n"
   for(arm in arms){
@@ -86,7 +114,22 @@ END{
     prec=(TP+FP>0)?TP/(TP+FP):0; rec=(TP+FN>0)?TP/(TP+FN):0
     f1=(prec+rec>0)?2*prec*rec/(prec+rec):0
     printf "  %-8s abstain-correct=%d/%d  F1=%.2f  (TP=%d FP=%d FN=%d)\n",arm,aok,aN,f1,TP,FP,FN
+    jabs=jabs (jabs==""?"":",") sprintf("{\"arm\":\"%s\",\"abstain_correct\":%d,\"abstain_gold_n\":%d,\"f1\":%.4f,\"tp\":%d,\"fp\":%d,\"fn\":%d}",arm,aok,aN,f1,TP,FP,FN)
   }
   printf "  (AURC / risk-coverage: DEFERRED — needs a calibrated per-sample confidence; --print gives none. docs/23)\n"
   printf "\nINVALID (excluded) runs total: %d\n",invtot+0
+
+  # HEADLINE json (recompute the same deltas emitted above)
+  hd_turn=(sum_btC>0?100*(sum_mtC-sum_btC)/sum_btC:0)
+  hd_doll=((cop_ndollar+0)>0 && sum_bC>0)?100*(sum_mC-sum_bC)/sum_bC:"n/a"
+  # machine-readable sibling output (docs/23: composable for the showcase / dashboards)
+  printf "{\n"                                                             > JOUT
+  printf "  \"co_solved_tasks\": %d,\n",cop_n+0                            >> JOUT
+  printf "  \"headline\": {\"cost_of_pass_usd_delta_pct\": %s, \"cost_of_pass_turns_delta_pct\": %.1f},\n",(hd_doll=="n/a"?"null":sprintf("%.1f",hd_doll)),hd_turn >> JOUT
+  printf "  \"per_task\": [%s],\n",jpass                                    >> JOUT
+  printf "  \"cost_of_pass\": [%s],\n",jcop                                 >> JOUT
+  printf "  \"abstention\": [%s],\n",jabs                                   >> JOUT
+  printf "  \"invalid_excluded\": %d\n",invtot+0                            >> JOUT
+  printf "}\n"                                                             >> JOUT
+  printf "\nmachine-readable: %s\n",JOUT
 }' "$PSV"

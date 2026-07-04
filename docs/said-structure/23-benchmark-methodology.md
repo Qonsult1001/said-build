@@ -20,8 +20,9 @@ benchmarks measure the right things.
 ### 1. Eventual success — pass@k  [arXiv:2107.03374]
 Generate **n ≥ 5** samples/task/arm; a task is solved@k if any of k pass. Unbiased estimator:
 `pass@k = 1 − C(n−c, k) / C(n, k)` (c = #passing of n). pass@1 = c/n. Report pass@1/5 (and pass@k gap on
-the hard stratum — a gap that persists at high k = memory solves what baseline can't). Optional **pass^k**
-(arXiv:2406.12045) for reliability (all k succeed), not just luck.
+the hard stratum — a gap that persists at high k = memory solves what baseline can't). **pass^k**
+(arXiv:2406.12045) for reliability (ALL k of a random k-subset succeed = solves consistently, not by
+luck) is also reported: `bench_aggregate.sh` prints a `pass^5` column via `C(c,k)/C(n,k)` alongside pass@k.
 
 ### 2. Convergence cost on CO-SOLVED tasks — turns-to-first-success / Cost-of-Pass  [arXiv:2504.13359]
 On the subset **both arms eventually solve**, compare **turns-to-first-success** and **Cost-of-Pass**.
@@ -125,8 +126,11 @@ verify-bodies gate (#8 guard) before running, an explicit abstention probe (a qu
 file/fix — correct iff the agent gives up cleanly), and a PER-TASK prompt suffix (give-up hint ONLY on the
 abstention probe; neutral elsewhere). A failed/timed-out run is retried then marked INVALID and EXCLUDED
 (never scored correct=0). Outputs per-sample turns/cost/correct/abstained/valid →
-`bench_aggregate.sh` computes pass@k (INVALID excluded) + co-solved turns + **co-solved Cost-of-Pass
-(dollars & turns, amortized/R)** + abstention, partitioned into the three buckets.
+`bench_aggregate.sh` computes pass@k + **pass^k reliability** (INVALID excluded) + co-solved turns +
+**co-solved Cost-of-Pass (dollars & turns, amortized/R)** + abstention, partitioned into the three
+buckets, plus an **aggregate HEADLINE** (summed Cost-of-Pass Δ across co-solved tasks) and a
+machine-readable **`results.json`** sibling (per-task pass@k/pass^k, Cost-of-Pass with `null` for
+missing-cost, abstention F1, headline) for the showcase / dashboards.
 
 ## Lessons that produced this protocol (from docs/20 v1–v7, the A1–A5 runs)
 
