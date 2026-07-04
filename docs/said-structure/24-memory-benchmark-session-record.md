@@ -37,6 +37,26 @@ the existing 10-benchmarks + BYO-LLM methodology), fixed the correct side:
   (SMOKE=1 escape) and reports **across-sample mean ± SD** as the stability metric.
 - Offline validation (`gate2_validate.sh`): **25/25** every docs/23 step.
 
+### 2b. Follow-up verify-docs pass — Cost-of-Pass drift + axis-2 completion
+A second `/verify-docs` sweep of docs/23 re-traced all claims and executed the runnable ones on a
+deterministic synthetic PSV (all figures hand-checked against the estimator formulas). Result: **12/13
+verified, 1 real drift**, now closed:
+
+- **DRIFT → FIXED (code):** axis-2 promised *turns-to-first-success AND Cost-of-Pass = C/R*, but
+  `bench_aggregate.sh` computed only turns and never read the captured `total_cost_usd` column (two
+  downstream summaries had already quietly narrowed axis-2 to turns-only). After a grill to intent (add
+  it — the cost data was captured, and citing 2504.13359 while computing only turns was a half-honored
+  citation), the aggregator now computes **Cost-of-Pass = (mean cost over ALL valid samples)/R**
+  (amortized over failures; R = pass@1) in **both dollars and turns**, with a fabrication-proof **n/a**
+  when any counted sample lacked a cost. Doc corrected; the misleading `1/R` degenerate form removed.
+- **pass^k (doc "Optional" → BUILT):** `pass^5 = C(c,k)/C(n,k)` (ALL-k-of-subset pass = reliability,
+  not luck) now printed alongside pass@k.
+- **Added:** an aggregate **HEADLINE** (summed Cost-of-Pass Δ across co-solved tasks) and a
+  machine-readable **`results.json`** sibling (per-task pass@k/pass^k, Cost-of-Pass with `null` for
+  missing-cost, abstention F1, headline). Showcase gained a "Research-correct A/B axes" section.
+- All additive: pre-existing pass@1/@5/distribution/turns/abstention output byte-identical (regression
+  diffed vs HEAD). Commits `6aec4c9` (Cost-of-Pass fix) + `774897d` (pass^k/headline/JSON/showcase).
+
 ## 3. Injection confirmed nudge-correct (grounded)
 `sca-core::steering::render_verified_fixes` uses the exact nudge pattern: plain-facts + solve-first lead
 ("Found prior work that may apply. Read this before repeating old debugging work…"), `<project_memory>`
