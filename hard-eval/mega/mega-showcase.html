@@ -33,7 +33,7 @@
   <div class="card"><div class="n">46,656</div><div class="l">frames · 12 projects · one file</div></div>
   <div class="card"><div class="n">132 MB</div><div class="l">portable brain on disk</div></div>
   <div class="card"><div class="n">≤1,016 MB</div><div class="l">peak RAM (steady, all 12)</div></div>
-  <div class="card"><div class="n">11</div><div class="l">real findings (9 fixed)</div></div>
+  <div class="card"><div class="n">13</div><div class="l">real findings (10 resolved)</div></div>
 </div>
 
 <h2>How far can we go? — incremental ingest, and what the "wall" really was</h2>
@@ -48,6 +48,20 @@
 <tr><td>+ SAID-ECHO (41k src files) — <b>THE "WALL" WAS JSON</b></td><td>88,286</td><td>133</td><td>3,061 s*</td><td class="ok-txt">1,556</td><td class="ok-txt">✓</td></tr>
 </table>
 <p class="note"><b>The "wall" was never scale — it was 3.5 GB of JSON data dumps.</b> The original SAID-ECHO timeout (&gt;20 min / 2,696 MB) predated the finding-#8 JSON-skip fix. Re-run with the fixed binary: the tree has <b>345,457 files</b>, but <code>is_junk_dir</code> + the #8 <code>.json</code> skip drop it to <b>41,002 enrollable source files</b> — because SAID-ECHO carries <b>3,502 MB of JSON</b>, dominated by a single <b>2.6 GB <code>longmemeval_m_cleaned.json</code></b> benchmark dump (+265 MB, +245 MB more). With those excluded it ingests <b>fully to 88,286 frames / 133 MB</b>, peak RAM <b>1,556 MB then falling</b> — never near the old 2,696 MB ceiling. Recall verified on the finished brain (<code>sym</code> 0.02 ms, <code>ask</code> @1.00). <b>* honest caveat:</b> the 3,061 s (~51 min) wall-time is the <b>separate finding-#11 build-speed issue</b> — this binary predates the #11 incremental-write fix, so it did a full O(corpus) index build; it is a speed cost, NOT the RAM wall. <b>Empirical answer: the ceiling was a data-dump artifact, not a project size. With #8, a 41k-source-file / 88k-frame project ingests at ~1.5 GB RAM.</b></p>
+
+<h2>12 real codebases in ONE brain — the multi-project consolidation</h2>
+<p class="note">Beyond a single project: <b>12 distinct <code>G:\development</code> codebases</b> — Wonga, AlphaGo, NeoroCore, cSentient, MCP, SDK-DT, Agents, EvolveLAM, Law, Advisory, dt-gateway, SQL-Tools (C# · Rust · Python · TS/JS · SQL · docs) — ingested into <b>one portable <code>.said</code> file</b> in a single one-shot pass.</p>
+<table>
+<tr><th>Metric</th><th>Measured</th><th>Note</th></tr>
+<tr><td>Codebases in one brain</td><td class="ok-txt"><b>12</b></td><td>one portable file, mixed languages</td></tr>
+<tr><td>Source files ingested</td><td>20,712</td><td>junk-dirs + JSON auto-skipped (#8)</td></tr>
+<tr><td>Memories (after dedup/compact)</td><td><b>21,997</b></td><td>from ~64k read frames</td></tr>
+<tr><td>Brain size on disk</td><td>150.4 MB</td><td>one file, portable</td></tr>
+<tr><td>Peak RAM</td><td class="ok-txt">805 MB</td><td>bounded — 554 MB read → 805 MB encode</td></tr>
+<tr><td>Wall time (one-shot)</td><td>1,145 s*</td><td>read + encode 153 s + save 21.8 s</td></tr>
+<tr><td>Recall</td><td class="ok-txt">✓</td><td><code>sym</code> 2.66 ms · <code>ask</code> cross-project</td></tr>
+</table>
+<p class="note"><b>* honest finding — <code>init</code> dir-append re-encodes the WHOLE brain (O(total), not O(new)).</b> Growing a brain by appending directories one-by-one is <i>not</i> incremental: each <code>said init &lt;dir&gt;</code> re-runs the phase-2 encode over the <i>entire</i> accumulated brain, so it slows as the brain grows — measured: appending <b>Advisory (72 files, +1,229 frames) onto a 90k-frame brain took ~7 min</b>, of which <b>190 s was re-encoding the existing 90k frames</b>, not the 1.2k new ones. The finding-#11 fix made <code>learn_fix</code>/<code>remember</code> single-frame writes incremental, but it does <b>not</b> cover the <code>init</code> directory path. <b>Mitigation used here:</b> a single one-shot <code>init</code> over all 12 codebases encodes everything <b>once</b> (the numbers above) instead of 12 compounding re-encodes. <b>Open item:</b> extend the #11 incremental encode path to <code>init</code> so per-project append is truly O(new).</p>
 
 <h2>Per-call latency &amp; tokens — measured at 46,656 frames</h2>
 <table>
@@ -102,6 +116,8 @@
 <tr><td>9</td><td><b>Abstention weak</b>: returns unrelated memories at score &gt;1.0 for never-stored queries instead of declining</td><td><span class="pill r">OPEN — parked for grill</span></td></tr>
 <tr><td>10</td><td><code>recall_fix</code> ~7.5 s at 46.6k (float-rerank union + deep ask scale with brain size)</td><td><span class="pill a">OPEN — tuning</span></td></tr>
 <tr><td>11</td><td><b>Writes fell to a full rebuild at scale</b>: a single <code>learn-fix</code>/<code>remember</code> took &gt;2 min at 46.6k. The incremental append path (O(new)) EXISTS but a too-strict precondition (all prior frames still active) meant a single tombstoned frame (dedup/supersede/delete — the mega-brain had 40) forced a full O(corpus) rebuild per write.</td><td><span class="pill g">FIXED — tolerate tombstoned priors → &gt;2 min → 21.5 s @36.5k / 4 s @8.7k</span></td></tr>
+<tr><td>12</td><td><b>The SAID-ECHO "wall" was never scale</b> — it was 3.5 GB of JSON data dumps (2.6 GB <code>longmemeval_m_cleaned.json</code>). Re-run with the #8 binary: ingests fully to 88,286 frames / 133 MB, peak 1,556 MB (never near the old 2,696 MB).</td><td><span class="pill g">DISPROVEN — data-dump artifact, not a ceiling</span></td></tr>
+<tr><td>13</td><td><b><code>init</code> dir-append re-encodes the WHOLE brain</b> (O(total), not O(new)): appending Advisory (72 files) onto a 90k brain took ~7 min, 190 s of it re-encoding the existing frames. #11 fixed <code>learn_fix</code>/<code>remember</code> writes but NOT the <code>init</code> directory path.</td><td><span class="pill a">OPEN — extend #11 incremental encode to init</span></td></tr>
 </table>
 <p class="note"><b>Finding #11 was the most valuable result of the whole run — and it's now fixed.</b> The incremental write path was always there and correct; it was being <i>bypassed</i> because the "is this a pure append?" check demanded every prior frame still be active, which a single tombstone (routine) broke. Relaxing it to tolerate tombstoned priors (harmless — inactive, filtered at query) restores the O(new) path: a write at 36.5k frames dropped from &gt;2 min to <b>21.5 s</b> (8.7k: 4 s). Only massive multi-project scale — where tombstones accumulate — surfaced this.</p>
 
