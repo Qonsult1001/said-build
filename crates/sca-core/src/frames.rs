@@ -708,16 +708,35 @@ impl FrameStore {
         // SECOND full corpus copy (the ~550MB@13k / ~1.5GB@37k compact-phase transient — the blind
         // spot in the earlier compress-only windowing). The moved-out slot is dead until the merge
         // below rewrites pending[first].compressed_data, so this is safe + bit-identical.
+        // BUG FIX (BLAKE3 mismatch / recall-wipe): the earlier version mem::take'd the bytes out of
+        // EVERY eligible pending frame FIRST, then early-returned if fewer than 10 — leaving those
+        // frames with EMPTY compressed_data but still FrameEncoding::Plain and their original
+        // meta.checksum. On read, blake3::hash(empty) != checksum -> "[SAID] BLAKE3 mismatch" -> the
+        // frame returns None -> recall/sym silently return nothing (regression: a <10-frame brain, and
+        // any path leaving Plain frames un-blocked, read as empty). The moved-out bytes are only safe
+        // to drop AFTER the merge rewrites them into blocks — which the early-return skips.
+        // FIX: decide the <10 gate BEFORE taking any bytes, so a skipped compact leaves pending intact.
+        // BUG FIX (BLAKE3 mismatch / recall-wipe): the earlier version mem::take'd the bytes out of
+        // EVERY eligible pending frame FIRST, then early-returned if fewer than 10 — leaving those
+        // frames with EMPTY compressed_data but still FrameEncoding::Plain and their original
+        // meta.checksum. On reopen-from-disk read, blake3::hash(empty) != checksum -> "[SAID] BLAKE3
+        // mismatch" -> the frame returns None -> recall/sym silently return nothing (regression from
+        // 0620102: a <10-frame brain reads back empty). The moved-out bytes are only safe to drop
+        // AFTER the merge rewrites them into blocks — which the early-return skips.
+        // FIX: decide the <10 gate BEFORE taking any bytes, so a skipped compact leaves pending intact.
+        let eligible = self.pending.iter()
+            .filter(|p| p.meta.status != FrameStatus::Deleted
+                     && p.meta.encoding == FrameEncoding::Plain)
+            .count();
+        if eligible < 10 {
+            return (0, 0, 0);
+        }
         for (i, pending) in self.pending.iter_mut().enumerate() {
             if pending.meta.status != FrameStatus::Deleted
                 && pending.meta.encoding == FrameEncoding::Plain
             {
                 raw_frames.push((i, std::mem::take(&mut pending.compressed_data)));
             }
-        }
-
-        if raw_frames.len() < 10 {
-            return (0, 0, 0);
         }
 
         // Step 2: Train dictionary from sampled frames.

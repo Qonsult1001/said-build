@@ -52,6 +52,12 @@ enum Commands {
         /// enterprise = refuse content-embedding ingests; pointer-only
         #[arg(long, default_value = "portable")]
         mode: String,
+        /// Create an ADDITIONAL brain even though one already exists on this PC.
+        /// By default `create` is one-brain-per-PC: if a brain is already
+        /// registered it points you to `init` to grow that brain instead of
+        /// making a second. Pass --force to override (scratch/test/multi-brain).
+        #[arg(long)]
+        force: bool,
     },
     /// Store a memory (also available as `remember`)
     #[command(alias = "remember")]
@@ -1465,7 +1471,7 @@ fn run() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Create { ref file, ref mode } => cmd_create(file, mode, cli.json),
+        Commands::Create { ref file, ref mode, force } => cmd_create(file, mode, force, cli.json),
         Commands::Add { ref text, ref file, ref dir, ref id, ref title } => {
             if let Some(d) = dir {
                 cmd_add_dir(cli.path.as_deref(), d, cli.json)
@@ -1603,9 +1609,26 @@ fn run() {
 // Command implementations
 // ---------------------------------------------------------------------------
 
-fn cmd_create(file: &str, mode: &str, json: bool) -> Result<(), String> {
+fn cmd_create(file: &str, mode: &str, force: bool, json: bool) -> Result<(), String> {
     if Path::new(file).exists() {
         return Err(format!("File already exists: {}", file));
+    }
+    // ONE-BRAIN-PER-PC (world-class default): if a brain is already registered on
+    // this machine, `create` refuses a second one and points the user to `init` to
+    // GROW the existing brain (append, never wipe). The owner can always override
+    // with --force for scratch/test/multi-brain use.
+    if !force {
+        if let Some(existing) = crate::resolve::read_default() {
+            if Path::new(&existing).exists() {
+                return Err(format!(
+                    "A brain already exists on this PC:\n  {existing}\n\n\
+                     One brain per PC is the default — grow that brain instead of making a second:\n  \
+                     said --path \"{existing}\" init <dir>     # append a codebase (never wipes)\n  \
+                     said --path \"{existing}\" ask \"...\"       # query it\n\n\
+                     To create an ADDITIONAL brain anyway, re-run with --force."
+                ));
+            }
+        }
     }
     let brain_mode = sca_core::said_file::BrainMode::parse(mode)
         .ok_or_else(|| format!("Unknown mode '{}'. Use 'portable' or 'enterprise'.", mode))?;
@@ -1614,6 +1637,17 @@ fn cmd_create(file: &str, mode: &str, json: bool) -> Result<(), String> {
     // `said mode` command.
     let mut brain = SaidFile::create_with_mode(file, brain_mode);
     brain.save()?;
+    // Register this as THE brain for the PC (the one-brain-per-PC anchor) unless one
+    // is already registered — so the next bare `create` sees it and the guardrail fires.
+    // Only auto-register when there's no existing default (don't silently repoint the
+    // owner's default when they --force a second scratch brain).
+    if crate::resolve::read_default().is_none() {
+        if let Ok(abs) = std::fs::canonicalize(file) {
+            let _ = crate::resolve::set_default(&abs.to_string_lossy());
+        } else {
+            let _ = crate::resolve::set_default(file);
+        }
+    }
     if json {
         println!("{}", serde_json::json!({"created": file, "mode": brain_mode.as_str()}));
     } else {

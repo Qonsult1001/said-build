@@ -56,7 +56,7 @@ fn config_dir() -> Option<PathBuf> {
 }
 
 /// Read the default .said file path from config.
-fn read_default() -> Option<String> {
+pub fn read_default() -> Option<String> {
     let dir = config_dir()?;
     let file = dir.join("default");
     std::fs::read_to_string(file).ok().map(|s| s.trim().to_string())

@@ -656,6 +656,26 @@ impl SaidFile {
             }
         }
 
+        // #13 FIX — reconstruct corpus_ids from the persisted SCA index when the CTXT
+        // cache is absent. The CTXT section (which fed corpus_ids) is READ here but was
+        // NEVER written by save(), so every reopened brain had corpus_ids EMPTY. That made
+        // the incremental-vs-full decision in build_index (`no_content_mutation =
+        // !corpus_ids.is_empty()`) ALWAYS pick a full re-encode — so `said init <dir>` on an
+        // existing brain re-encoded the WHOLE corpus every time (finding #13: appending 72
+        // files onto a 90k-frame brain re-encoded all 90k, ~7 min). The SCA breadcrumbs
+        // (SCRM section) already restore the exact set of encoded doc_ids on open
+        // (deserialize_breadcrumbs → engine.core.get_doc_ids), so we can rebuild corpus_ids
+        // from it with ZERO format change. corpus_texts stays lazy (read from frames on
+        // demand, same as the CTXT path). Only fills when CTXT was empty — CTXT wins if present.
+        if corpus_ids.is_empty() {
+            let encoded_ids = engine.core.get_doc_ids();
+            if !encoded_ids.is_empty() {
+                corpus_ids = encoded_ids.clone();
+                corpus_texts = vec![String::new(); corpus_ids.len()];
+                corpus_texts_lower = Vec::new();
+            }
+        }
+
         Ok(Self {
             path,
             data,
@@ -3433,6 +3453,14 @@ impl SaidFile {
     }
 
     /// Get stats — includes frame counts, index presence, and brain state.
+    /// Number of documents currently in the SCA corpus index. On a freshly-opened
+    /// brain this is the persisted corpus size — non-zero iff the incremental append
+    /// path can fire (see the #13 fix in `open`: corpus_ids is reconstructed from the
+    /// persisted SCA index so `init`/append re-encodes only NEW docs, not the whole brain).
+    pub fn corpus_id_count(&self) -> usize {
+        self.corpus_ids.len()
+    }
+
     pub fn stats(&self) -> SaidFileStats {
         let frame_stats = self.frames.stats();
         let brain_stats = self.engine.brain.stats();
