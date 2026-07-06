@@ -13,10 +13,22 @@ If you change a limitation here, update the matching roadmap entry in the same c
 
 ## 1. Retrieval
 
-### 1.1 LoCoMo temporal category sits at 0.391 R@10
-- **Limitation** — no time-aware scoring. Queries like "what did Alice say last Thursday" don't prefer frames whose timestamp falls in the relevant range.
-- **Impact** — weakest LoCoMo category by a wide margin. Most real-world chat recall is temporal.
-- **Enhancement** — parse temporal phrases from the query ("yesterday", "last week", "on March 5") via a tiny NLU, then boost frames whose `created_at` overlaps the range. No LLM needed; a 200-line grammar covers 90% of phrasings.
+### 1.1 Temporal — PARTIALLY SHIPPED (write-time grounding); relative-word query resolution still open
+- **Limitation** — no age-filtered retrieval: `created_at` is stamped once at ingest and is not a query
+  filter, so the engine cannot compute "last quarter/year" relative to *today* at query time.
+- **SHIPPED (commit `bd3503b`, FIXES-LOG #11)** — WRITE-TIME date grounding (the research-proven Mem0
+  Layer-1 approach, verified in the local Mem0 source): when a personal memory is saved, relative phrases
+  are resolved to absolute dates IN the stored text ("Last year I…" → "…(around 2025)") deterministically
+  (no LLM), so plain semantic recall finds them. `time_compat::ground_relative_dates`; handles last
+  year / this year / last quarter / last month with year-boundary wrapping. Result: "last year/month"
+  recall moved to @1 (was @3), and absolute queries ("in 2025", "Q2 2026") hit the grounded token. The
+  answering LLM does the remaining date-math over the top-K for free (Claude reads them).
+- **Still open** — (a) query-side resolution of relative words NOT present in the stored text (a query
+  "last year" against a memory that only says "in 2025" relies on the LLM, not the engine); (b) phrases
+  beyond year/quarter/month ("N days ago", "last Tuesday"); (c) **FIXES-LOG #12** — MCP grounding is not
+  persisted in a large single-session save-per-write batch (block-compaction save path; CLI is immune).
+- **Impact** — the common "what did I do last year/quarter" case now works for interactive use; the
+  LoCoMo relative-word category and the MCP-batch persistence bug remain.
 - **Roadmap §** — [Retrieval / Temporal scoring](12-roadmap.md#retrieval)
 
 ### 1.2 NarrativeQA at 0.721 — below the MTEB class average

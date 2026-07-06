@@ -1028,7 +1028,15 @@ impl SaidFile {
                 tags.push(tag);
             }
         }
-        let frame_id = self.remember_with_pillar(doc_id, content, title, pillar, tags);
+        // WRITE-TIME temporal grounding (Mem0 Layer-1) applied HERE at the single memory-write
+        // chokepoint so no caller path can bypass it (the MCP handler previously grounded at its
+        // own layer; centralising it here removes that fragility). Idempotent — re-grounding an
+        // already-grounded string is a no-op — so a caller that also grounded stays byte-identical.
+        // Personal memories only: External/ingested content routes through remember_as/ingest, not
+        // here. `today` from the clock at this app-level method (the pure transform stays clock-free).
+        let (gy, gm, gd) = crate::time_compat::today_ymd();
+        let grounded = crate::time_compat::ground_relative_dates(content, gy, gm, gd);
+        let frame_id = self.remember_with_pillar(doc_id, &grounded, title, pillar, tags);
         let target = doc_id.map(|s| s.to_string()).unwrap_or_else(|| format!("frame#{}", frame_id));
         self.audit.append("remember", &target, &format!("pillar={:?} salience={}", pillar, scored.score));
         (frame_id, scored)

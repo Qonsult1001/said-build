@@ -314,3 +314,103 @@ regression 15/15, recall canary green, save/admin-restore/persistence integrity 
 **Benchmark note.** All accumulation correctness numbers (docs/20 v3–v5) are SUSPECT because of this —
 the cost numbers (memory cheaper) are less affected (they measure agent behavior given whatever was
 injected), but a clean re-run requires this fix or a single-batch-index seeding path.
+
+---
+
+## 9. (RESOLVED) Non-deterministic `ask` ranking — same query returned a different memory each run
+
+**Commit:** `c0ba138`
+
+**Symptom.** On a brain of short one-line personal memories, the SAME query returned a DIFFERENT top
+memory on repeated runs, and the correct answer was often dropped before the rerank could fix it
+(measured recall@1 ~20–33% on 100 short memories, unstable between processes).
+
+**Root cause.** The candidate set is assembled in a `HashMap`; the final ranking sort was by
+`confidence` with NO tie-break. Ties are extremely common for short memories (many score identically),
+so ties resolved by the HashMap's per-process-random iteration order — a coin-flip each run.
+
+**Fix.** A deterministic `doc_id` tie-break on EVERY ranking sort in `ask.rs` (merge, seed, blueprint,
+fix, by_spine). Proven recall-SAFE: at 400 memories it only reorders exact ties (r@5/r@10 unchanged vs
+the parent commit) — the correct deterministic trade. **Guard test:**
+`crates/sca-core/tests/test_recall_determinism.rs` (same query → same top hit ×15).
+
+---
+
+## 10. (RESOLVED) OKF single-word entities regressed recall — common sentence-openers became concept hubs
+
+**Commit:** `c0ba138` (superseded the first attempt in the same commit's earlier form)
+
+**Symptom.** After adding single-word proper-noun extraction so personal memories link on names
+("Rotterdam", "Carol"), recall REGRESSED at volume: multi-hop r@5 1.00→0.50, preference r@5 0.83→0.67,
+paraphrase r@10 0.85→0.80 (3 of 10 categories in the 400-memory recall-quality test failed their gates).
+
+**Root cause (measured before/after against the parent commit).** The first single-word extractor took
+ANY capitalised word (≥4 chars, not in a stop list). Common sentence-OPENERS ("Region…", "Meeting…",
+"Migrated…") are capitalised only because they start a sentence — they became spurious concept hubs that
+over-bridged unrelated memories, so Engine-D pulled wrong siblings into the top-K and displaced correct
+answers.
+
+**Fix.** `extract_entities_memory` now captures a single-word proper noun ONLY when it appears
+MID-SENTENCE (the previous token did not end a sentence). A name a user links on sits inside a sentence
+("in Rotterdam", "hired Carol"); a common word capitalised only as a sentence-opener never does. Purely
+positional, no dictionary, deterministic. Restored all 10 categories to parent-level; live MCP:
+"rotterdam" links 2 memories, concept list clean. Routed to personal-memory frames only (deny-list
+`!ingest: && pillar!=External`); code/ingested frames keep the multi-word extractor byte-identical.
+**Gate:** `test_recall_quality_volume` (10/10 categories at 400).
+
+---
+
+## 11. (RESOLVED) Temporal caveat — relative-time queries ("last quarter/year") didn't recall at top-1
+
+**Commit:** `bd3503b` (feature) + `<pending>` (centralised the write chokepoint)
+
+**Symptom.** "What did I do last year / last quarter" recalled the right memory only in the top-3, not
+top-1 — the engine has no clock, so it never resolved "last year" to an absolute date; recall matched on
+generic "I did" semantics.
+
+**Root cause + research.** Verified the leaders' approach in the LOCAL Mem0 source
+(`G:\development\SAID-ECHO\research\mem0`, not just docs). The proven win (Mem0 `configs/prompts.py`:
+"Always ground relative references to specific dates"; LoCoMo 86→90, LongMemEval 90→95) is WRITE-TIME
+grounding — resolve relative phrases to ABSOLUTE dates IN the stored text so plain semantic recall finds
+them — NOT a query-side resolver. Query-time date-math the answering LLM does for free (Claude reads the
+top-K). Zep/Graphiti's bi-temporal graph is the enterprise version, overkill for the free brain.
+
+**Fix.** `time_compat::ground_relative_dates(text, y, m, d)` — deterministic, no-LLM, `today` passed in
+(pure/reproducible; `today_ymd()` reads the clock only at the caller boundary via a self-contained
+`civil_from_days`, no date crate). Resolves last year / this year / last quarter (wraps Q1→Q4 prior
+year) / last month (wraps Jan→Dec prior year), appends `(around <date>)`, additive + idempotent, unknown
+phrasing untouched. Applied at the single memory-write chokepoint `remember_with_salience` (so no caller
+path can bypass it) for MCP, and at the CLI `add` layer for the CLI (which uses `remember_as`). **Proven:**
+"Last quarter I shipped the release." → "(around Q2 2026)"; live MCP "last year/month" → @1 (was @2);
+"certified in 2025" / "Q2 2026" → @1. 9/9 grounding unit tests
+(`test_temporal_grounding.rs`); 400-memory recall (10/10) + determinism unchanged.
+
+---
+
+## 12. (OPEN — root-caused, localized) MCP write-time grounding not persisted in a large single-session batch
+
+**Status:** root-caused + localized to the block-compaction save path; fix deferred (hot serialization
+path — same care as #8; a naive fix there regressed once, so this needs a guard test first).
+
+**Symptom.** In the 1000-record CLI-vs-MCP benchmark, temporal grounding (#11) lands correctly on the
+CLI (verified on disk) but on the MCP surface the grounded body is NOT on disk after the full 1000-write
+session — so MCP temporal recall was measured on UNGROUNDED text (invalid; the CLI temporal numbers are
+the valid ones). The grounding FEATURE is correct: it lands in every isolated test (single write, 31st
+write, 200 filler, full gold set) and in live single MCP `remember`s — it only fails to persist in the
+large single-session MCP batch.
+
+**Root cause (localized via `[DEBUG-tg8]` after-save probe).** The MCP `handle_remember` calls
+`save()` after EVERY write (1000 saves in one session). Above a spill/block-compaction threshold
+(reproduces past ~200–1000 frames, not below) the block copy-forward path
+(`save()` → `flush_block_pending_with_source`, said_file.rs ~2455) drops the freshly-grounded body — the
+SAME family as #8 (committed/blocked bodies lost on re-save from a stale block source). Smoking gun: the
+Heisenberg probe itself FIXED it — adding a `brain.get("tr_0")` (a `read()` → mmap access) between saves
+made grounding persist on disk, because the intervening read refreshes state the next block-save reads
+from. CLI is immune: it's a fresh process per `add`, so it always re-mmaps.
+
+**Next step.** Reproduce in a Rust unit test (MCP-style save-per-write past the spill threshold, assert a
+grounded frame's body survives), then fix the block-source bookkeeping in the save path (ensure the
+just-saved frame bodies are the source for the next block copy-forward without needing an external read),
+un-ignore the guard. Until fixed, MCP temporal-heavy corpora should batch writes then index/save once
+(as #8's workaround), or the temporal grounding for MCP can be trusted for interactive single writes
+(the real usage) — the failure is specific to a 1000-write scripted single session.
