@@ -414,3 +414,42 @@ just-saved frame bodies are the source for the next block copy-forward without n
 un-ignore the guard. Until fixed, MCP temporal-heavy corpora should batch writes then index/save once
 (as #8's workaround), or the temporal grounding for MCP can be trusted for interactive single writes
 (the real usage) — the failure is specific to a 1000-write scripted single session.
+
+---
+
+## 13. (RESOLVED) Rare exact-term match dropped from top-10 when common words diluted the query
+
+**Commit:** `<pending>`
+
+**Symptom (found on the wiki-link MCP benchmark, 95% not 100%).** "cardiologist" alone → the one note
+containing it at rank 1 (score 1.00). But "who is our **lead** cardiologist" → that same note DROPPED OUT
+of the top-10 entirely, and a filler note tied at ~0.65 while an unrelated memory scored ~0.81. Adding
+common words to a query erased the rare-token exact hit.
+
+**Root cause (traced with a fast Rust repro, `test_rare_term_dropout`).** The lexical `text` score for a
+doc matching all query terms is `shared = 0.40 + 0.15·(terms_present−1)`. A full **2-term** match scores
+EXACTLY **0.55**. The semantic-rerank gate is `let lexically_discriminated = kept.iter().any(|c| c.kind
+== "text" && c.confidence > 0.55)` (ask.rs ~713) — strictly **greater than** 0.55. So a maximally-rare
+full match (rarity=1.00 "cardiologist") landed at exactly 0.55, was NOT counted as lexically
+discriminated, the set was treated as semantic-led, and the full-float rerank overwrote the strong
+lexical hit with a ~0.0 whitened cosine — pushing the correct gold below filler/off-topic and out of
+top-10. Deep mode skips the rerank/abstention, which is why the gold was rank 1 in `deep` but gone in
+normal mode (the diagnostic that localized it). The `plant`-once unit corpus didn't trigger it; the
+per-write incremental-index path (CLI/MCP) did — so the repro indexes per write.
+
+**Fix.** A COMPLETE-MATCH rarity bump (ask.rs): when a doc matches EVERY query term (`terms_present ==
+keywords.len()`, ≥2 terms) AND one term is rare (`rarity ≥ 0.85`), lift `shared` by `0.10·rarity`
+(capped 0.80). This clears the `> 0.55` rerank gate so a genuine complete lexical match keeps its lead,
+while staying well BELOW the 0.95 identifier band — it can only lift a COMPLETE match, so it can't
+mis-fire on a paraphrase where the rare word lands in a doc missing the other terms (the failure mode the
+identifier-gating comment warns about). **Verified:** `test_rare_term_dropout` GREEN (was RED, gold
+rank -1 → in top-10); 400-memory recall-quality (10/10 categories), determinism, and 9/9 temporal
+grounding tests all still green (zero regression). Ground truth on the saved benchmark brain: a CLI read
+returns the gold at rank 1.
+
+**Guard test:** `crates/sca-core/tests/test_rare_term_dropout.rs`.
+
+**Related (separate, still open).** The wiki-link MCP benchmark still shows the miss when it queries
+IN-SESSION immediately after the writes (before the brain settles to disk) — the saved brain (what a
+real user reopens; verified via CLI + reopened MCP session) has the gold at rank 1. That in-session vs
+saved-state ranking inconsistency is a distinct low-impact concern (real usage reopens), not this fix.

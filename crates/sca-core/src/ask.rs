@@ -472,7 +472,19 @@ pub fn ask(
             // so the exact-id note leads its boilerplate twins. Identifier-gated (carries a digit) +
             // word-boundary-verified, so it only lifts the doc that LITERALLY shares the id — it can't
             // mis-fire on paraphrase (a rare common word is not an identifier, never enters this band).
-            let shared = (0.40 + 0.15 * (terms_present as f32 - 1.0)).min(0.95).max(0.40);
+            let mut shared = (0.40 + 0.15 * (terms_present as f32 - 1.0)).min(0.95).max(0.40);
+            // COMPLETE-MATCH rarity bump: when a doc matches EVERY query term AND one of them is a
+            // rare token (high IDF), it has a genuine lexical lead and must clear the semantic-rerank
+            // gate (line ~713, `text` && confidence > 0.55). Without this, a full 2-term match on a
+            // maximally-rare word ("who is our lead cardiologist" → the one note with "cardiologist")
+            // scored EXACTLY 0.55, so `> 0.55` treated the set as semantic-led and the float rerank
+            // overwrote the strong lexical hit with a ~0.0 whitened cosine — dropping the correct gold
+            // out of top-10 (measured: test_rare_term_dropout). The bump is small and rarity-scaled,
+            // staying well BELOW the 0.95 identifier band, so it only lifts a COMPLETE match (can't
+            // mis-fire on a paraphrase where the rare word lands in a doc missing the other terms).
+            if terms_present == keywords.len() && keywords.len() >= 2 && rarity >= 0.85 {
+                shared = (shared + 0.10 * rarity).min(0.80);
+            }
             let confidence = if rare_discriminator {
                 (0.95 + 0.04 * rarity).min(0.99)
             } else {
