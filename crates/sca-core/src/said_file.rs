@@ -2879,10 +2879,10 @@ impl SaidFile {
 
         // Snapshot linkable frames (non-Code, Active) + their bodies once.
         let data = self.data.as_slice().to_vec();
-        let metas: Vec<(String, Option<String>, Vec<String>)> = self.frames
+        let metas: Vec<(String, Option<String>, Vec<String>, Pillar)> = self.frames
             .get_all_frames_with_pending().iter()
             .filter(|m| m.status == FrameStatus::Active && m.pillar != Pillar::Code)
-            .map(|m| (m.doc_id.clone(), m.title.clone(), m.tags.clone()))
+            .map(|m| (m.doc_id.clone(), m.title.clone(), m.tags.clone(), m.pillar))
             .collect();
         if metas.is_empty() { return 0; }
 
@@ -2896,7 +2896,7 @@ impl SaidFile {
         // NOTE: we do NOT store a per-frame token set here — that was a whole-corpus accumulator (a
         // HashSet<String> per frame, ~GB at 37k). The title-mention step below tokenizes each body ON
         // THE FLY and drops the tokens, so only ONE frame's tokens are ever in RAM.
-        for (doc_id, title, _tags) in &metas {
+        for (doc_id, title, tags, pillar) in &metas {
             if let Some(t) = title {
                 let base = std::path::Path::new(t.trim()).file_stem()
                     .map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| t.trim().to_string());
@@ -2904,7 +2904,19 @@ impl SaidFile {
                 if tl.len() >= 4 { titles.push((tl, doc_id.clone())); }
             }
             let body = self.frames.read_frame_text(doc_id, &data).unwrap_or_default();
-            let ents = Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME);
+            // PER-FRAME ROUTING (the safe split): a genuine PERSONAL MEMORY (a `remember`/`add`
+            // note) gets the single-word-aware extractor so "Alice"/"Berlin"/"Nimbus" link; every
+            // ingested / code / doc frame keeps the multi-word-only extractor BYTE-IDENTICAL. The
+            // deny-list is airtight: `init` tags every frame `ingest:code`/`ingest:text`, docs land
+            // as `External`, code is `Pillar::Code` (already filtered out above) — so the only
+            // untagged non-External frame is a real user memory. See build_concept_links docs.
+            let is_ingested = tags.iter().any(|t| t.starts_with("ingest:"));
+            let is_personal_memory = !is_ingested && *pillar != Pillar::External;
+            let ents = if is_personal_memory {
+                Self::extract_entities_memory(&body, MAX_ENTITIES_PER_FRAME)
+            } else {
+                Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME)
+            };
             let idx = frame_entities.len();
             for e in &ents { entity_frames.entry(e.clone()).or_default().push(idx); }
             frame_entities.push((doc_id.clone(), ents));
@@ -2962,7 +2974,7 @@ impl SaidFile {
 
         // Apply edges (dedup, idempotent: skip if the frame already carries the link tag).
         let existing: std::collections::HashMap<&str, &Vec<String>> =
-            metas.iter().map(|(d, _, tags)| (d.as_str(), tags)).collect();
+            metas.iter().map(|(d, _, tags, _)| (d.as_str(), tags)).collect();
         let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
         let mut added = 0usize;
         for (doc_id, concept) in edges {
@@ -3032,6 +3044,65 @@ impl SaidFile {
                 }
             } else {
                 k += 1;
+            }
+        }
+        out
+    }
+
+    /// Entity extraction for PERSONAL MEMORY frames (Episodic notes from `remember`/`add`).
+    ///
+    /// Personal memories are dominated by SINGLE-word proper nouns — "Alice lives in Berlin",
+    /// "our product is Nimbus", "we keep inventory in Rotterdam". The default `extract_entities`
+    /// only captures MULTI-word entities ("Great Barrier Reef"), so those memories produce ZERO
+    /// concept links and the OKF reachability bridge (ask.rs Engine D-2) can never fire for them.
+    ///
+    /// This variant does everything `extract_entities` does, THEN adds a single-word pass that
+    /// captures distinctive single capitalised proper nouns — but ONLY when they appear
+    /// MID-SENTENCE, never sentence-initial. That positional guard is load-bearing: an earlier
+    /// "any capitalised word" version turned common sentence-openers ("Region…", "Meeting…") into
+    /// spurious concept hubs that over-bridged unrelated memories and measurably REGRESSED recall at
+    /// volume (multi-hop r@5 1.00→0.50). A name a user links on ("in Rotterdam", "hired Carol") sits
+    /// inside a sentence; a common word capitalised only because it opens one does not.
+    ///
+    /// It is used ONLY for personal-memory frames (routed in `build_concept_links` by pillar + the
+    /// absence of an `ingest:` tag); code / enterprise / ingested-doc frames keep the multi-word-only
+    /// extractor UNCHANGED, because the single-word pass would explode on descriptive prose ("Great
+    /// Barrier Reef" → great, barrier, reef, …) and flood a code brain's graph (entity_split_probe).
+    fn extract_entities_memory(text: &str, cap: usize) -> Vec<String> {
+        let mut out = Self::extract_entities(text, cap);
+        if out.len() >= cap { return out; }
+        let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+        // A single capitalised word is a real PROPER NOUN only when it is capitalised MID-SENTENCE —
+        // i.e. the previous token did NOT end a sentence. This is the load-bearing guard: the earlier
+        // "any capitalised word not in a stop list" version created spurious concept hubs from common
+        // words that merely START a sentence ("Region…", "Meeting…", "Enjoy…", "Migrated…"), which
+        // over-bridged unrelated memories and REGRESSED recall at volume (multi-hop r@5 1.00→0.50,
+        // preference 0.83→0.67). A name that a user would link on — "in Rotterdam", "our product is
+        // Nimbus", "hired Carol as the on-call lead" — appears capitalised in the MIDDLE of a sentence;
+        // a common word capitalised only because it opens a sentence never does. No dictionary, purely
+        // positional, deterministic. A memory that IS a bare name ("Nimbus is our product") loses its
+        // leading token, which is the correct trade: sentence-initial is exactly where false hubs live.
+        //
+        // `sentence_boundary` is true at text start and immediately after a token ending in . ! ? :
+        // (or ." etc.). We still drop all-caps acronyms (SLA/AES — the digit/multi-word passes own
+        // those) and require ≥4 chars.
+        let mut sentence_boundary = true;
+        for raw in text.split_whitespace() {
+            if out.len() >= cap { break; }
+            let at_boundary = sentence_boundary;
+            // Advance the boundary flag for the NEXT token: does THIS raw token end a sentence?
+            let ends_sentence = raw.trim_end_matches(|c: char| c == '"' || c == '\'' || c == ')' || c == ']')
+                .ends_with(['.', '!', '?', ':', ';']);
+            sentence_boundary = ends_sentence;
+            if at_boundary { continue; }               // skip sentence-initial tokens entirely
+            let w = raw.trim_matches(|c: char| !c.is_alphanumeric());
+            if w.len() < 4 { continue; }
+            let cap_start = w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            // NAME-shaped: starts uppercase, rest is not all-caps (all-caps = acronym, handled elsewhere).
+            let rest_has_lower = w.chars().skip(1).any(|c| c.is_lowercase());
+            if cap_start && rest_has_lower {
+                let el = w.to_lowercase();
+                if seen.insert(el.clone()) { out.push(el); }
             }
         }
         out

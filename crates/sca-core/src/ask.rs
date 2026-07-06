@@ -580,7 +580,10 @@ pub fn ask(
         // current coarse score) purely to bound work; we do NOT threshold on the score value.
         let mut seeds: Vec<(String, f32)> = candidates.values()
             .map(|c| (c.doc_id.clone(), c.confidence)).collect();
-        seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Deterministic tie-break by doc_id (see the merge-sort fix above): ties in the seed
+        // score must not resolve by HashMap/collect order, or bridge-follow picks vary per run.
+        seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0)));
         seeds.truncate(MAX_SEED_FOLLOW);
         // Coarse score of the strongest seed — used ONLY to stamp bridged siblings at a value in the
         // same band so they survive the relative cutoff and ENTER the rerank pool; the rerank then
@@ -628,9 +631,17 @@ pub fn ask(
     }
 
     // ── Merge + relative cutoff + truncate ───────────────────────────────
+    // DETERMINISM (bug fix): `candidates` is a HashMap — `into_values()` yields a random per-process
+    // order, and a stable sort by confidence ALONE preserves that random order for ties. Short
+    // memories tie constantly (many at the same score), so without a tie-break the surviving top-K —
+    // and therefore which answer the rerank even sees — was RANDOM per run (measured: the same query
+    // returned different memories across runs; the correct answer was often dropped before rerank).
+    // Break ties by doc_id so the ordering is STABLE and reproducible (matches the tie-break already
+    // used at the float-rerank sort below). This is what lifts short-memory recall@1.
     let mut results: Vec<AskCandidate> = candidates.into_values().collect();
     results.sort_by(|a, b| {
         b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.doc_id.cmp(&b.doc_id))
     });
 
     // ── PROJECT SCOPE (kind-aware, opt-in) ───────────────────────────────
@@ -1460,7 +1471,10 @@ fn best_blueprints(brain: &mut SaidFile, query: &str, k: usize) -> Vec<(String, 
         }
         (doc_id.clone(), score)
     }).collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Deterministic tie-break by doc_id — same-score fixes/blueprints must rank reproducibly
+    // (HashMap collect order otherwise makes the top-k vary per run).
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0)));
     scored.truncate(k.max(1));
     scored
 }
@@ -1670,7 +1684,8 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
             // prefilter here (future — noted in docs/11 §recall).
             const RERANK_MAX: usize = 64;
             let mut by_spine: Vec<(String, f32)> = ranked.clone();
-            by_spine.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            by_spine.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0)));  // deterministic tie-break by doc_id
             let mut keep_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
             for (d, _) in by_spine.iter() {
                 if keep_ids.len() >= RERANK_MAX { break; }
@@ -1743,7 +1758,8 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
         (doc_id.clone(), score)
     }).collect();
 
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0)));  // deterministic tie-break by doc_id
     scored.truncate(k.max(1));
     scored
 }

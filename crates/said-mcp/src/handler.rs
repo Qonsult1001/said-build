@@ -541,43 +541,73 @@ impl ServerHandler for SaidServerHandler {
         let tool = SaidTools::try_from(params).map_err(CallToolError::new)?;
 
         match tool {
+            // BRAIN (free) keeps only the memory verbs mirroring the CLI. All non-memory / paid-tier
+            // tools are hidden from the brain tool list, so their enum variants exist ONLY in `code`
+            // builds — every dispatch arm for a hidden tool is gated `#[cfg(feature = "code")]` to match.
+            #[cfg(feature = "code")]
             SaidTools::SearchTool(t) => self.handle_search(t),
             SaidTools::AskTool(t) => self.handle_ask(t),
             SaidTools::GetTool(t) => self.handle_get(t),
             SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
+            #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
             SaidTools::StatusTool(_) => self.handle_status(),
+            #[cfg(feature = "code")]
             SaidTools::SymTool(t) => self.handle_sym(t),
             SaidTools::HistoryTool(t) => self.handle_history(t),
             SaidTools::CheckoutTool(t) => self.handle_checkout(t),
+            #[cfg(feature = "code")]
             SaidTools::EditTool(t) => self.handle_edit(t),
+            #[cfg(feature = "code")]
             SaidTools::EditBatchTool(t) => self.handle_edit_batch(t),
             SaidTools::DeleteTool(t) => self.handle_delete(t),
+            #[cfg(feature = "code")]
             SaidTools::DiscoverTool(_) => self.handle_discover(),
             SaidTools::OpenTool(t) => self.handle_open(t),
             SaidTools::CreateTool(t) => self.handle_create(t),
+            #[cfg(feature = "code")]
             SaidTools::InitTool(t) => self.handle_init(t),
+            #[cfg(feature = "code")]
             SaidTools::HarvestBlueprintsTool(t) => self.handle_harvest_blueprints(t),
+            #[cfg(feature = "code")]
             SaidTools::HarvestScanTool(t) => self.handle_harvest_scan(t),
+            #[cfg(feature = "code")]
             SaidTools::SyncTool(t) => self.handle_sync(t),
+            #[cfg(feature = "code")]
             SaidTools::JournalTool(t) => self.handle_journal(t),
+            #[cfg(feature = "code")]
             SaidTools::OverviewTool(t) => self.handle_overview(t),
+            #[cfg(feature = "code")]
             SaidTools::SnapshotTool(t) => self.handle_snapshot(t),
+            #[cfg(feature = "code")]
             SaidTools::SandboxTool(t) => self.handle_sandbox(t),
+            #[cfg(feature = "code")]
             SaidTools::CleanTool(t) => self.handle_clean(t),
+            #[cfg(feature = "code")]
             SaidTools::SessionEndTool(t) => self.handle_session_end(t),
+            #[cfg(feature = "code")]
             SaidTools::ToolCompletionTool(t) => self.handle_tool_completion(t),
+            #[cfg(feature = "code")]
             SaidTools::SalienceTool(t) => self.handle_salience(t),
+            #[cfg(feature = "code")]
             SaidTools::DreamTool(t) => self.handle_dream(t),
             SaidTools::AdminTool(t) => self.handle_admin(t),
+            #[cfg(feature = "code")]
             SaidTools::LspDefTool(t) => self.handle_lsp_def(t),
+            #[cfg(feature = "code")]
             SaidTools::LspRefsTool(t) => self.handle_lsp_refs(t),
+            #[cfg(feature = "code")]
             SaidTools::LspHoverTool(t) => self.handle_lsp_hover(t),
+            #[cfg(feature = "code")]
             SaidTools::LspSymbolsTool(t) => self.handle_lsp_symbols(t),
+            #[cfg(feature = "code")]
             SaidTools::RecallFixTool(t) => self.handle_recall_fix(t),
+            #[cfg(feature = "code")]
             SaidTools::LearnFixTool(t) => self.handle_learn_fix(t),
+            #[cfg(feature = "code")]
             SaidTools::RecallBlueprintTool(t) => self.handle_recall_blueprint(t),
+            #[cfg(feature = "code")]
             SaidTools::LearnBlueprintTool(t) => self.handle_learn_blueprint(t),
             #[cfg(feature = "forge")]
             SaidTools::ForgeListTool(t) => self.handle_forge_list(t),
@@ -1050,6 +1080,13 @@ impl SaidServerHandler {
         );
 
         let _ = brain.build_index();
+        // OKF concept graph for memory brains (default-on, opt out with SAID_OKF_LINKS=0) — mirrors
+        // the CLI `add` path so an MCP-`remember`-built brain gets the wiki-link reachability the ask
+        // Engine-D bridge needs. Routes personal-memory frames to the single-word-aware extractor;
+        // code/doc frames are untouched. Idempotent, so re-running per remember only adds new edges.
+        if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
+            let _ = brain.build_concept_links();
+        }
         brain.save().map_err(|e| CallToolError::from_message(e))?;
         let frame_count = brain.frames.active_count();
         // Pull tags off the just-written frame so the response can surface

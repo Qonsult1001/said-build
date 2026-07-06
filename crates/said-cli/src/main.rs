@@ -723,11 +723,10 @@ enum Commands {
         bruno: Option<std::path::PathBuf>,
     },
 
-    /// Agent-steering hook: read a coding agent's PreToolUse JSON on STDIN, inject relevant `.said`
-    /// recall on STDOUT when the agent is about to search code (else stays silent / passthrough).
-    /// Invoked as a subprocess by the agent's hook system — you don't normally run this by hand.
-    /// See `said setup`. (nudge-style: docs/said-structure/16-agent-steering.md)
-    #[cfg(feature = "code")]
+    /// Agent-steering hook: read the agent's hook JSON on STDIN, inject relevant `.said` recall on
+    /// STDOUT (UserPromptSubmit → recall; SessionEnd → backstop write; and, in code bundles, a
+    /// code-search re-injection). Invoked as a subprocess by the agent's hook system — you don't
+    /// normally run this by hand. See `said setup`. (docs/said-structure/16-agent-steering.md)
     Hook {
         /// Which agent's hook protocol to speak. Default: claude.
         #[arg(long, default_value = "claude")]
@@ -741,7 +740,8 @@ enum Commands {
     /// Register the `.said` agent-steering hook with a coding agent (opt-in). Writes the hook into
     /// the agent's GITIGNORED local settings (`.claude/settings.local.json`) and bundles a `said`
     /// skill — NEVER edits CLAUDE.md, so removal leaves no git trace. `--remove` cleanly undoes it.
-    #[cfg(feature = "code")]
+    /// Available in every bundle: the brain build installs a memory-only skill + recall/write hooks
+    /// (no code re-injection); code bundles add the code-investigation re-injection.
     Setup {
         /// Which agent to set up. Default: claude.
         #[arg(long, default_value = "claude")]
@@ -1532,9 +1532,7 @@ fn run() {
             cli.path.as_deref(), file, mode, symbol.as_deref(), line, anchor.as_deref(),
             content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
-        #[cfg(feature = "code")]
         Commands::Hook { ref agent, ref mode } => cmd_hook(cli.path.as_deref(), agent, mode),
-        #[cfg(feature = "code")]
         Commands::Setup { ref agent, remove, dry_run } => cmd_setup(cli.path.as_deref(), agent, remove, dry_run),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
@@ -2236,18 +2234,22 @@ fn cmd_add(
         return Err("Provide text or --file or --dir".into());
     };
 
+    let mut brain = open_brain(path)?;
+
+    // Auto doc_id when the user gives none. BUG FIX: the old fallback was `doc_{seconds}` — two `add`s
+    // in the SAME wall-clock second generated the IDENTICAL id, so the second silently OVERWROTE the
+    // first (doc_id dedup), losing memories on any rapid succession of adds. Use the brain's monotonic
+    // frame counter instead (`mem_<N>`, the same scheme `remember()` uses) — unique regardless of timing.
     let doc_id = if let Some(i) = id {
         i.to_string()
     } else if let Some(f) = file {
         Path::new(f)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| format!("doc_{}", chrono_free_timestamp()))
+            .unwrap_or_else(|| format!("mem_{}", brain.frames.total_count()))
     } else {
-        format!("doc_{}", chrono_free_timestamp())
+        format!("mem_{}", brain.frames.total_count())
     };
-
-    let mut brain = open_brain(path)?;
 
     // BLAKE3 dedup for --file
     if let Some(f) = file {
@@ -2273,6 +2275,17 @@ fn cmd_add(
         brain.add_with_title(&doc_id, &content, t);
     } else {
         brain.add(&doc_id, &content);
+    }
+
+    // OKF concept graph for MEMORY brains (default-on, opt out with SAID_OKF_LINKS=0). `init` builds
+    // this graph so code brains get the wiki-link reachability; a `remember`-built personal brain must
+    // get it too, or the ask Engine-D bridge (which pulls in sibling memories sharing a concept) never
+    // fires and recall on cross-referenced notes ("what is Alice leading" → the sibling that names the
+    // project) collapses. build_concept_links routes personal-memory frames to the single-word-aware
+    // extractor (so "Alice"/"Berlin" link), leaving code/doc frames on the multi-word extractor. It is
+    // idempotent (skips a link a frame already carries), so re-running per `add` only adds NEW edges.
+    if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
+        let _ = brain.build_concept_links();
     }
     brain.save()?;
 
@@ -3674,7 +3687,6 @@ fn cmd_serve(path: Option<&str>, top: usize, pillar: Option<&str>, json: bool) -
 /// `.said` decision, and writes the agent's decision JSON to STDOUT (or nothing = passthrough). This is
 /// the subprocess the agent's hook system invokes; it must be FAST and FAIL-OPEN (any error → emit
 /// nothing so the agent is never blocked). See sca_core::steering.
-#[cfg(feature = "code")]
 fn cmd_hook(path: Option<&str>, agent: &str, mode: &str) -> Result<(), String> {
     use std::io::Read;
     let Some(agent) = sca_core::steering::Agent::from_str_ci(agent) else {
@@ -3699,7 +3711,6 @@ fn cmd_hook(path: Option<&str>, agent: &str, mode: &str) -> Result<(), String> {
 /// `said setup [--remove] [--dry-run]` — opt-in registration of the agent-steering hook + bundled
 /// skill. Writes the agent's GITIGNORED local settings (never CLAUDE.md), so removal leaves no git
 /// trace. Idempotent; `--remove` cleanly undoes it.
-#[cfg(feature = "code")]
 fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
     use sca_core::steering::Agent;
     let Some(agent) = Agent::from_str_ci(agent) else {
@@ -3752,12 +3763,18 @@ fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Re
     }
 
     // ---- INSTALL ----
-    // 1) Bundle the skill (guidance lives here, NEVER CLAUDE.md).
+    // 1) Bundle the skill (guidance lives here, NEVER CLAUDE.md). Code bundles ship the coding skill
+    //    (learn_fix/blueprint/grep-first); the free brain bundle ships the memory-only skill
+    //    (remember/ask/journal) so it never nudges toward tools the brain doesn't have.
+    #[cfg(feature = "code")]
+    let skill_body: &str = said_prompts::steering::SKILL_BODY;
+    #[cfg(not(feature = "code"))]
+    let skill_body: &str = said_prompts::steering::SKILL_BODY_BRAIN;
     if dry_run {
-        println!("would write .claude/skills/said/SKILL.md ({} bytes)", said_prompts::steering::SKILL_BODY.len());
+        println!("would write .claude/skills/said/SKILL.md ({} bytes)", skill_body.len());
     } else {
         std::fs::create_dir_all(".claude/skills/said").map_err(|e| e.to_string())?;
-        std::fs::write(skill_path, said_prompts::steering::SKILL_BODY).map_err(|e| e.to_string())?;
+        std::fs::write(skill_path, skill_body).map_err(|e| e.to_string())?;
         println!("said setup: wrote .claude/skills/said/SKILL.md");
     }
 
@@ -3781,10 +3798,16 @@ fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Re
         if let Some(parent) = settings_path.parent() { let _ = std::fs::create_dir_all(parent); }
         std::fs::write(settings_path, serde_json::to_string_pretty(&settings).unwrap())
             .map_err(|e| e.to_string())?;
-        println!("said setup: registered PreToolUse hook in {} (gitignored, backed up to *.bak)", agent.settings_path());
+        #[cfg(feature = "code")]
+        println!("said setup: registered agent hooks (recall + write + code re-injection) in {} (gitignored, backed up to *.bak)", agent.settings_path());
+        #[cfg(not(feature = "code"))]
+        println!("said setup: registered agent memory hooks (recall + session-end write) in {} (gitignored, backed up to *.bak)", agent.settings_path());
     }
 
+    #[cfg(feature = "code")]
     println!("\n{}", said_prompts::steering::STEERING_SUMMARY);
+    #[cfg(not(feature = "code"))]
+    println!("\n{}", said_prompts::steering::STEERING_SUMMARY_BRAIN);
     println!("To remove cleanly (no git trace): said setup --remove");
     Ok(())
 }
@@ -3796,7 +3819,6 @@ fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Re
 /// context rides the user-message slot and the model USES it. On each prompt the hook recalls `.said`
 /// and injects the matching code as FACTUAL labeled data. UserPromptSubmit fires for EVERY prompt (no
 /// tool matcher). Idempotent — replaces any prior said entry.
-#[cfg(feature = "code")]
 fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str>) {
     // Embed the resolved brain path so the hook subprocess always loads the right brain regardless of
     // the cwd the agent invokes it from (cwd auto-detect is unreliable as a subprocess).
@@ -3831,19 +3853,24 @@ fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str
     // hook re-surfaces that fix as allow+context so the agent doesn't re-derive what it already concluded
     // (the A2 over-investigation). Matcher scopes it to the investigation tools so it doesn't fire on
     // Write/Edit. Fail-open (allow + context, never blocks); the fix-recall floor self-abstains otherwise.
-    let pre_entry = serde_json::json!({
-        "matcher": "Read|Grep|Bash",
-        "hooks": [ { "type": "command", "command": command, "__said": true } ]
-    });
-    let pre = hooks_obj.entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
-    let pre_arr = pre.as_array_mut().unwrap();
-    pre_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
-    pre_arr.push(pre_entry);
+    // CODE BUNDLES ONLY: this re-injection is about code-investigation tools (Grep/Bash) — a free
+    // memory brain never greps a codebase, so it installs only the UserPromptSubmit recall + SessionEnd
+    // write above. Skipping it here keeps the brain hook memory-pure; code bundles are unaffected.
+    #[cfg(feature = "code")]
+    {
+        let pre_entry = serde_json::json!({
+            "matcher": "Read|Grep|Bash",
+            "hooks": [ { "type": "command", "command": command, "__said": true } ]
+        });
+        let pre = hooks_obj.entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
+        let pre_arr = pre.as_array_mut().unwrap();
+        pre_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+        pre_arr.push(pre_entry);
+    }
 }
 
 /// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.
 /// Cleans BOTH PostToolUse (current) and PreToolUse (legacy, in case an old setup wrote there).
-#[cfg(feature = "code")]
 fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
     let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false; };
     let mut changed = false;
@@ -3858,7 +3885,6 @@ fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
 }
 
 /// Does a PreToolUse entry belong to `.said`? (marked with our `__said` flag inside its hooks).
-#[cfg(feature = "code")]
 fn hook_entry_is_said(entry: &serde_json::Value) -> bool {
     entry.get("hooks").and_then(|h| h.as_array())
         .map(|arr| arr.iter().any(|h| h.get("__said").and_then(|x| x.as_bool()).unwrap_or(false)))
@@ -3866,7 +3892,6 @@ fn hook_entry_is_said(entry: &serde_json::Value) -> bool {
 }
 
 /// Minimal shell-quote for the binary path inside the hook command (handles spaces).
-#[cfg(feature = "code")]
 fn shell_quote(s: &str) -> String {
     if s.contains(' ') || s.contains('"') { format!("\"{}\"", s.replace('"', "\\\"")) } else { s.to_string() }
 }
