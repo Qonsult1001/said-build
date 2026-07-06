@@ -2229,7 +2229,12 @@ fn cmd_add(
     let content = if let Some(f) = file {
         std::fs::read_to_string(f).map_err(|e| format!("Cannot read file '{}': {}", f, e))?
     } else if let Some(t) = text {
-        t.to_string()
+        // WRITE-TIME temporal grounding (Mem0 Layer-1, deterministic): resolve relative phrases
+        // ("last quarter"/"last year") to absolute dates against TODAY so later recall finds the
+        // memory. Inline-text adds only — a `--file` add is document ingest, not a personal note,
+        // and must be stored verbatim. `today` from the clock here; the transform itself is pure.
+        let (ty, tm, td) = sca_core::time_compat::today_ymd();
+        sca_core::time_compat::ground_relative_dates(t, ty, tm, td)
     } else {
         return Err("Provide text or --file or --dir".into());
     };

@@ -1065,6 +1065,15 @@ impl SaidServerHandler {
 
         let extra_tags = t.tags.unwrap_or_default();
 
+        // WRITE-TIME temporal grounding (research-proven Mem0 Layer-1): resolve relative phrases
+        // ("last quarter"/"last year") to absolute dates in the stored text against TODAY, so later
+        // semantic recall finds the memory without the reader having to know what "last year" meant
+        // when it was written. Deterministic, no-LLM; `today` comes from the clock here at the I/O
+        // boundary (sca-core's transform stays clock-free/reproducible). Personal memories only —
+        // ingested/code frames don't take this path.
+        let (ty, tm, td) = sca_core::time_compat::today_ymd();
+        let grounded = sca_core::time_compat::ground_relative_dates(&t.content, ty, tm, td);
+
         // Route through `remember_with_salience` so every MCP `remember` call
         // gets both Decision 4's salience scoring AND step 8's Surprise /
         // reconsolidation tagging. Lexical correction markers + semantic
@@ -1073,7 +1082,7 @@ impl SaidServerHandler {
         // FrameMeta.tags alongside any caller-provided extras.
         let (frame_id, scored) = brain.remember_with_salience(
             t.id.as_deref(),
-            &t.content,
+            &grounded,
             t.title.as_deref(),
             pillar_enum,
             extra_tags,
