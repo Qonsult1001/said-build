@@ -96,7 +96,54 @@ async fn main() -> SdkResult<()> {
             boundary_content
         )
     } else {
+        // BRAIN (free, memory-only) INSTRUCTIONS — this bundle exposes ONLY the memory tools
+        // (remember/ask/get/create/open/delete/history/checkout/status/list_concepts/admin), so the
+        // nudge must reference ONLY those. It must NOT mention code/SQL/modules/search/snapshot/ingest
+        // — those are paid tiers (Pro/Developer) not present here, and advertising them in the free
+        // product both confuses the user and leaks the paywall.
+        #[cfg(not(feature = "code"))]
+        let caps = String::from(
+            "This server provides access to a .said portable brain file — your personal, \
+             single-file memory. It stores notes, facts, decisions, and preferences, and finds \
+             them back by meaning when you ask in plain English.\n\n\
+             ## HOW TO TALK TO USERS\n\n\
+             Users are often non-technical. NEVER dump raw tool output. Every response must:\n\
+             1. State what happened in plain English first (e.g. \"✓ Saved that to your brain.\").\n\
+             2. Suggest the next 1-2 likely actions with copy-paste-ready phrasing.\n\
+             3. If the user asks 'how do I…', give the exact tool call, not an abstract description.\n\n\
+             ## ANTI-HALLUCINATION\n\n\
+             Report the EXACT values the tool returned this turn. Never invent counts or status. \
+             If a tool errors, say so — don't fabricate a next step.\n\n\
+             ## MEMORY CONSULTATION (the brain is PRIMARY)\n\n\
+             The brain is the user's persistent memory. **ALWAYS call `ask` first** when the question \
+             contains any of: \"you/we/our/my\", memory cues (\"remember\", \"earlier\", \"last time\", \
+             \"we decided\", \"told you\", \"saved\"), or \"what do I have on X / is there anything about X\". \
+             If `ask` returns a relevant result, quote it and cite the id — never override a stored \
+             memory with training knowledge. For purely general knowledge (\"how does async work?\"), \
+             answer from training and skip the brain. If the brain is empty, say so; don't pretend to recall.\n\n\
+             ## AUTO-MEMORY (act as the user's note-taker)\n\n\
+             Chat turns are ephemeral — the brain only remembers what you save with `remember`. \
+             Call `remember` whenever the user: makes a decision, states a preference/constraint, \
+             shares a fact worth keeping, or asks you to remember (always confirm you did).\n\
+             How: `remember content=\"<self-contained sentence>\" id=\"<short-slug>\"`. \
+             Write content that will still make sense in 6 months without the surrounding chat. \
+             After saving, tell the user briefly (\"✓ saved that\") and move on.\n\n\
+             ## TOOLS (this is a memory brain)\n\
+             - `remember` — save a note/fact/decision as a memory.\n\
+             - `ask` — find memories by meaning, in plain English. The main command.\n\
+             - `get` — read one memory's exact text by its id.\n\
+             - `delete` — remove a memory (recoverable via `admin`).\n\
+             - `history` / `checkout` — see or restore earlier versions of a memory.\n\
+             - `status` — how many memories the brain holds.\n\
+             - `list_concepts` — the topics your memories connect to.\n\
+             - `create` / `open` — make or switch to a brain file.\n\
+             - `admin` — recover deleted memories, manage retention.\n\n\
+             ## FIRST CONTACT\n\
+             If the brain is empty, call `prompts/get name=\"onboard\"` and paste the welcome. \
+             Otherwise greet briefly and offer `ask`. Check `status` if unsure — never overwrite blindly.\n");
+
         // Build dynamic instructions based on compiled features
+        #[cfg(feature = "code")]
         let mut caps = String::from(
             "This server provides access to a .said portable brain file — a single-file \
              searchable brain containing code, SQL schemas, and memories.\n\n\
@@ -211,6 +258,7 @@ async fn main() -> SdkResult<()> {
         #[cfg(feature = "whisper")]
         caps.push_str("- Audio/video transcripts (MP4, MP3, WAV — speech-to-text)\n");
 
+        #[cfg(feature = "code")]
         caps.push_str("\n## TOOLS\n\n\
              - 'open': Attach this MCP server to a different .said brain (creates it empty if missing). \
                Use this to pick your brain name without restarting Cursor.\n\
@@ -242,7 +290,7 @@ async fn main() -> SdkResult<()> {
         #[cfg(feature = "docs")]
         caps.push_str("- 'ingest': Add files (PDF, DOCX, TXT, MD). Auto-detects format.\n");
 
-        #[cfg(not(feature = "docs"))]
+        #[cfg(all(feature = "code", not(feature = "docs")))]
         caps.push_str("- 'ingest': Add text/code files. Document support (PDF, DOCX) not compiled in.\n");
 
         #[cfg(feature = "whisper")]
@@ -250,6 +298,7 @@ async fn main() -> SdkResult<()> {
 
         // Code-locate steering: tell the agent to reach for `.said` BEFORE grepping the codebase.
         // This is the TRUSTED channel — the model CALLS `ask` (vs distrusting injected hook context).
+        #[cfg(feature = "code")]
         caps.push_str("\n## LOCATING CODE (use `.said` BEFORE grep)\n\n\
              When you need to LOCATE something in this project's code — a function by what it DOES \
              (not its exact name), the source of a bug from a symptom, or a past fix — call `ask` \

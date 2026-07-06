@@ -105,9 +105,51 @@ ONBOARDING an existing repo (harvest, 2-step — YOU supply the naming, `.said` 
 call tokens, and NOT the entity-specific slots (those stay the 20% you fill per entity). NL phases are \
 language-neutral and recall by intent; raw call tokens do not.";
 
+/// Memory-only SKILL body for the FREE brain bundle (no `code` feature). Same "note-taker"
+/// contract as the coding skill, but references ONLY the memory verbs the brain ships
+/// (`ask`/`remember`/`journal`) — no `learn_fix`/`learn_blueprint`/`harvest`/grep/LSP (those are
+/// paid-tier coding features not present in a brain build). `said setup` installs THIS on a brain
+/// build so the bundled skill never nudges toward tools the free brain doesn't have.
+pub const SKILL_BODY_BRAIN: &str = "\
+---
+name: said
+description: Use .said memory to recall the user's notes, facts, and decisions before answering from general knowledge.
+---
+
+# Using .said
+
+This project has a `.said` brain — the user's portable personal memory.
+
+Default: before answering anything specific to the user, their preferences, or anything they told you \
+earlier, query `.said` first with `ask`. It finds memories by MEANING and recalls context from earlier \
+sessions. (A hook also injects the most relevant memory on each prompt; `ask` is how you query it \
+yourself.)
+
+Query (`ask`) when the user's question involves:
+  • \"you / we / our / my\", or memory cues (\"remember\", \"earlier\", \"last time\", \"we decided\", \
+\"told you\", \"saved\");
+  • \"what do I have on X\" / \"is there anything about X\".
+It returns the user's stored facts, never invented. Quote what it returns and cite the id; never \
+override a stored memory with general knowledge. For purely general questions, answer normally and skip \
+the brain. If the brain is empty, say so — don't pretend to recall.
+
+Write the moment the user tells you something a future session would pay to know — you are the user's \
+note-taker:
+  • a user fact, preference, decision, or constraint, or the user said \"remember …\" → `remember`: \
+one distilled, self-contained fact (\"remember my mom's birthday is 3 May\", \"we chose port 1434\"). \
+Confirm briefly once saved.
+  • closing out a meaningful session → `journal`: a short dated summary of what was decided or done.
+
+Distil, don't dump. Skip the obvious. `.said` dedupes. Rule of thumb: did the user share or ask you to \
+keep a fact? `remember`. Wrapping up a session worth recording? `journal`.";
+
 /// One-line summary used by `said setup` output / `said plugin list`.
 pub const STEERING_SUMMARY: &str =
     "Steers the coding agent to query .said before grepping (PreToolUse hook injects recall; removal-safe).";
+
+/// Brain (free, memory-only) variant of the summary — no coding/grep language.
+pub const STEERING_SUMMARY_BRAIN: &str =
+    "Steers your agent to recall from .said before answering, and save memories at session end (removal-safe).";
 
 #[cfg(test)]
 mod tests {

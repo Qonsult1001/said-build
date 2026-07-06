@@ -1244,7 +1244,30 @@ pub struct HarvestBlueprintsTool {
 
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
-#[cfg(not(feature = "forge"))]
+//
+// BRAIN (free, memory-only) TOOL SURFACE — incremental hide-list.
+// The `brain` bundle is built WITHOUT `code` (and without `forge`). Coding tools that don't
+// belong in a pure-memory brain are hidden from its `tools/list` by omitting them from THIS
+// branch only — the `code` branches below keep every tool, so coding/coding-plus/full are
+// UNCHANGED (all 29+ tools intact).
+//
+// BRAIN = the PERSONAL (free) tier — memory only. Its MCP `tools/list` MIRRORS the brain CLI's
+// documented memory commands (create/add/get/delete/ask/stats/list-concepts/history/checkout/
+// admin/use), so CLI and MCP stay aligned. Everything else is a PAID tier and is hidden here:
+//   • ingest (PDF/DOCX)                                  → Pro tier
+//   • sym, init, discover, overview, snapshot, sandbox,
+//     clean, edit, edit_batch, harvest*, lsp_*, recall_fix,
+//     learn_fix, recall_blueprint, learn_blueprint        → Developer tier (code/coding-memory)
+//   • search (overlaps `ask`, handles code/SQL), salience,
+//     dream, sync, journal, session_end, tool_completion   → not user-facing memory verbs / not in
+//                                                            the brain CLI → hidden from the free surface
+// The code branches below keep every tool, so coding/coding-plus/full are UNCHANGED.
+#[cfg(all(not(feature = "forge"), not(feature = "code")))]
+tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, RememberTool, StatusTool,
+                      HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool]);
+
+// CODE builds (coding / coding-plus / full), no forge — FULL tool set, unchanged.
+#[cfg(all(not(feature = "forge"), feature = "code"))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
