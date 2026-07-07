@@ -16,7 +16,7 @@ Every command below is real; type them exactly and check the "You should see:" b
 
       said 0.11.1
 
-  If `said` isn't found, install it first: **[How to download and install `said`](how-to-install-said.md)**.
+  If `said` isn't found, install it first: **[How to download and install `said`](../how-to-install-said.md)**.
 - [ ] A terminal open in an empty folder you can write to (we'll create one file there).
 - [ ] About 5 minutes.
 

@@ -489,3 +489,65 @@ gate, NOT the gap (verified: 400-gate negative/existence stays 1.00 with the gap
 400-memory recall-quality 10/10 (negative/existence 1.00), determinism, rare-term, temporal all still
 green — zero regression. This is the correct fix for the preference gap: return the top-K, let the LLM
 pick — NOT lexical/stem/bump tuning (which traded single-hop twins; reverted earlier this session).
+
+---
+
+## 15. (RESOLVED) Production surface gaps — CLI config no-op, MCP param inconsistency, MCP no help / description leaks
+
+Found by a full command/tool sweep of the shipped brain binaries against a real 100-memory brain
+(exercise EVERY CLI command + EVERY MCP tool, not just the happy path). Four surface defects — none a
+recall bug, all "the product surface isn't production-clean":
+
+**15a — CLI `config` was a no-op stub.** `said config <k> <v>` printed "Set k=v" but stored nothing;
+`said config <k>` always printed "(not set)". The function had a "for now… stored in a simple file"
+comment and never wrote/read anything. **Fix:** `resolve.rs` gained `set_config`/`get_config`/
+`list_config` (persist a key→value map to `config.json` in the config dir, same dir as the `use`
+default), and `cmd_config` now calls them. Verified: set in one process, get in a SEPARATE process
+returns the value; no-arg lists all keys.
+
+**15b — MCP param inconsistency (`name` vs `doc_id`).** `get`/`delete` took `doc_id`, but
+`history`/`checkout` took `name` for the same thing (a memory's id). A caller switching tools hit
+"missing field `name`" / "missing field `doc_id`" errors. **Fix:** `history`/`checkout` now take
+`doc_id` (consistent with the rest), with `#[serde(alias = "name")]` so legacy `name` calls still work.
+Handler updated `t.name` → `t.doc_id`. Verified: both `{doc_id:…}` and `{name:…}` work; schema
+advertises `doc_id`.
+
+**15c — `said-mcp --help` produced NOTHING.** The MCP binary is a stdio server, so running it by hand
+just blocked on stdin — a human had no way to see what it is or what tools it exposes (the CLI has a
+21-command `--help` menu; MCP had nothing). **Fix:** `main.rs` handles `--help`/`-h` (prints a
+brain-tier menu of the 11 tools + connect example) and `--version`/`-V` BEFORE starting the server.
+
+**15d — MCP tool descriptions leaked the coding tier into the free brain.** `ask`/`get`/`history`/
+`checkout`/`status` descriptions said "code", "symbol", "project's", "call-graph", "LSP", "SQL", "grep"
+— copied from the coding build and never reworded for the memory-only brain. The agent reads these
+(they ARE the tool contract), so it both confused the agent and leaked paid-tier framing into the free
+product (the same leak the MCP *instructions* were already guarded against — but the *tool descriptions*
+weren't). **Fix:** reworded to tier-neutral, memory-accurate language ("Find memories by meaning", "Read
+the exact text of a memory by its id", "version history of a memory") that's true for every build.
+Verified: `tools/list` has ZERO leaks; all 11 tools still functional.
+
+**Lesson → the global standard (see [production-surface-parity](#production-surface-parity-the-standard)
+below).** Recall correctness is necessary but not sufficient for a production deliverable: the CLI and
+MCP are TWO surfaces of one product and must reach parity — human-facing `--help` on both, tier-accurate
+descriptions, consistent parameter names, and NO stub commands. Sweep every command/tool against a real
+brain before shipping.
+
+## Production surface parity — the standard
+
+To stop the class of defect in #15 from recurring, every shipped `.said` binary must satisfy, per build
+variant:
+
+1. **Human-facing `--help` and `--version` on BOTH surfaces.** The CLI's command menu and the MCP
+   server's `--help` (tool menu) must both render for a person — an MCP stdio server that only speaks
+   JSON-RPC to an agent still needs `--help` so a human can see it.
+2. **Tier-accurate descriptions.** A build's command/tool descriptions must describe ONLY what that
+   build exposes. The free brain must not mention code/SQL/symbols/modules (paid tiers) in ANY
+   surface — not the MCP instructions AND not the individual tool descriptions.
+3. **Consistent parameter names across tools.** The same concept uses the same param everywhere
+   (`doc_id` for a memory's id in `get`/`delete`/`history`/`checkout`). Rename with a `serde(alias)`
+   for back-compat; never ship two names for one thing.
+4. **No stub commands.** A command that prints success but does nothing (the old `config`) is a
+   correctness bug. Every advertised command must actually do what it says, verified against a real brain.
+5. **Sweep-before-ship.** Exercise EVERY CLI command and EVERY MCP tool against a populated brain
+   (see the #15 sweep) — not just recall. A command that errors on a valid call, or whose help is
+   blank, is a release blocker.

@@ -4163,7 +4163,8 @@ fn cmd_compact(
 fn cmd_config(key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), String> {
     match (key, value) {
         (Some(k), Some(v)) => {
-            // For now, config is stored in a simple file next to the default config
+            // Persist to config.json in the config dir (was a no-op stub before).
+            resolve::set_config(k, v)?;
             if json {
                 println!("{}", serde_json::json!({"set": k, "value": v}));
             } else {
@@ -4172,19 +4173,27 @@ fn cmd_config(key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), 
             Ok(())
         }
         (Some(k), None) => {
+            let val = resolve::get_config(k);
             if json {
-                let null_val: Option<String> = None;
-                println!("{}", serde_json::json!({"key": k, "value": null_val}));
+                println!("{}", serde_json::json!({"key": k, "value": val}));
             } else {
-                println!("{}: (not set)", k);
+                match val {
+                    Some(v) => println!("{}: {}", k, v),
+                    None => println!("{}: (not set)", k),
+                }
             }
             Ok(())
         }
         _ => {
+            let map = resolve::list_config();
             if json {
-                println!("{}", serde_json::json!({"config": {}}));
-            } else {
+                println!("{}", serde_json::json!({"config": map}));
+            } else if map.is_empty() {
                 println!("No config keys set. Usage: said config <key> [value]");
+            } else {
+                for (k, v) in &map {
+                    println!("{} = {}", k, v);
+                }
             }
             Ok(())
         }

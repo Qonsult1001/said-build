@@ -5044,9 +5044,9 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
         let all_frames = brain.frames.get_all_frames();
         let mut chain: Vec<(u64, String, Option<f32>)> = Vec::new(); // (frame_id, status, delta)
 
-        // Find all frames matching this name (active + tombstoned)
+        // Find all frames matching this doc_id (active + tombstoned)
         for meta in &all_frames {
-            if meta.doc_id.contains(&t.name) || meta.doc_id.ends_with(&format!("::{}", t.name)) {
+            if meta.doc_id.contains(&t.doc_id) || meta.doc_id.ends_with(&format!("::{}", t.doc_id)) {
                 let status = match meta.status {
                     sca_core::frames::FrameStatus::Active => "active",
                     sca_core::frames::FrameStatus::Deleted => "deleted",
@@ -5058,11 +5058,11 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
 
         if chain.is_empty() {
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                format!("No history found for: {}", t.name),
+                format!("No history found for: {}", t.doc_id),
             )]));
         }
 
-        let mut output = format!("History for '{}': {} version(s)\n\n", t.name, chain.len());
+        let mut output = format!("History for '{}': {} version(s)\n\n", t.doc_id, chain.len());
         for (i, (fid, status, delta)) in chain.iter().enumerate() {
             output.push_str(&format!(
                 "v{}: frame_id={} [{}] delta={:.4}\n",
@@ -5081,7 +5081,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
         // Find the frame_id for the requested version
         let all_frames = brain.frames.get_all_frames();
         let matching: Vec<&&sca_core::frames::FrameMeta> = all_frames.iter()
-            .filter(|m| m.doc_id.contains(&t.name) || m.doc_id.ends_with(&format!("::{}", t.name)))
+            .filter(|m| m.doc_id.contains(&t.doc_id) || m.doc_id.ends_with(&format!("::{}", t.doc_id)))
             .collect();
 
         if (t.version as usize) >= matching.len() {

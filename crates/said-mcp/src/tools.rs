@@ -42,21 +42,17 @@ pub struct SearchTool {
 
 #[mcp_tool(
     name = "ask",
-    description = "Find code or knowledge in this project's `.said` memory by MEANING. Call this \
-                   BEFORE grepping or reading files when you need to LOCATE something: a function by \
-                   what it DOES (not its exact name), the source of a bug from a symptom, or a past \
-                   fix/decision — it points at the precise file + symbol far cheaper than reading the \
-                   codebase, and finds matches grep can't (semantic + symbol + call-graph in one \
-                   query). Returns ranked results [confidence][kind] doc_id + snippet; act on what it \
-                   returns (and hand symbols to your LSP for type-precise references). It does not \
-                   invent results — if it has nothing relevant it returns nothing, then grep normally. \
-                   Runs the 3-engine fusion (Sym 1.00 / Grep 0.40-0.95 / SCA semantic 0.30-0.80); \
-                   deep=true widens the pool. Same fusion as `said ask` on the CLI. \
-                   EFFICIENCY: a single high-confidence hit ([0.95]+ or [symbol]) IS the answer — read \
-                   that one frame with `get` and stop; do NOT re-ask the same question many ways or \
-                   sweep the whole codebase to double-check. Re-query only if the top result is low \
-                   confidence or clearly off-topic. One good `ask` should REPLACE a multi-step \
-                   investigation, not kick one off.",
+    description = "Find memories in the brain by MEANING — the main way to recall. Ask in plain \
+                   English (\"what did I decide about X\", \"who is my landlord\", \"what do I use for \
+                   enterprise systems\") and it returns the most relevant memories, best first, even \
+                   when your words don't match the stored words. Call this FIRST whenever the question \
+                   is about the user or what they've saved. Returns ranked results \
+                   [confidence][kind] doc_id + snippet; read the top few and answer from them — the \
+                   right memory is essentially always in that set (the brain surfaces the top-K, you \
+                   pick). It does not invent results: if it has nothing relevant it returns nothing \
+                   (say so, don't fabricate). deep=true widens the pool for broad \"tell me everything \
+                   about X\" synthesis. Same recall as `said ask` on the CLI. EFFICIENCY: don't re-ask \
+                   the same question many ways — one good `ask` and reading the results is enough.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -77,14 +73,13 @@ pub struct AskTool {
 
 #[mcp_tool(
     name = "get",
-    description = "Read the exact content of a specific frame by its doc_id. \
-                   Use after 'search' to get the full text of a result. \
-                   Returns the complete frame content word-for-word.",
+    description = "Read the exact, word-for-word text of a specific memory by its id (doc_id). \
+                   Use after 'ask' to pull the full content of a result you want to quote.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetTool {
-    /// The doc_id to retrieve (e.g. "NL.pdf::page_0005" or "main.rs::compact_block_dict")
+    /// The id (doc_id) of the memory to retrieve — the value shown in an `ask` result.
     pub doc_id: String,
 }
 
@@ -182,10 +177,9 @@ pub struct RememberTool {
 
 #[mcp_tool(
     name = "status",
-    description = "Returns brain health: active frames, file size, dream cycles, \
-                   S_slow magnitude, pending dream queries, tombstone count, \
-                   SCA index coverage, symbol count. \
-                   Use to understand what the brain knows and how active it is.",
+    description = "Show how many memories the brain holds and its health: active memory count, \
+                   file size, deleted (recoverable) count, and index coverage. \
+                   Use to see what the brain knows and how much is stored.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -216,7 +210,7 @@ pub struct SymTool {
 
 #[mcp_tool(
     name = "history",
-    description = "Show the version history of a symbol or document. Walks the \
+    description = "Show the version history of a memory (by its id). Walks the \
                    tombstone chain showing each version with its semantic delta \
                    (how much the content changed). Like 'git log' for knowledge. \
                    Use before 'checkout' to see available versions.",
@@ -224,8 +218,10 @@ pub struct SymTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct HistoryTool {
-    /// Symbol name or doc_id to show history for
-    pub name: String,
+    /// The id of the memory to show history for. Same `doc_id` used by `get`/`delete`
+    /// (accepts the legacy `name` alias too).
+    #[serde(alias = "name")]
+    pub doc_id: String,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -234,15 +230,16 @@ pub struct HistoryTool {
 
 #[mcp_tool(
     name = "checkout",
-    description = "Restore a past version of a symbol or document as the new HEAD. \
+    description = "Restore a past version of a memory (by its id) as the new current version. \
                    The current version becomes a tombstone (preserved in history). \
                    Use 'history' first to see available versions.",
     destructive_hint = false
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct CheckoutTool {
-    /// Symbol name or doc_id
-    pub name: String,
+    /// The id of the memory. Same `doc_id` used by `get`/`delete` (accepts the legacy `name` alias too).
+    #[serde(alias = "name")]
+    pub doc_id: String,
     /// Version index from 'history' (0 = original, 1 = first edit, etc.)
     pub version: u32,
 }

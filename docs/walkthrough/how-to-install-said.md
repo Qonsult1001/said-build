@@ -2,10 +2,40 @@
 
 > Goal: get the `said` command working on your computer, starting from nothing. When
 > you're done, `said --version` works in your terminal and you're ready for the
-> [tutorial](tutorial-your-first-brain.md).
+> [tutorial](cli/tutorial-your-first-brain.md).
 
-`said` is a single self-contained program — no installer, no dependencies, nothing to
-configure. You download one file, unzip it, and run it. It works offline.
+`said` is a single self-contained program — no dependencies, nothing to configure. It works offline.
+There are three ways to install it, easiest first.
+
+## Option A — one-line install (recommended)
+
+**Linux / macOS** — paste into a terminal:
+
+    curl -fsSL https://github.com/Qonsult1001/said-build/releases/latest/download/install.sh | sh
+
+**Windows** — paste into PowerShell:
+
+    irm https://github.com/Qonsult1001/said-build/releases/latest/download/install.ps1 | iex
+
+This downloads `said` + `said-mcp` for your OS, installs them, and adds them to your PATH. Reopen your
+terminal and run `said --version`. Done — skip to the [tutorial](cli/tutorial-your-first-brain.md).
+
+## Option B — native installer (double-click)
+
+Download and run the installer for your OS from the
+[releases page](https://github.com/Qonsult1001/said-build/releases/latest):
+
+- **Windows** → `said-setup-<version>-x64.exe` — run it; it installs `said` + `said-mcp` and adds them
+  to your PATH. Uninstall from *Add or Remove Programs*.
+- **macOS** (Apple Silicon) → `said-<version>-arm64.pkg` — open it; installs into `/usr/local/bin`.
+  (Unsigned for now: if macOS blocks it, right-click the `.pkg` → **Open**.)
+- **Linux** (Debian/Ubuntu) → `said_<version>_amd64.deb` — install with
+  `sudo apt install ./said_<version>_amd64.deb` (installs to `/usr/bin`).
+
+## Option C — download the zip manually (no installer)
+
+The most manual path — download, unzip, add to PATH yourself. Use this if you want to control exactly
+where the binaries live.
 
 ## Step 1 — Download the right file for your computer
 
@@ -75,5 +105,5 @@ You should see:
 
 ## Next step
 
-- **[Tutorial: Your first portable brain](tutorial-your-first-brain.md)** — create a
+- **[Tutorial: Your first portable brain](cli/tutorial-your-first-brain.md)** — create a
   brain, store a memory, and ask it a question.

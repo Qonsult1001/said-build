@@ -39,6 +39,18 @@ use handler::SaidServerHandler;
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
+    // Human-facing --help / --version. Without this, running the binary by hand just blocks on stdin
+    // (it's an MCP stdio server), so a person had no way to see what it is or what tools it exposes.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return Ok(());
+    }
+    if argv.iter().any(|a| a == "--version" || a == "-V") {
+        println!("said-mcp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Parse --path flag (same as said-cli)
     let said_path = std::env::args()
         .skip_while(|a| a != "--path")
@@ -381,4 +393,63 @@ async fn main() -> SdkResult<()> {
         eprintln!("said-mcp error: {}", e);
     }
     Ok(())
+}
+
+/// Human-facing help for `said-mcp --help`. This is an MCP stdio server (an AI agent normally spawns
+/// it and reads its tools over the protocol), but a person running it by hand deserves to see what it
+/// is and what it offers — mirroring the `said` CLI's command menu.
+fn print_help() {
+    #[cfg(not(feature = "code"))]
+    let body = "\
+said-mcp — portable brain MCP server (Personal / Free tier)
+
+A single-file personal memory, served over MCP so an AI agent (Claude, Cursor, …) can read and write
+it for you. Offline, no cloud, no LLM inside — the agent is the LLM.
+
+USAGE:
+    said-mcp --path <brain.said>     Start the server on a brain file (an agent connects over stdio)
+    said-mcp --help                  Show this help
+    said-mcp --version               Show the version
+
+    The agent steering is built in: on connect the server tells the agent to recall with `ask`
+    before answering and save with `remember`. Nothing to paste or configure.
+
+TOOLS THE AGENT CAN CALL (memory-only — this is the free tier):
+    ask             Find memories by meaning (the main recall command)
+    remember        Save a note / fact / decision / preference as a memory
+    get             Read one memory's exact text by its id
+    delete          Remove a memory (recoverable from the recycle bin)
+    list_concepts   List the [[wikilink]] concepts your memories are linked to
+    history         Show the version history of a memory
+    checkout        Restore an earlier version of a memory
+    status          How many memories the brain holds + its health
+    open            Attach the server to a different .said brain file
+    create          Create a new, empty brain file
+    admin           Recover deleted memories and manage retention
+
+CONNECT (example MCP client config):
+    {
+      \"mcpServers\": {
+        \"said-brain\": {
+          \"command\": \"said-mcp\",
+          \"args\": [\"--path\", \"my-brain.said\"]
+        }
+      }
+    }
+
+For the terminal equivalent, use the `said` CLI (`said --help`). Same brain file, either way.";
+
+    #[cfg(feature = "code")]
+    let body = "\
+said-mcp — .said MCP server
+
+USAGE:
+    said-mcp --path <brain.said>     Start the server on a brain file (an agent connects over stdio)
+    said-mcp --help                  Show this help
+    said-mcp --version               Show the version
+
+An AI agent connects over MCP stdio and calls the tools this build advertises (see the agent's
+tools/list). For the terminal equivalent use the `said` CLI (`said --help`).";
+
+    println!("{body}");
 }
