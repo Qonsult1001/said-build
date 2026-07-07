@@ -453,3 +453,39 @@ returns the gold at rank 1.
 IN-SESSION immediately after the writes (before the brain settles to disk) — the saved brain (what a
 real user reopens; verified via CLI + reopened MCP session) has the gold at rank 1. That in-session vs
 saved-state ranking inconsistency is a distinct low-impact concern (real usage reopens), not this fix.
+
+---
+
+## 14. (RESOLVED) Abstention gap-filter hid a real answer from the LLM-picks contract
+
+**Commit:** `<pending>`
+
+**Symptom.** At 4000 memories, 2 of 10 preference queries returned **only 1 result** and the correct
+memory was ABSENT: "what car do I drive" → 1 filler note (gold "My car is a blue Toyota Corolla" gone),
+"what did I study" → 2-3 filler (gold "I studied marine biology" gone). Widening `--top` to 20/100/500
+did nothing — still 1-2 results.
+
+**Root cause (traced with the built-in env A/B knobs — no code change to diagnose).** The gold was NOT
+lost: `--deep` (and `SAID_ASK_ABSTAIN=0`) returned it at **rank 10**. Isolating the three abstention
+sub-filters (`SAID_ASK_FLOOR` / `SAID_ASK_GAP` / `SAID_ASK_ZMIN`) pinned it to the **GAP filter**
+(ask.rs ~865): it drops semantic hits trailing the leader by more than `gap` (0.20). The weak static
+encoder (doc 3.2) scored **9 filler notes ABOVE the gold** ("what car do I drive" is closer in the
+mean-pooled 128-dim space to "internal survey record N" than to "My car is a Toyota" — the gold sat at
+1.35 while filler led at 2.51), so the gold trailed the leader by far more than the gap and was cut,
+collapsing the returned list to 1. That HID a real answer that was sitting in the top-10 from the LLM —
+directly violating the documented **TOP-K + LLM-picks** contract (14.15-canon-memory.md: "rank@1 was the
+wrong metric… top-K-then-model-picks is"; 3.5 + FIXES-LOG #7: ".said surfaces the top-N and the LLM
+reranks by reading back").
+
+**Fix (design-aligned, NOT encoder/lexical tuning).** The gap filter now PRESERVES the top-K window: it
+may only trim the tail BEYOND the requested `top`, never cut a candidate WITHIN the first `top`. So a
+real answer the encoder ranked low still reaches the LLM's context, which reads all K and picks it. The
+gap keeps its legitimate job (trimming the "returns the whole brain" tail past top-K). Crucially the
+**negative/existence abstention is unaffected** — that comes from the z-score + threshold-free shape
+gate, NOT the gap (verified: 400-gate negative/existence stays 1.00 with the gap fully relaxed).
+
+**Verified.** pf_6/pf_8 now return in the top-10 (rank 10) at 4000. **Preference r@10 80% → 100%**, so
+**all 6 categories PASS at 4000 on both surfaces** (CLI overall 77/97/**100**; MCP 75/97/97, ask 30ms).
+400-memory recall-quality 10/10 (negative/existence 1.00), determinism, rare-term, temporal all still
+green — zero regression. This is the correct fix for the preference gap: return the top-K, let the LLM
+pick — NOT lexical/stem/bump tuning (which traded single-hop twins; reverted earlier this session).

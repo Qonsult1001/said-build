@@ -860,11 +860,29 @@ pub fn ask(
                 // floor stays low; the GAP catches the flat cluster instead). Only fires
                 // when the leader is itself reasonably strong, so it never thins a genuine
                 // multi-answer result set where everything is high. Tunable via SAID_ASK_GAP.
+                //
+                // TOP-K PRESERVATION (the LLM-picks contract, docs 14.15 + 3.5 + FIXES-LOG:
+                // ".said surfaces the top-N and the LLM reranks by reading back"): the gap
+                // may only trim the tail BEYOND the requested `top`, never cut a candidate
+                // that is WITHIN the top-K window. Otherwise a real answer the weak static
+                // encoder ranked low (e.g. "what car do I drive" → "My car is a Toyota" at
+                // rank 10, below 9 higher-scoring filler) is thrown away before the LLM ever
+                // sees it — defeating the whole design. Measured: pf_6/pf_8 sat at rank 10 and
+                // the gap collapsed the list to 1, hiding them from the picker. So we protect
+                // the first `top` candidates and apply the gap only past that point. The
+                // negative/existence abstention is unaffected — it comes from the z-score +
+                // threshold-free shape gate below, not the gap (verified: 400-gate
+                // negative/existence stays 1.00 with the gap fully relaxed).
                 let gap: f32 = std::env::var("SAID_ASK_GAP").ok()
                     .and_then(|v| v.parse().ok()).unwrap_or(0.20);
-                if let Some(top) = kept.first().map(|c| c.confidence) {
-                    if top >= floor {
-                        kept.retain(|c| c.kind != "semantic" || (top - c.confidence) <= gap);
+                if let Some(top_conf) = kept.first().map(|c| c.confidence) {
+                    if top_conf >= floor {
+                        let mut idx = 0usize;
+                        kept.retain(|c| {
+                            let keep_in_window = idx < top;   // never cut within the top-K window
+                            idx += 1;
+                            keep_in_window || c.kind != "semantic" || (top_conf - c.confidence) <= gap
+                        });
                     }
                 }
 
