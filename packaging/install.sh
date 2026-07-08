@@ -70,5 +70,76 @@ case ":$PATH:" in
     ;;
 esac
 
+# ── AUTO-REGISTER the said-mcp server into any AI agents found (Claude Code / Desktop / Cursor /
+#    Copilot). On by default; opt out with SAID_NO_CONNECT=1. We MERGE into each agent's existing
+#    config (never clobber their other servers) and are idempotent (re-running just updates our entry).
+#    Default brain: ~/.said/brain.said (created on first use). Override with SAID_BRAIN=/path.
+if [ "${SAID_NO_CONNECT:-0}" != "1" ]; then
+  brain="${SAID_BRAIN:-$HOME/.said/brain.said}"
+  mkdir -p "$(dirname "$brain")"
+  mcp_cmd="$bindir/said-mcp"
+  # if said-mcp is on PATH, agents can just call "said-mcp"; else use the absolute path.
+  case ":$PATH:" in *":$bindir:"*) mcp_ref="said-mcp" ;; *) mcp_ref="$mcp_cmd" ;; esac
+  registered=""
+
+  # Portable JSON merge helper: add {mcpServers|servers}.said-brain = {command,args} to a config file,
+  # creating/backing-up as needed, without disturbing existing keys. Uses node (present with most
+  # agent installs); if node is absent we skip JSON agents and print manual steps at the end.
+  json_register() {  # $1=config file  $2=top key (mcpServers|servers)  $3=parent (""|mcp)
+    cfg="$1"; topkey="$2"; parent="$3"
+    command -v node >/dev/null 2>&1 || return 2
+    mkdir -p "$(dirname "$cfg")"
+    [ -f "$cfg" ] && cp "$cfg" "$cfg.said-bak" 2>/dev/null || true
+    SAID_CFG="$cfg" SAID_TOPKEY="$topkey" SAID_PARENT="$parent" \
+    SAID_MCPREF="$mcp_ref" SAID_BRAINPATH="$brain" node -e '
+      const fs=require("fs");
+      const f=process.env.SAID_CFG, top=process.env.SAID_TOPKEY, parent=process.env.SAID_PARENT;
+      let j={}; try{ j=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ j={}; }
+      let host=j; if(parent){ host[parent]=host[parent]||{}; host=host[parent]; }
+      host[top]=host[top]||{};
+      host[top]["said-brain"]={ command:process.env.SAID_MCPREF, args:["--path",process.env.SAID_BRAINPATH] };
+      fs.writeFileSync(f, JSON.stringify(j,null,2));
+    ' && return 0 || return 1
+  }
+
+  # 1) Claude Code — clean CLI, self-backing-up, user (global) scope. The CLI's `--` passthrough is
+  #    unreliable (a leading-dash arg like --path gets parsed as the CLI's own option); passing the
+  #    whole command+args as ONE commandOrUrl string is parsed correctly and connects.
+  if command -v claude >/dev/null 2>&1; then
+    if claude mcp add said-brain -s user "$mcp_ref --path $brain" >/dev/null 2>&1; then
+      registered="$registered claude-code"
+    fi
+  fi
+  # 2) Claude Desktop — mcpServers, JSON.
+  case "$(uname -s)" in
+    Darwin) cdesk="$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;
+    *)      cdesk="$HOME/.config/Claude/claude_desktop_config.json" ;;
+  esac
+  if [ -d "$(dirname "$cdesk")" ] || command -v claude >/dev/null 2>&1; then
+    json_register "$cdesk" "mcpServers" "" && registered="$registered claude-desktop" || true
+  fi
+  # 3) Cursor — global ~/.cursor/mcp.json, mcpServers.
+  if [ -d "$HOME/.cursor" ] || command -v cursor >/dev/null 2>&1; then
+    json_register "$HOME/.cursor/mcp.json" "mcpServers" "" && registered="$registered cursor" || true
+  fi
+  # 4) GitHub Copilot (VS Code) — settings.json, mcp.servers (note the different schema).
+  for vs in "$HOME/.config/Code/User/settings.json" \
+            "$HOME/Library/Application Support/Code/User/settings.json"; do
+    if [ -f "$vs" ]; then
+      json_register "$vs" "servers" "mcp" && registered="$registered copilot(vscode)" || true
+    fi
+  done
+
+  echo ""
+  if [ -n "$registered" ]; then
+    echo "said: connected the brain to your agent(s):$registered"
+    echo "  brain file: $brain   (restart / reload each agent to pick it up)"
+  else
+    echo "said: no AI agent auto-detected. To connect one, see the connect guide, or set it up with the"
+    echo "  MCP config:  command \"$mcp_ref\"  args [\"--path\", \"$brain\"]"
+  fi
+fi
+
 echo ""
-echo "Done. Try:  said create my-brain.said  &&  said --path my-brain.said add \"my first note\""
+echo "Done. Your agent can now remember things — just tell it \"remember …\" and ask later."
+echo "Terminal use:  said create my-brain.said  &&  said --path my-brain.said add \"my first note\""

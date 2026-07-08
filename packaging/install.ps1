@@ -40,8 +40,75 @@ try {
   }
 
   & (Join-Path $dest 'said.exe') --version
+
+  # ── AUTO-REGISTER said-mcp into any AI agents found (Claude Code / Desktop / Cursor / Copilot).
+  #    On by default; opt out with $env:SAID_NO_CONNECT = '1'. MERGE into existing config (never
+  #    clobber other servers), idempotent. Default brain: %USERPROFILE%\.said\brain.said (override
+  #    with $env:SAID_BRAIN).
+  if ($env:SAID_NO_CONNECT -ne '1') {
+    $brain = if ($env:SAID_BRAIN) { $env:SAID_BRAIN } else { Join-Path $env:USERPROFILE '.said\brain.said' }
+    New-Item -ItemType Directory -Force -Path (Split-Path $brain) | Out-Null
+    $mcpRef = 'said-mcp'   # on PATH now; agents can call it by name
+    $registered = @()
+
+    # Merge {parent}.{topKey}.said-brain = {command,args} into a JSON config, preserving everything else.
+    function Register-Json($cfg, $topKey, $parent) {
+      New-Item -ItemType Directory -Force -Path (Split-Path $cfg) | Out-Null
+      $obj = $null
+      if (Test-Path $cfg) {
+        Copy-Item $cfg "$cfg.said-bak" -Force -ErrorAction SilentlyContinue
+        try { $obj = Get-Content $cfg -Raw | ConvertFrom-Json } catch { $obj = $null }
+      }
+      if ($null -eq $obj) { $obj = [pscustomobject]@{} }
+      $host2 = $obj
+      if ($parent) {
+        if (-not $obj.PSObject.Properties[$parent]) { $obj | Add-Member -NotePropertyName $parent -NotePropertyValue ([pscustomobject]@{}) -Force }
+        $host2 = $obj.$parent
+      }
+      if (-not $host2.PSObject.Properties[$topKey]) { $host2 | Add-Member -NotePropertyName $topKey -NotePropertyValue ([pscustomobject]@{}) -Force }
+      $entry = [pscustomobject]@{ command = $mcpRef; args = @('--path', $brain) }
+      if ($host2.$topKey.PSObject.Properties['said-brain']) { $host2.$topKey.'said-brain' = $entry }
+      else { $host2.$topKey | Add-Member -NotePropertyName 'said-brain' -NotePropertyValue $entry -Force }
+      $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $cfg -Encoding utf8
+      return $true
+    }
+
+    # 1) Claude Code — clean CLI, user (global) scope. The CLI's `--` passthrough is unreliable
+    #    (commander parses a leading-dash arg like --path as its own option); passing the whole
+    #    command+args as ONE commandOrUrl string is parsed correctly. Native exit code, not throw,
+    #    signals success — so gate on $LASTEXITCODE (a failed `mcp add` does NOT raise in PowerShell).
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+      & claude mcp add said-brain -s user "$mcpRef --path $brain" 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) { $registered += 'claude-code' }
+    }
+    # 2) Claude Desktop — %APPDATA%\Claude\claude_desktop_config.json, mcpServers.
+    $cdesk = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+    if ((Test-Path (Split-Path $cdesk)) -or (Get-Command claude -ErrorAction SilentlyContinue)) {
+      try { Register-Json $cdesk 'mcpServers' $null | Out-Null; $registered += 'claude-desktop' } catch {}
+    }
+    # 3) Cursor — %USERPROFILE%\.cursor\mcp.json (global), mcpServers.
+    $cur = Join-Path $env:USERPROFILE '.cursor\mcp.json'
+    if ((Test-Path (Join-Path $env:USERPROFILE '.cursor')) -or (Get-Command cursor -ErrorAction SilentlyContinue)) {
+      try { Register-Json $cur 'mcpServers' $null | Out-Null; $registered += 'cursor' } catch {}
+    }
+    # 4) GitHub Copilot (VS Code) — %APPDATA%\Code\User\settings.json, mcp.servers.
+    $vs = Join-Path $env:APPDATA 'Code\User\settings.json'
+    if (Test-Path $vs) {
+      try { Register-Json $vs 'servers' 'mcp' | Out-Null; $registered += 'copilot(vscode)' } catch {}
+    }
+
+    Write-Host ""
+    if ($registered.Count -gt 0) {
+      Write-Host ("said: connected the brain to your agent(s): " + ($registered -join ', '))
+      Write-Host "  brain file: $brain   (restart / reload each agent to pick it up)"
+    } else {
+      Write-Host "said: no AI agent auto-detected. To connect one, use the MCP config:"
+      Write-Host "  command `"$mcpRef`"  args [`"--path`", `"$brain`"]"
+    }
+  }
+
   Write-Host ""
-  Write-Host 'Done. Try:  said create my-brain.said ; said --path my-brain.said add "my first note"'
+  Write-Host 'Done. Your agent can now remember things — just tell it "remember ..." and ask later.'
 }
 finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
