@@ -3039,6 +3039,30 @@ field above shows 0, that is the truth â€” say 0, not a past value.
         }
     }
 
+    /// Read the PC's registered default brain path — the same file the CLI's
+    /// `said use` writes (`%APPDATA%\said\default` on Windows, `~/.config/said/default`
+    /// elsewhere). Used only by the single-brain free-tier guard so the MCP sees the
+    /// same "one brain per PC" anchor the CLI does. Returns None if unset/unreadable.
+    fn registered_default_brain() -> Option<String> {
+        // Mirror the CLI's config_dir() without pulling in a new dependency:
+        //   Windows → %APPDATA%\said ; else → $XDG_CONFIG_HOME/said or ~/.config/said
+        let dir = {
+            #[cfg(target_os = "windows")]
+            { std::env::var("APPDATA").ok().map(|d| std::path::PathBuf::from(d).join("said")) }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::var("XDG_CONFIG_HOME").ok()
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| std::env::var("HOME").ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".config")))
+                    .map(|d| d.join("said"))
+            }
+        }?;
+        std::fs::read_to_string(dir.join("default")).ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     fn handle_create(&self, t: CreateTool) -> Result<CallToolResult, CallToolError> {
         // Safety: determine whether the target path refers to the SAME file
         // the MCP server is already attached to. Compare canonical forms so
@@ -3083,6 +3107,32 @@ field above shows 0, that is the truth â€” say 0, not a past value.
                         String::new()
                     }
                 ))]));
+            }
+        }
+
+        // SINGLE-BRAIN FREE TIER: multi-brain on one machine is an Enterprise
+        // (`full` build) capability. On the free/dev tiers, refuse to create a
+        // SECOND, different brain — point the agent at the existing one. This is
+        // not an overwrite guard (that's above); it stops a proliferation of
+        // brains a free user isn't entitled to. Creating/re-attaching the SAME
+        // file is always fine. See docs/said-structure/40-build-tier-capability-matrix.md.
+        #[cfg(not(feature = "enterprise"))]
+        {
+            if !same_file && !target_raw.exists() {
+                if let Some(existing) = Self::registered_default_brain() {
+                    let existing_p = std::path::PathBuf::from(&existing);
+                    let existing_canon = std::fs::canonicalize(&existing_p).unwrap_or(existing_p.clone());
+                    if existing_p.exists() && existing_canon != target_canon {
+                        return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                            "This free build keeps ONE brain per machine, and one already exists:\n  {}\n\
+                             \n\
+                             Grow that brain instead of making a second — `open path='{}'` then \
+                             `remember`/`ingest`. Multiple brains on one machine is an Enterprise \
+                             (`full` build) feature.",
+                            existing, existing,
+                        ))]));
+                    }
+                }
             }
         }
 

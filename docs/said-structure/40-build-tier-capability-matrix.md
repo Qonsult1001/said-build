@@ -144,6 +144,46 @@ ships. Concretely:
 - A **coding** guide may use the `code` surface but not the LSP tools (those need coding-plus).
 - Only a **full** guide may document PDF/DOCX/OCR ingestion.
 
+## File-lifecycle safety guarantees (every bundle)
+
+Two invariants protect a user's data. They hold on **all** surfaces (CLI, MCP) and **all** bundles.
+
+### 1. No tool ever deletes a `.said` file
+
+`delete` (and every other tool) operates on memories **inside** the brain — it tombstones frames
+(recoverable via `admin restore`). **Nothing deletes the `.said` file itself.** The recycle bin lives
+*inside* the file, so deleting the file would be total, unrecoverable loss with no undo — an agent must
+never be able to do that. The one place the MCP does `fs::remove_file` is an **empty, never-populated
+placeholder brain it auto-created itself** (guarded by `is_pristine_brain`: <32 KB, openable, **zero**
+active frames). A populated brain is never fs-deleted by any code path. Removing a real brain is a
+**manual, human-only** act — the user deletes the file by hand.
+
+### 2. One brain per machine on the free tier (multi-brain is Enterprise)
+
+`create` is one-brain-per-PC by default: once a brain is registered (`said use`), a second `create` is
+refused and points the user to grow the existing brain (`init`/`remember`). On the free/dev tiers this
+holds even with `--force`. **Creating multiple brains on one machine is an Enterprise (`full` build)
+capability** — only there does `--force` (CLI) / the MCP `create` tool make a second, different brain.
+Both surfaces enforce it; the free build's message names the Enterprise upsell. (Re-attaching or
+overwriting the *same* file is always allowed; a populated file is never silently overwritten.)
+
+## Documented behaviors that are correct-by-design (not bugs)
+
+Surfaced during testing; each is intended and worth knowing, not a defect:
+
+- **Contradicting facts coexist.** Two memories with **different** ids that disagree (API port 8080 vs
+  9090) both persist and both can surface in `ask` — the brain preserves conflicting facts rather than
+  silently overwriting. **Same id** = a version chain (latest wins in `ask`; `history`/`checkout` reach
+  the priors).
+- **Retention-sweep is destructive beyond the recycle bin.** `retention-sweep` (Enterprise) *permanently*
+  removes swept frames — after a sweep, `checkout` to a swept version fails ("frame is deleted"). This is
+  the point (GDPR/SOX erasure): the recycle bin is a soft tier; the sweep is the hard tier. `legal-hold`
+  frames are skipped.
+- **Procedural pillar ranks high.** Workflow/rule memories (`procedural`) score higher salience than
+  plain facts — intended, so "how we do X" surfaces above trivia.
+- **Enterprise mode is pointer-only.** A brain created with `--mode enterprise` refuses content-embedding
+  ingests (stores URI + summary); explicit `remember` still works. Mode is immutable at creation.
+
 ## See also
 
 - [`09-cargo-features.md`](09-cargo-features.md) — the build/compile view: what each flag pulls in, binary sizes.

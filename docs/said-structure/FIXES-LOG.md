@@ -566,6 +566,16 @@ Four defects found by driving the real **brain** build (MCP + CLI), all shipped 
    brain contexts. **Fix:** new [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md)
    — the authoritative per-bundle tool/command surface, verified against the `tool_box!` macros and
    `#[cfg(feature)]` gates.
+5. **Multi-brain not tier-gated + file-delete safety unstated.** (a) `create` had a one-brain-per-PC
+   guard but any user could bypass it with `--force` — multi-brain is meant to be an Enterprise
+   capability. **Fix:** gated `--force` (CLI) and the MCP `create` tool behind `enterprise`; the free
+   build refuses a second brain with an Enterprise upsell (both surfaces read the same
+   `%APPDATA%\said\default` / `~/.config/said/default` anchor). Full build unchanged (multi-brain works).
+   (b) Confirmed + documented the file-safety invariant: **no tool ever `fs::remove_file`s a populated
+   `.said`** — `delete` only tombstones memories inside the file (recoverable via `admin restore`); the
+   sole fs-delete is an empty self-made placeholder guarded by `is_pristine_brain` (zero active frames).
+   Removing a real brain is human-only. Reinforced in the `delete` tool description +
+   [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md) "File-lifecycle safety".
 
 **Known state (not a defect — tracked):** these fixes are in source + `target/release`, but the shipped
 **v0.11.2 release zips still carry the 2026-07-07 binaries** (no `list_tags`, old `status`). Shipping the

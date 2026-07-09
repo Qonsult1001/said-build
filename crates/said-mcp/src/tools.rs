@@ -369,7 +369,10 @@ pub struct EditBatchTool {
     description = "Delete memories by doc_id OR by age. Supports enterprise data retention \
                    policies (GDPR, SOX). Examples: delete a specific memory, delete everything \
                    older than 30 days, delete everything before a date. Frames are soft-deleted \
-                   (tombstoned) — preserved in history but removed from search results.",
+                   (tombstoned) — preserved in history but removed from search results, and \
+                   recoverable via `admin restore`. This ONLY removes memories INSIDE the brain; \
+                   it NEVER deletes the .said file itself — the file, and everything in it, is only \
+                   removed if the user deletes the file by hand. Prefer a dry-run first for bulk deletes.",
     destructive_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]

@@ -1631,19 +1631,32 @@ fn cmd_create(file: &str, mode: &str, force: bool, json: bool) -> Result<(), Str
     if Path::new(file).exists() {
         return Err(format!("File already exists: {}", file));
     }
-    // ONE-BRAIN-PER-PC (world-class default): if a brain is already registered on
-    // this machine, `create` refuses a second one and points the user to `init` to
-    // GROW the existing brain (append, never wipe). The owner can always override
-    // with --force for scratch/test/multi-brain use.
+    // ONE-BRAIN-PER-PC. If a brain is already registered on this machine, `create`
+    // refuses a second one and points the user to `init` to GROW the existing brain
+    // (append, never wipe). MULTI-BRAIN is an Enterprise (`full` build) capability:
+    // only there does `--force` override the guard. On the free/dev tiers a second
+    // brain is refused even with --force, with an upsell — this is the single-brain
+    // free tier. See docs/said-structure/40-build-tier-capability-matrix.md.
+    #[cfg(not(feature = "enterprise"))]
+    let force = {
+        let _ = force; // multi-brain override is Enterprise-only; ignore --force here
+        false
+    };
     if !force {
         if let Some(existing) = crate::resolve::read_default() {
             if Path::new(&existing).exists() {
+                #[cfg(feature = "enterprise")]
+                let override_hint = "To create an ADDITIONAL brain anyway, re-run with --force.";
+                #[cfg(not(feature = "enterprise"))]
+                let override_hint = "Multiple brains on one machine is an Enterprise feature — this \
+                                     free build keeps one brain per PC. Grow the one above, or use \
+                                     the Enterprise (`full`) build for multi-brain.";
                 return Err(format!(
                     "A brain already exists on this PC:\n  {existing}\n\n\
                      One brain per PC is the default — grow that brain instead of making a second:\n  \
                      said --path \"{existing}\" init <dir>     # append a codebase (never wipes)\n  \
                      said --path \"{existing}\" ask \"...\"       # query it\n\n\
-                     To create an ADDITIONAL brain anyway, re-run with --force."
+                     {override_hint}"
                 ));
             }
         }
