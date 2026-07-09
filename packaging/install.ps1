@@ -48,7 +48,10 @@ try {
   if ($env:SAID_NO_CONNECT -ne '1') {
     $brain = if ($env:SAID_BRAIN) { $env:SAID_BRAIN } else { Join-Path $env:USERPROFILE '.said\brain.said' }
     New-Item -ItemType Directory -Force -Path (Split-Path $brain) | Out-Null
-    $mcpRef = 'said-mcp'   # on PATH now; agents can call it by name
+    # Use the ABSOLUTE exe path, not the bare name: agents launch MCP servers WITHOUT the user's
+    # freshly-updated PATH (and already-running agents have the old PATH), so a bare "said-mcp"
+    # fails to spawn until every agent is restarted. The absolute path always resolves.
+    $mcpRef = Join-Path $dest 'said-mcp.exe'
     $registered = @()
 
     # Merge {parent}.{topKey}.said-brain = {command,args} into a JSON config, preserving everything else.
@@ -73,16 +76,29 @@ try {
       return $true
     }
 
-    # 1) Claude Code — clean CLI, user (global) scope. The CLI's `--` passthrough is unreliable
-    #    (commander parses a leading-dash arg like --path as its own option); passing the whole
-    #    command+args as ONE commandOrUrl string is parsed correctly. Native exit code, not throw,
-    #    signals success — so gate on $LASTEXITCODE (a failed `mcp add` does NOT raise in PowerShell).
-    #    `mcp add` ERRORS if the name already exists (it won't update), so remove-then-add makes
-    #    re-running the installer idempotent + quiet. If it already exists, count it as connected.
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-      & claude mcp remove said-brain -s user 2>$null | Out-Null   # ignore result (may not exist)
-      & claude mcp add said-brain -s user "$mcpRef --path $brain" 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { $registered += 'claude-code' }
+    # 1) Claude Code — write its user config (~/.claude.json) DIRECTLY with a proper command/args
+    #    split. We do NOT use `claude mcp add`: its `-- <cmd> --path X` form rejects `--path` as an
+    #    unknown option, and its single-string form ("said-mcp --path X") stuffs the WHOLE string
+    #    into `command` with empty `args`, so Claude Code can't spawn it → "Failed to connect".
+    #    We also do NOT use the PS ConvertFrom-Json merge here: ~/.claude.json is large and can hold
+    #    duplicate project keys that make PS's parser THROW, which would wipe the whole file. node
+    #    tolerates dup keys (last wins) and only touches mcpServers — so merge via node, and if node
+    #    is missing, SKIP (never risk clobbering the user's Claude config).
+    $cc = Join-Path $env:USERPROFILE '.claude.json'
+    if ((Test-Path $cc) -or (Get-Command claude -ErrorAction SilentlyContinue)) {
+      if (Get-Command node -ErrorAction SilentlyContinue) {
+        Copy-Item $cc "$cc.said-bak" -Force -ErrorAction SilentlyContinue
+        $node = @"
+const fs=require('fs'); const f=process.env.SAID_CC;
+let j={}; try{ j=JSON.parse(fs.readFileSync(f,'utf8')); }catch(e){ j={}; }
+j.mcpServers=j.mcpServers||{};
+j.mcpServers['said-brain']={command:process.env.SAID_MCP,args:['--path',process.env.SAID_BRAINP]};
+fs.writeFileSync(f, JSON.stringify(j,null,2));
+"@
+        $env:SAID_CC = $cc; $env:SAID_MCP = $mcpRef; $env:SAID_BRAINP = $brain
+        & node -e $node 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $registered += 'claude-code' }
+      }
     }
     # 2) Claude Desktop — %APPDATA%\Claude\claude_desktop_config.json, mcpServers.
     $cdesk = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'

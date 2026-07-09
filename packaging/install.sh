@@ -77,9 +77,10 @@ esac
 if [ "${SAID_NO_CONNECT:-0}" != "1" ]; then
   brain="${SAID_BRAIN:-$HOME/.said/brain.said}"
   mkdir -p "$(dirname "$brain")"
-  mcp_cmd="$bindir/said-mcp"
-  # if said-mcp is on PATH, agents can just call "said-mcp"; else use the absolute path.
-  case ":$PATH:" in *":$bindir:"*) mcp_ref="said-mcp" ;; *) mcp_ref="$mcp_cmd" ;; esac
+  # Always use the ABSOLUTE binary path, not the bare name: agents launch MCP servers WITHOUT the
+  # user's freshly-updated PATH (and already-running agents have the old PATH), so a bare "said-mcp"
+  # fails to spawn until every agent is restarted. The absolute path always resolves.
+  mcp_ref="$bindir/said-mcp"
   registered=""
 
   # Portable JSON merge helper: add {mcpServers|servers}.said-brain = {command,args} to a config file,
@@ -102,16 +103,15 @@ if [ "${SAID_NO_CONNECT:-0}" != "1" ]; then
     ' && return 0 || return 1
   }
 
-  # 1) Claude Code — clean CLI, self-backing-up, user (global) scope. The CLI's `--` passthrough is
-  #    unreliable (a leading-dash arg like --path gets parsed as the CLI's own option); passing the
-  #    whole command+args as ONE commandOrUrl string is parsed correctly and connects.
-  #    `mcp add` ERRORS if the name already exists (won't update), so remove-then-add keeps
-  #    re-running the installer idempotent + quiet.
-  if command -v claude >/dev/null 2>&1; then
-    claude mcp remove said-brain -s user >/dev/null 2>&1 || true   # ignore (may not exist)
-    if claude mcp add said-brain -s user "$mcp_ref --path $brain" >/dev/null 2>&1; then
-      registered="$registered claude-code"
-    fi
+  # 1) Claude Code — write its user config (~/.claude.json) DIRECTLY with a proper command/args
+  #    split, via the same node merge as the other agents. We do NOT use `claude mcp add`: its
+  #    `-- <cmd> --path X` form rejects `--path` as an unknown option, and its single-string form
+  #    ("said-mcp --path X") stuffs the WHOLE string into `command` with empty `args`, so Claude Code
+  #    can't spawn it → "Failed to connect". node also tolerates the duplicate project keys that can
+  #    live in ~/.claude.json (which would otherwise break a stricter parser) and only touches
+  #    mcpServers. Register when the file exists OR the claude CLI is present.
+  if [ -f "$HOME/.claude.json" ] || command -v claude >/dev/null 2>&1; then
+    json_register "$HOME/.claude.json" "mcpServers" "" && registered="$registered claude-code" || true
   fi
   # 2) Claude Desktop — mcpServers, JSON.
   case "$(uname -s)" in
