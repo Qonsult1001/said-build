@@ -105,7 +105,10 @@ if [ "${SAID_NO_CONNECT:-0}" != "1" ]; then
   # 1) Claude Code — clean CLI, self-backing-up, user (global) scope. The CLI's `--` passthrough is
   #    unreliable (a leading-dash arg like --path gets parsed as the CLI's own option); passing the
   #    whole command+args as ONE commandOrUrl string is parsed correctly and connects.
+  #    `mcp add` ERRORS if the name already exists (won't update), so remove-then-add keeps
+  #    re-running the installer idempotent + quiet.
   if command -v claude >/dev/null 2>&1; then
+    claude mcp remove said-brain -s user >/dev/null 2>&1 || true   # ignore (may not exist)
     if claude mcp add said-brain -s user "$mcp_ref --path $brain" >/dev/null 2>&1; then
       registered="$registered claude-code"
     fi

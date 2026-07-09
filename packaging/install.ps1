@@ -77,7 +77,10 @@ try {
     #    (commander parses a leading-dash arg like --path as its own option); passing the whole
     #    command+args as ONE commandOrUrl string is parsed correctly. Native exit code, not throw,
     #    signals success — so gate on $LASTEXITCODE (a failed `mcp add` does NOT raise in PowerShell).
+    #    `mcp add` ERRORS if the name already exists (it won't update), so remove-then-add makes
+    #    re-running the installer idempotent + quiet. If it already exists, count it as connected.
     if (Get-Command claude -ErrorAction SilentlyContinue) {
+      & claude mcp remove said-brain -s user 2>$null | Out-Null   # ignore result (may not exist)
       & claude mcp add said-brain -s user "$mcpRef --path $brain" 2>$null | Out-Null
       if ($LASTEXITCODE -eq 0) { $registered += 'claude-code' }
     }
