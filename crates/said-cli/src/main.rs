@@ -4082,8 +4082,13 @@ fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String
             println!();
             println!("=== Search Indexes ===");
             println!("  Memories indexed:  {}", s.index_docs);
-            println!("  Symbol table:      {} unique names", s.symbol_count);
-            println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
+            // Symbol table + trigram are CODE-tier internals the brain build doesn't expose;
+            // they read "0 / absent" on a memory brain and only confuse. Show them only when
+            // this brain actually has code indexed (a code bundle that ingested source).
+            if s.symbol_count > 0 || s.trigram_present {
+                println!("  Symbol table:      {} unique names", s.symbol_count);
+                println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
+            }
             println!();
             println!("=== Brain State ===");
             println!("  Query log:         {} entries", s.brain_queries);

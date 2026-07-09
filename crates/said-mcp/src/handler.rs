@@ -2111,14 +2111,30 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                     .to_string()
             }
         } else {
-            "Brain is POPULATED and ready to query.\n\
-             \n\
-             Next steps:\n\
-             â€¢ overview                    â€” list detected modules/products\n\
-             â€¢ search \"<query>\"            â€” semantic search\n\
-             â€¢ sym <name>                  â€” exact symbol lookup\n\
-             â€¢ snapshot <module>           â€” extract a module workspace\n"
-                .to_string()
+            // Suggest only commands THIS build actually ships. The brain bundle has no
+            // overview/search/sym/snapshot (those are code-tier) — telling a memory user to
+            // run them is a dead end. Gate the code-tier next-steps behind the code feature.
+            #[cfg(feature = "code")]
+            {
+                "Brain is POPULATED and ready to query.\n\
+                 \n\
+                 Next steps:\n\
+                 â€¢ overview                    â€” list detected modules/products\n\
+                 â€¢ search \"<query>\"            â€” semantic search\n\
+                 â€¢ sym <name>                  â€” exact symbol lookup\n\
+                 â€¢ snapshot <module>           â€” extract a module workspace\n"
+                    .to_string()
+            }
+            #[cfg(not(feature = "code"))]
+            {
+                "Brain is POPULATED and ready to query.\n\
+                 \n\
+                 Next steps:\n\
+                 â€¢ ask \"<question>\"            â€” find memories by meaning (the main command)\n\
+                 â€¢ remember content=\"â€¦\"        â€” store a new note/fact/decision\n\
+                 â€¢ get id=\"<id>\"               â€” read one memory's exact text\n"
+                    .to_string()
+            }
         };
 
         let mode_line = match brain.mode() {
@@ -2136,7 +2152,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
              {}Memories:      {}  (everything stored in this brain)\n\
              Size on disk:  {} bytes ({:.1} MB)\n\
              Search index:  {}\n\
-             Symbols:       {} named functions/classes/tables\n\
+             {}\
              Queries run:   {} (brain learns from usage)\n\
              Dream cycles:  {}   (memory consolidation events){}",
             headline,
@@ -2146,8 +2162,27 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             s.active_frames,
             s.file_size,
             s.file_size as f64 / 1_048_576.0,
-            if s.trigram_present { "present (fast grep available)" } else { "absent (grep will be slower)" },
-            s.symbol_count,
+            // The semantic index is what `ask` uses — report IT, honestly, not the trigram
+            // (grep) index. A healthy text brain has 0 trigrams but a full semantic index, so
+            // keying "Search index" off trigram_present made every working brain read "absent".
+            if s.index_docs > 0 {
+                format!("present ({} of {} memories indexed for meaning-based recall)",
+                    s.index_docs, s.active_frames)
+            } else if s.active_frames > 0 {
+                "building… (memories stored but not yet indexed — run a query to trigger it)".to_string()
+            } else {
+                "empty (no memories yet)".to_string()
+            },
+            // Symbols + fast-grep are code-tier concerns; only surface them when this brain
+            // actually has code indexed, so a plain memory brain isn't shown scary "0 / absent".
+            if s.symbol_count > 0 || s.trigram_present {
+                format!("Symbols:       {} named functions/classes/tables\n             \
+                         Fast grep:     {}\n",
+                    s.symbol_count,
+                    if s.trigram_present { "present" } else { "absent" })
+            } else {
+                String::new()
+            },
             s.brain_queries,
             s.brain_cycles,
             reload_note,
