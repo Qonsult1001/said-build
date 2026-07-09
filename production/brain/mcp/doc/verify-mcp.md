@@ -18,6 +18,7 @@ Every memory tool works, on one session, with state carried across calls (rememb
 | search | lexical recall | ✅ |
 | salience | scores a note high/med/low | ✅ |
 | list_concepts | lists (empty on a fresh brain — correct) | ✅ |
+| list_tags | lists the tag vocabulary with per-tag counts (empty on a fresh brain — correct) | ✅ |
 | history | version list for a memory | ✅ |
 | journal | session note saved | ✅ |
 | learn_fix / recall_fix | learn a fix, recall it by a differently-worded query | ✅ |

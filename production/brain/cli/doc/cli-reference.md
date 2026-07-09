@@ -18,6 +18,8 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 | `history <id>` | Show a memory's past versions. | `said history bday` |
 | `checkout <id> --version N` | Roll a memory back to an earlier version. | `said checkout bday --version 0` |
 | `stats` | Show how many memories the brain holds. | `said stats` |
+| `list-concepts [--prefix p]` | List the `[[wikilink]]` concepts your memories are linked to, with a count per concept. | `said list-concepts` |
+| `list-tags [--prefix p]` | List the `tags` your memories carry (the metadata vocabulary), with a count per tag. Reuse these instead of inventing synonyms. | `said list-tags --prefix project:` |
 | `use <file>.said` | Set the default brain so you can skip `--path`. | `said use my-brain.said` |
 
 ## How many answers does `ask` give back?

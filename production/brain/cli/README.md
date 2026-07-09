@@ -13,6 +13,7 @@ you type the `said` commands yourself. No server, no cloud, fully offline.
     create a brain, store a few notes, ask it a question. Start here once installed.
   - **How-to guides** — one real task each:
     - [`doc/how-to-store-and-recall-notes.md`](doc/how-to-store-and-recall-notes.md) — the everyday save-and-ask loop
+    - [`doc/how-to-populate-a-brain-with-an-llm.md`](doc/how-to-populate-a-brain-with-an-llm.md) — fill a brain fast: let an LLM turn a pile of notes into `add` commands
     - [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md) — narrow a search to the exact memory
     - [`doc/how-to-set-a-default-brain.md`](doc/how-to-set-a-default-brain.md) — stop passing `--path` every time
     - [`doc/how-to-track-versions-of-a-memory.md`](doc/how-to-track-versions-of-a-memory.md) — update a fact, keep its history
