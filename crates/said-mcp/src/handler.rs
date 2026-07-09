@@ -2234,8 +2234,17 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             // (grep) index. A healthy text brain has 0 trigrams but a full semantic index, so
             // keying "Search index" off trigram_present made every working brain read "absent".
             if s.index_docs > 0 {
-                format!("present ({} of {} memories indexed for meaning-based recall)",
-                    s.index_docs, s.active_frames)
+                // index_docs counts every doc in the semantic index — which can EXCEED the active
+                // memory count, because deleted (tombstoned) memories keep their index entry until
+                // a rebuild. So never print "index_docs of active_frames" (that shows a nonsense
+                // "102 of 36"). If the index covers every active memory, say so plainly; only show
+                // a shortfall ratio when active memories genuinely outrun the index (a real gap).
+                if s.index_docs >= s.active_frames {
+                    "present (all your memories are indexed for meaning-based recall)".to_string()
+                } else {
+                    format!("present ({} of {} memories indexed — the rest index on the next query)",
+                        s.index_docs, s.active_frames)
+                }
             } else if s.active_frames > 0 {
                 "building… (memories stored but not yet indexed — run a query to trigger it)".to_string()
             } else {

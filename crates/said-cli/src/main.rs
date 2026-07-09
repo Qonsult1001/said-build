@@ -4169,7 +4169,15 @@ fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String
             println!("  Compression ratio: {:.2}x", s.compression_ratio);
             println!();
             println!("=== Search Indexes ===");
-            println!("  Memories indexed:  {}", s.index_docs);
+            // index_docs counts every doc in the semantic index, INCLUDING tombstoned (deleted)
+            // memories that keep their entry until a rebuild — so it can exceed the active count.
+            // Show the active total alongside it so "indexed > memories" isn't read as a bug.
+            if s.index_docs > s.active_frames {
+                println!("  Memories indexed:  {} ({} active + {} tombstoned entries; rebuild on next append)",
+                    s.index_docs, s.active_frames, s.index_docs - s.active_frames);
+            } else {
+                println!("  Memories indexed:  {}", s.index_docs);
+            }
             // Symbol table + trigram are CODE-tier internals the brain build doesn't expose;
             // they read "0 / absent" on a memory brain and only confuse. Show them only when
             // this brain actually has code indexed (a code bundle that ingested source).
