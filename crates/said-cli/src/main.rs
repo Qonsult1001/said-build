@@ -184,6 +184,8 @@ enum Commands {
     /// Shows every distinct concept and how many memories carry it. Use this before
     /// adding a memory so you reuse an existing concept (e.g. "heart") instead of
     /// coining a near-duplicate ("heart-health") — keeps recall consistent.
+    /// This is the [[wikilink]] graph ONLY — for the `tags` metadata (quarter:Q2,
+    /// status:planned, …), a separate vocabulary, use `said list-tags`.
     #[command(name = "list-concepts")]
     ListConcepts {
         /// Only show concepts starting with this prefix
@@ -4007,6 +4009,18 @@ fn cmd_list_concepts(path: Option<&str>, prefix: Option<&str>, json: bool) -> Re
     println!("Concepts ({} distinct):", concepts.len());
     for (c, n) in &concepts {
         println!("  {:>4}  {}", n, c);
+    }
+    // Read-only pointer: concepts are the [[wikilink]] graph; the `tags` metadata
+    // (quarter:Q2, status:planned, …) is a SEPARATE vocabulary many users expect to
+    // find here. Nudge them to `list-tags` when tags exist. Text-mode only (JSON is
+    // untouched) and only when no prefix is filtering, so it never clutters a scoped view.
+    if prefix.is_none() {
+        let tag_count = brain.tag_counts(None).len();
+        if tag_count > 0 {
+            println!("\n(you also have {} tag{} — run `said list-tags` to browse them; \
+                      tags are a separate vocabulary from concepts)",
+                tag_count, if tag_count == 1 { "" } else { "s" });
+        }
     }
     Ok(())
 }
