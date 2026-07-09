@@ -46,3 +46,7 @@ learning-factory/
 
 # transient benchmark working dir (moat scratch — regenerated per run)
 hard-eval/repo/
+
+# MCP binary backups — never commit (repo bloat; not release assets)
+production/brain/mcp/old/**/*.exe
+production/brain/**/*.exe
