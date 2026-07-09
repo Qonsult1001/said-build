@@ -175,6 +175,15 @@ Surfaced during testing; each is intended and worth knowing, not a defect:
   9090) both persist and both can surface in `ask` — the brain preserves conflicting facts rather than
   silently overwriting. **Same id** = a version chain (latest wins in `ask`; `history`/`checkout` reach
   the priors).
+- **Concept-link ties on vague queries → use a tag filter.** Every memory sharing a `[[wikilink]]` with
+  the query gets a flat reachability score (0.90) from the concept-link engine — by design (OKF reaches
+  all linked memories). On a *vague* query with no lexical signal, many `[[integrations]]` memories tie
+  at 0.90 and the target ranks mid-pack (the documented static-encoder ceiling — do **not** lexical-tune
+  it; that trades single-hop twins). The precision lever is **tag scoping**: `ask` accepts an optional
+  `tags` filter (MCP) / `--tag` (CLI) that narrows recall to memories carrying those tags *before*
+  scoring, so `ask "…watches files…" --tag quarter:Q2` returns the Q2 facet only, no cross-quarter bleed.
+  This is purely additive — an unscoped `ask` is unchanged. Reachability vs precision are different axes
+  (see [okf note](14-novel-mechanisms/) and 11-known-limitations).
 - **Retention-sweep is destructive beyond the recycle bin.** `retention-sweep` (Enterprise) *permanently*
   removes swept frames — after a sweep, `checkout` to a swept version fails ("frame is deleted"). This is
   the point (GDPR/SOX erasure): the recycle bin is a soft tier; the sweep is the hard tier. `legal-hold`

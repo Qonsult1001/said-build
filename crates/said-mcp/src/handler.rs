@@ -856,9 +856,17 @@ impl SaidServerHandler {
         let top = t.top.map(|v| v as usize).unwrap_or(10);
         let deep = t.deep.unwrap_or(false);
 
-        // Tag-scope detection: same logic as CLI cmd_ask. Let a query like
-        // "version 4 ..." narrow the candidate pool to frames tagged version:4.
-        let scope_doc_ids: Option<std::collections::HashSet<String>> =
+        // Tag scoping. TWO sources, intersected:
+        //   1. Explicit `tags` arg — the caller asked to scope recall to a facet (e.g.
+        //      quarter:Q4). This is the fix for concept-link tie bleed: on a vague query,
+        //      many memories sharing a [[wikilink]] all tie, so narrow to the exact tag
+        //      BEFORE scoring. Empty result if the tag matches nothing (honest — report it).
+        //   2. Auto-detected scope from the query text ("version 4 …" → version:4), the
+        //      existing CLI-parity behavior.
+        // An explicit tag filter that matches ZERO memories must NOT silently fall back to
+        // unscoped (that would defeat the filter); it returns an empty scope so recall is empty.
+        let explicit_scope = t.tags.as_ref().map(|tags| brain.tag_scope(tags).unwrap_or_default());
+        let auto_scope: Option<std::collections::HashSet<String>> =
             if let Some((ns, val)) = sca_core::recall::detect_scope_tag(&t.query) {
                 let tag = format!("{}:{}", ns, val);
                 let active = brain.frames.active_doc_ids();
@@ -872,6 +880,11 @@ impl SaidServerHandler {
                     .collect();
                 if !matching.is_empty() { Some(matching) } else { None }
             } else { None };
+        let scope_doc_ids: Option<std::collections::HashSet<String>> = match (explicit_scope, auto_scope) {
+            (Some(e), Some(a)) => Some(e.intersection(&a).cloned().collect()),
+            (Some(e), None) => Some(e),   // explicit wins even if empty (no silent fallback)
+            (None, a) => a,
+        };
 
         // THE SHARED CALL â€” same function the CLI uses. CLI and MCP return
         // byte-identical result sets (modulo formatting) for any query.

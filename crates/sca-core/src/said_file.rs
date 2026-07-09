@@ -3149,6 +3149,26 @@ impl SaidFile {
         self.frames.tag_counts(prefix)
     }
 
+    /// Doc_ids of ACTIVE memories that carry ALL of the given tags (AND semantics).
+    /// Used to pre-filter recall by tag: `ask` with `scope_doc_ids = tag_scope(&["quarter:Q4"])`
+    /// narrows the corpus to that facet BEFORE scoring, so a vague query can't bleed across
+    /// memories that merely share a `[[wikilink]]` concept. Empty `tags` → None (no filter).
+    /// A tag matching zero memories yields an empty set (recall returns nothing — honest, the
+    /// caller can report "no memories tagged X"). Case-sensitive, exact tag match.
+    pub fn tag_scope(&self, tags: &[String]) -> Option<std::collections::HashSet<String>> {
+        if tags.is_empty() { return None; }
+        let mut acc: Option<std::collections::HashSet<String>> = None;
+        for tag in tags {
+            let ids: std::collections::HashSet<String> =
+                self.frames.doc_ids_by_tag(tag).into_iter().map(|s| s.to_string()).collect();
+            acc = Some(match acc {
+                None => ids,
+                Some(prev) => prev.intersection(&ids).cloned().collect(),
+            });
+        }
+        acc
+    }
+
     pub fn frames_linking_concept(&self, concept: &str) -> Vec<String> {
         let cl = concept.to_lowercase();
         let want = format!("link:{}", cl);

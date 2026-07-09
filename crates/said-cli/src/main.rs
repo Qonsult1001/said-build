@@ -157,6 +157,12 @@ enum Commands {
         /// so the right memory ranks first (row-31 per-pillar scope). Omit = all pillars (default).
         #[arg(long)]
         pillar: Option<String>,
+        /// Scope recall to memories carrying ALL of these tags (repeatable, e.g.
+        /// `--tag quarter:Q4 --tag project:said`), applied BEFORE scoring. Use when a plain
+        /// query bleeds across memories that share a `[[concept]]` — narrowing to the exact
+        /// facet breaks the tie. Run `said list-tags` to see the tags in use. Exact match, AND.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
     },
     /// RESIDENT mode: load the brain + encoder ONCE, then answer queries from stdin (one per line) against
     /// the warm brain — the fix for the per-process reload cost. Prints `READY`, then one answer per query
@@ -1517,7 +1523,7 @@ fn run() {
         Commands::Calls { ref name } => cmd_code_edges(cli.path.as_deref(), name, false, cli.json),
         #[cfg(feature = "code")]
         Commands::Callers { ref name } => cmd_code_edges(cli.path.as_deref(), name, true, cli.json),
-        Commands::Ask { ref query, top, deep, ref engine, ref pillar } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, pillar.as_deref(), cli.json),
+        Commands::Ask { ref query, top, deep, ref engine, ref pillar, ref tag } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, pillar.as_deref(), tag, cli.json),
         Commands::Serve { top, ref pillar } => cmd_serve(cli.path.as_deref(), top, pillar.as_deref(), cli.json),
         #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
@@ -3554,21 +3560,24 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
+fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, engine: &str, pillar: Option<&str>, tags: &[String], json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
-    ask_on_brain(&mut brain, query, top, deep, engine, pillar, json)
+    ask_on_brain(&mut brain, query, top, deep, engine, pillar, tags, json)
 }
 
 /// RESIDENT-friendly query: run a single `ask` against an ALREADY-OPEN brain (encoder + indexes already
 /// loaded). `cmd_ask` opens-then-calls (one-shot); `cmd_serve` opens ONCE then calls this in a loop so the
 /// 16MB encoder + word index load a single time and every subsequent query is fast (~100ms warm).
-fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, json: bool) -> Result<(), String> {
+fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, tags: &[String], json: bool) -> Result<(), String> {
     let t0 = Instant::now();
 
-    // Tag-scope detection: if the query contains a scoping token like
-    // "version 4", resolve matching doc_ids from frame metadata. Passed
-    // into the shared `ask` fusion so sym/grep/SCA all filter against it.
-    let scope_doc_ids: Option<std::collections::HashSet<String>> =
+    // Tag scoping. Explicit `--tag` filter (narrow to a facet BEFORE scoring — the fix for
+    // concept-link tie bleed on vague queries) intersected with the auto-detected query-text
+    // scope ("version 4" → version:4). An explicit filter that matches nothing yields an empty
+    // scope (recall empty — honest), NOT a silent unscoped fallback.
+    let explicit_scope = if tags.is_empty() { None }
+        else { Some(brain.tag_scope(tags).unwrap_or_default()) };
+    let auto_scope: Option<std::collections::HashSet<String>> =
         if let Some((ns, val)) = sca_core::recall::detect_scope_tag(query) {
             let tag = format!("{}:{}", ns, val);
             let active = brain.frames.active_doc_ids();
@@ -3584,6 +3593,11 @@ fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engi
         } else {
             None
         };
+    let scope_doc_ids: Option<std::collections::HashSet<String>> = match (explicit_scope, auto_scope) {
+        (Some(e), Some(a)) => Some(e.intersection(&a).cloned().collect()),
+        (Some(e), None) => Some(e),
+        (None, a) => a,
+    };
 
     // PILLAR SCOPE: `--pillar episodic,code,...` restricts recall to those pillars by resolving their
     // doc_ids and intersecting with any tag-scope, then passing the set into the SAME fusion (so the
@@ -3719,7 +3733,7 @@ fn cmd_serve(path: Option<&str>, top: usize, pillar: Option<&str>, json: bool) -
         let q = q.trim();
         if q.is_empty() { break; }
         // each query reuses the warm brain — no reopen, no reload.
-        let _ = ask_on_brain(&mut brain, q, top, false, "current", pillar, json);
+        let _ = ask_on_brain(&mut brain, q, top, false, "current", pillar, &[], json);
         let _ = std::io::stdout().flush();
     }
     Ok(())

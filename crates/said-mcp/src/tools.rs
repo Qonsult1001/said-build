@@ -65,6 +65,14 @@ pub struct AskTool {
     /// Deep mode: widen SCA fetch to 100, return all results above cutoff.
     #[serde(default)]
     pub deep: Option<bool>,
+    /// Optional tag filter — narrow recall to ONLY memories carrying ALL of these tags
+    /// (e.g. `["quarter:Q4"]` or `["project:said","status:planned"]`), applied BEFORE
+    /// scoring. Use this when a plain query bleeds across memories that share a `[[concept]]`
+    /// (many `[[integrations]]` memories tie on a vague "Q4 integration" query) — scoping to
+    /// the exact facet is what breaks the tie. Call `list_tags` first to see the real tags.
+    /// Omit for a normal unscoped search. Exact match, AND across tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════

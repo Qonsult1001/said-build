@@ -576,6 +576,20 @@ Four defects found by driving the real **brain** build (MCP + CLI), all shipped 
    sole fs-delete is an empty self-made placeholder guarded by `is_pristine_brain` (zero active frames).
    Removing a real brain is human-only. Reinforced in the `delete` tool description +
    [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md) "File-lifecycle safety".
+6. **Vague-query tie bleed — added a tag filter to `ask` (additive, no regression).** At scale, many
+   memories sharing a `[[wikilink]]` all get the concept-link engine's flat 0.90 reachability score, so
+   a *vague* query (no lexical signal) returns results tied at 0.90 with the target mid-pack — reproduced
+   live (q2-said-watch at #9; 15 memories carry `link:integrations`). Documented encoder+reachability
+   ceiling, NOT a scoring bug (do not lexical-tune — it trades single-hop twins). **Fix (precision lever,
+   not encoder tuning):** `ask` now takes an optional tag filter — `tags:[…]` (MCP) / `--tag` (CLI) — that
+   narrows recall to memories carrying ALL those tags BEFORE scoring, via a `SaidFile::tag_scope` helper
+   feeding the `scope_doc_ids` parameter `ask()` already had. `ask "…watches files…" --tag quarter:Q2` →
+   the Q2 facet only, cross-quarter bleed gone. **Regression-proofed:** the param defaults to empty → the
+   identical original path, so an unscoped `ask` is byte-for-byte unchanged (verified live: targeted +
+   vague queries identical to pre-change; recall-at-volume canary still green ≥0.95; scope/dedup tests
+   pass). Also cleaned 66 `fill:live-brain` test fillers from the primary brain (tombstoned, recoverable)
+   — proving they were NOT the cause: the vague probe was unchanged after cleanup; the flat-0.90
+   concept-link tie was.
 
 **Known state (not a defect — tracked):** these fixes are in source + `target/release`, but the shipped
 **v0.11.2 release zips still carry the 2026-07-07 binaries** (no `list_tags`, old `status`). Shipping the
