@@ -1,0 +1,77 @@
+{
+  "phases": {
+    "p1": {
+      "projects": [
+        {
+          "name": "ab",
+          "added": 10188,
+          "total": 10188,
+          "sizeMB": "10.9",
+          "sec": 12
+        },
+        {
+          "name": "africanbank",
+          "added": 8781,
+          "total": 18969,
+          "sizeMB": "23.7",
+          "sec": 52
+        },
+        {
+          "name": "saidrust",
+          "added": 4856,
+          "total": 23825,
+          "sizeMB": "31.0",
+          "sec": 66
+        },
+        {
+          "name": "wonga",
+          "added": 9524,
+          "total": 33349,
+          "sizeMB": "43.8",
+          "sec": 88
+        }
+      ]
+    },
+    "p3": {
+      "iters": 30,
+      "recall_at_1": 29,
+      "recall_at_5": 30
+    }
+  },
+  "gates": [
+    {
+      "name": "P1 all-4-ingested",
+      "pass": true,
+      "detail": "33349 total frames across 4 projects"
+    },
+    {
+      "name": "P2a scope: ab query hits sql",
+      "pass": true,
+      "detail": "Ask: \"ledger table\"  (5 results, keywords: ledger, table)  1"
+    },
+    {
+      "name": "P2a scope: rust query hits rs",
+      "pass": true,
+      "detail": "Ask: \"MCP tool handler\"  (5 results, keywords: mcp, tool, ha"
+    },
+    {
+      "name": "P2b delete-by-project",
+      "pass": true,
+      "detail": "dry=10182, 33349->23167 (removed 10182)"
+    },
+    {
+      "name": "P2c blueprint recall",
+      "pass": true,
+      "detail": "313ms"
+    },
+    {
+      "name": "P3 fix-recall@5 == 100%",
+      "pass": true,
+      "detail": "30/30 recalled in top-5 (recall@1=29)"
+    }
+  ],
+  "summary": {
+    "pass": 6,
+    "total": 6
+  }
+}

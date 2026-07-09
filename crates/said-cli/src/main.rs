@@ -52,6 +52,12 @@ enum Commands {
         /// enterprise = refuse content-embedding ingests; pointer-only
         #[arg(long, default_value = "portable")]
         mode: String,
+        /// Create an ADDITIONAL brain even though one already exists on this PC.
+        /// By default `create` is one-brain-per-PC: if a brain is already
+        /// registered it points you to `init` to grow that brain instead of
+        /// making a second. Pass --force to override (scratch/test/multi-brain).
+        #[arg(long)]
+        force: bool,
     },
     /// Store a memory (also available as `remember`)
     #[command(alias = "remember")]
@@ -78,8 +84,15 @@ enum Commands {
     },
     /// Remove a memory by its id
     Delete {
-        /// Document ID
-        doc_id: String,
+        /// Document ID (omit when using --project to wipe a whole project)
+        doc_id: Option<String>,
+        /// Wipe an ENTIRE project: tombstone every frame tagged `project:<name>` (the portable-brain
+        /// "delete everything for project X"). Lineage preserved (recoverable via `admin`).
+        #[arg(long)]
+        project: Option<String>,
+        /// Preview only — list what would be deleted without tombstoning.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Symbol lookup: find a function/struct/class/trait by name.
     /// Tries exact match first, then prefix, then case-insensitive contains.
@@ -139,6 +152,26 @@ enum Commands {
         /// + 3-boost algorithm â€” for A/B comparison and head-to-head.
         #[arg(long, default_value = "current")]
         engine: String,
+        /// Scope recall to one or more pillars (comma-separated: episodic,semantic,procedural,code,
+        /// external). E.g. a "which commit" question -> `--pillar episodic` excludes code/doc frames
+        /// so the right memory ranks first (row-31 per-pillar scope). Omit = all pillars (default).
+        #[arg(long)]
+        pillar: Option<String>,
+        /// Scope recall to memories carrying ALL of these tags (repeatable, e.g.
+        /// `--tag quarter:Q4 --tag project:said`), applied BEFORE scoring. Use when a plain
+        /// query bleeds across memories that share a `[[concept]]` — narrowing to the exact
+        /// facet breaks the tie. Run `said list-tags` to see the tags in use. Exact match, AND.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
+    },
+    /// RESIDENT mode: load the brain + encoder ONCE, then answer queries from stdin (one per line) against
+    /// the warm brain — the fix for the per-process reload cost. Prints `READY`, then one answer per query
+    /// line; blank line / EOF exits. Use for hot loops / benchmarking / an agent that asks many questions.
+    Serve {
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        #[arg(long)]
+        pillar: Option<String>,
     },
     /// Show how many memories you have
     Stats {
@@ -157,6 +190,48 @@ enum Commands {
         #[arg(long)]
         prefix: Option<String>,
     },
+    /// List the tags your memories carry (the `tags:` metadata vocabulary), with a count per
+    /// tag. Distinct from list-concepts, which walks the [[wikilink]] graph — this surfaces the
+    /// free-form tags you (or an agent) attach when saving, so you can see the conventions already
+    /// in use and reuse them instead of inventing synonyms.
+    #[command(name = "list-tags")]
+    ListTags {
+        /// Only show tags starting with this prefix (e.g. --prefix project:)
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+    /// Save a memory-evidence frame (the doc-31 standard): a CLAIM with structured evidence, recalled
+    /// by manifest + LLM-select (like Claude/Kimi), with link: edges to its source (commit/file/concept).
+    /// Coexists with blueprints + coding-fixes in the same brain.
+    SaveMemory {
+        /// Short kebab-case name (the manifest slug + doc_id).
+        #[arg(long)]
+        name: String,
+        /// One-line description — the relevance hook the LLM matches on when selecting.
+        #[arg(long)]
+        description: String,
+        /// Memory type: user | feedback | project | reference (Claude's 4 types).
+        #[arg(long, default_value = "project")]
+        mtype: String,
+        /// The claim body (the agent's own words; ideally fact + Why: + How to apply:).
+        #[arg(long)]
+        claim: Option<String>,
+        /// Read the claim from a file instead (Windows-safe).
+        #[arg(long)]
+        claim_file: Option<String>,
+        /// Evidence tokens (repeatable): commit hashes, file/symbol names, concepts -> link: edges.
+        #[arg(long)]
+        evidence: Vec<String>,
+    },
+    /// Recall a memory by name — returns the claim verbatim + its evidence links (the source pointers
+    /// to verify before acting, per the drift rule).
+    RecallMemory {
+        #[arg(long)]
+        name: String,
+    },
+    /// List the memory MANIFEST (name + description + type) — the selectable list the host LLM picks
+    /// from (Claude's findRelevantMemories pattern; no vector recall@1).
+    MemoryManifest {},
     /// Shrink the memory file (reclaim space)
     ///
     /// Pass --drop-history with either --all or --keep N to permanently purge old
@@ -259,6 +334,66 @@ enum Commands {
         /// Minimum match score (0.0–1.0) to return a fix. Default 0.55.
         #[arg(long, default_value_t = 0.55)]
         min_similarity: f32,
+    },
+    /// Print the 10-section coding-iteration NOTE template (Title / Current State /
+    /// Task / Files and Functions / Workflow / Errors and Corrections / Codebase
+    /// Documentation / Learnings / Key Results / Worklog). Fill it in after a green
+    /// gate and pass it to `learn-fix --note-file` — the SAME structured story the
+    /// orchestrator stores, so the saved memory recalls well (not a one-line label).
+    #[cfg(feature = "code")]
+    FixTemplate,
+    /// Learn the reusable structure (blueprint) for a shape, once. Keep-first.
+    #[cfg(feature = "code")]
+    LearnBlueprint {
+        /// The shape this blueprint covers (the recall key).
+        #[arg(long)]
+        shape: String,
+        /// The sections payload as JSON.
+        #[arg(long)]
+        sections: Option<String>,
+        /// Read the sections payload from a file instead of --sections.
+        #[arg(long)]
+        sections_file: Option<String>,
+        /// Optional language tag.
+        #[arg(long)]
+        lang: Option<String>,
+        /// Optional provenance breadcrumb.
+        #[arg(long)]
+        label: Option<String>,
+        /// The structure was edited and the build/test PASSED -> auto-update the blueprint (supersede if
+        /// it changed). Without it, learn is keep-first (a no-op if the shape already has a blueprint).
+        #[arg(long, alias = "promote")]
+        verified: bool,
+    },
+    /// Scan an existing repo and auto-learn blueprints from REPEATED structures (support>=2). One-off
+    /// functions are skipped (clone-mining research: a pattern must repeat). Keep-first, so re-running
+    /// never clobbers a hand-tuned blueprint.
+    #[cfg(feature = "code")]
+    Harvest {
+        /// The repo directory to scan. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        dir: String,
+    },
+    /// Scan a repo and PRINT the repeated structures (clusters) for the coding agent to name into NL
+    /// intent phases -- step 1 of agent-in-the-loop harvest. Does NOT learn anything (use --json).
+    #[cfg(feature = "code")]
+    HarvestScan {
+        /// The repo directory to scan. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        dir: String,
+    },
+    /// Recall the reusable structure (blueprint) for a shape.
+    #[cfg(feature = "code")]
+    RecallBlueprint {
+        /// The shape to find a blueprint for.
+        #[arg(long)]
+        shape: String,
+        /// Minimum match score.
+        #[arg(long, default_value_t = 0.55)]
+        min_similarity: f32,
+        /// How many candidates to return (default 3) so the model picks the fitting one.
+        #[arg(long, default_value_t = 3)]
+        top_k: usize,
     },
     /// Surgical, anchored edit of a source file on disk â€” insert/replace/delete
     /// at a named symbol or exact-text anchor. There is NO whole-file rewrite
@@ -363,12 +498,13 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Recover deleted memories and manage retention
+    /// Recover deleted memories (and, in the Enterprise build, manage retention)
     ///
-    /// Subcommands expose the tombstone lineage for audit, byte-exact
-    /// restore (GDPR / SOX / HIPAA friendly), and legal-hold tagging that
-    /// blocks retention sweeps. All admin actions are per-brain â€” they
-    /// don't reach across files.
+    /// Every build exposes the recycle bin: list tombstones, restore a deleted
+    /// memory byte-exact, and trace a memory's deletion lineage. The Enterprise
+    /// (`full`) build adds compliance actions — legal holds, retention sweeps,
+    /// and a tamper-evident audit log (GDPR / SOX / HIPAA). All admin actions
+    /// are per-brain — they don't reach across files.
     Admin {
         #[command(subcommand)]
         action: AdminAction,
@@ -602,6 +738,37 @@ enum Commands {
         /// `dt/<CLIENT>/feapiTxnGlobal/.bruno/<Client>-Global/1. Local`.
         #[arg(long, value_name = "DIR")]
         bruno: Option<std::path::PathBuf>,
+    },
+
+    /// Agent-steering hook: read the agent's hook JSON on STDIN, inject relevant `.said` recall on
+    /// STDOUT (UserPromptSubmit → recall; SessionEnd → backstop write; and, in code bundles, a
+    /// code-search re-injection). Invoked as a subprocess by the agent's hook system — you don't
+    /// normally run this by hand. See `said setup`. (docs/said-structure/16-agent-steering.md)
+    Hook {
+        /// Which agent's hook protocol to speak. Default: claude.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Steer mode: `inject` (recall + let grep proceed, default) or `block` (deny + redirect to
+        /// .said first). The open experiment — inject is the safer default.
+        #[arg(long, default_value = "inject")]
+        mode: String,
+    },
+
+    /// Register the `.said` agent-steering hook with a coding agent (opt-in). Writes the hook into
+    /// the agent's GITIGNORED local settings (`.claude/settings.local.json`) and bundles a `said`
+    /// skill — NEVER edits CLAUDE.md, so removal leaves no git trace. `--remove` cleanly undoes it.
+    /// Available in every bundle: the brain build installs a memory-only skill + recall/write hooks
+    /// (no code re-injection); code bundles add the code-investigation re-injection.
+    Setup {
+        /// Which agent to set up. Default: claude.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Remove the hook + bundled skill instead of installing.
+        #[arg(long)]
+        remove: bool,
+        /// Print what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -1076,6 +1243,8 @@ enum AdminAction {
     },
     /// Place a legal hold on every frame (active + tombstoned) with this
     /// doc_id. Tags `legal_hold:<case_id>` â€” retention sweeps skip them.
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     LegalHoldAdd {
         /// doc_id to hold
         doc_id: String,
@@ -1083,6 +1252,8 @@ enum AdminAction {
         case: String,
     },
     /// Release a legal hold (strip `legal_hold:<case_id>` tag).
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     LegalHoldRelease {
         /// doc_id to release
         doc_id: String,
@@ -1092,6 +1263,8 @@ enum AdminAction {
     /// Apply a retention policy â€” drop tombstones older than `days`, keeping
     /// the most recent `keep_per_doc` per doc_id. Legal holds are honored
     /// (held frames are never touched regardless of age).
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     RetentionSweep {
         /// Drop tombstones older than N days. Default 365.
         #[arg(long, default_value_t = 365)]
@@ -1103,6 +1276,8 @@ enum AdminAction {
     },
     /// Show the append-only audit log. BLAKE3-chained â€” tampering breaks the
     /// chain. Use `--verify` to just check integrity without listing entries.
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     Audit {
         /// Only verify the chain's integrity â€” print "ok" or the break point.
         #[arg(long)]
@@ -1126,6 +1301,46 @@ enum VaultAction {
         /// Admin user identifier (e.g. "admin@example.com")
         #[arg(long)]
         admin: String,
+    },
+    /// COMPACTION-SURVIVAL work-state: capture your current mid-task state, in your OWN words, so it
+    /// survives a host context compaction (the exact detail summarization throws away, kept verbatim).
+    /// Free-form — write whatever lets you resume exactly; `--note-file` recommended on Windows.
+    WorkstateSave {
+        /// Path to the .said brain file
+        vault: String,
+        /// Project key (one current work-state per project)
+        #[arg(long)]
+        project: String,
+        /// The work-state note, in your own words.
+        #[arg(long)]
+        note: Option<String>,
+        /// Read the note from a file instead of --note (Windows-safe).
+        #[arg(long)]
+        note_file: Option<String>,
+        /// CHAIN this note to the project's wiki-linked history (append a new linked frame instead of
+        /// overwriting the latest). Preserves the FULL history byte-exact across every compaction.
+        #[arg(long)]
+        chain: bool,
+    },
+    /// Show the captured work-state note for a project.
+    WorkstateShow {
+        vault: String,
+        #[arg(long)]
+        project: String,
+    },
+    /// Walk the FULL wiki-linked work-state history for a project (newest -> oldest), each note
+    /// byte-exact. Proves nothing is lost across N compactions -- the opposite of a decaying summary.
+    WorkstateHistory {
+        vault: String,
+        #[arg(long)]
+        project: String,
+    },
+    /// RE-GROUND after a compaction: print the work-state resume block to re-inject into the host —
+    /// exactly where you were, your own note verbatim ("like nothing ever disappeared").
+    WorkstateResume {
+        vault: String,
+        #[arg(long)]
+        project: String,
     },
     /// Ingest a document (DOCX or PDF). Default is SLIM mode: dedup parts only,
     /// 100% structural/visual rebuild, ~half the storage. Pass --legal to also
@@ -1263,10 +1478,25 @@ fn open_brain(path: Option<&str>) -> Result<SaidFile, String> {
 }
 
 fn main() {
+    // The clap-derive help/parse builder for this large command enum is deeply recursive and can
+    // overflow the default 1MB main-thread stack on Windows (manifests as "thread 'main' has
+    // overflowed its stack" even on `--help`). Run the whole CLI on a worker thread with an 8MB
+    // stack so adding subcommands never re-triggers it.
+    let join = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn said main worker");
+    match join.join() {
+        Ok(()) => {}
+        Err(_) => std::process::exit(101),
+    }
+}
+
+fn run() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Create { ref file, ref mode } => cmd_create(file, mode, cli.json),
+        Commands::Create { ref file, ref mode, force } => cmd_create(file, mode, force, cli.json),
         Commands::Add { ref text, ref file, ref dir, ref id, ref title } => {
             if let Some(d) = dir {
                 cmd_add_dir(cli.path.as_deref(), d, cli.json)
@@ -1286,14 +1516,15 @@ fn main() {
             }
         }
         Commands::Get { ref doc_id } => cmd_get(cli.path.as_deref(), doc_id, cli.json),
-        Commands::Delete { ref doc_id } => cmd_delete(cli.path.as_deref(), doc_id, cli.json),
+        Commands::Delete { ref doc_id, ref project, dry_run } => cmd_delete(cli.path.as_deref(), doc_id.as_deref(), project.as_deref(), dry_run, cli.json),
         #[cfg(feature = "code")]
         Commands::Sym { ref name, max, list } => cmd_sym(cli.path.as_deref(), name, max, list, cli.json),
         #[cfg(feature = "code")]
         Commands::Calls { ref name } => cmd_code_edges(cli.path.as_deref(), name, false, cli.json),
         #[cfg(feature = "code")]
         Commands::Callers { ref name } => cmd_code_edges(cli.path.as_deref(), name, true, cli.json),
-        Commands::Ask { ref query, top, deep, ref engine } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, cli.json),
+        Commands::Ask { ref query, top, deep, ref engine, ref pillar, ref tag } => cmd_ask(cli.path.as_deref(), query, top, deep, engine, pillar.as_deref(), tag, cli.json),
+        Commands::Serve { top, ref pillar } => cmd_serve(cli.path.as_deref(), top, pillar.as_deref(), cli.json),
         #[cfg(feature = "code")]
         Commands::Init { ref dir, incremental } => cmd_init(cli.path.as_deref(), dir, incremental, cli.json),
         #[cfg(feature = "code")]
@@ -1306,6 +1537,19 @@ fn main() {
         Commands::RecallFix { ref problem, min_similarity } =>
             cmd_recall_fix(cli.path.as_deref(), problem, min_similarity, cli.json),
         #[cfg(feature = "code")]
+        Commands::FixTemplate => { print!("{}", said_prompts::coding::ITERATION_TEMPLATE); Ok(()) }
+        #[cfg(feature = "code")]
+        Commands::LearnBlueprint { ref shape, ref sections, ref sections_file, ref lang, ref label, verified } =>
+            cmd_blueprint_write(cli.path.as_deref(), shape, sections.as_deref(), sections_file.as_deref(),
+                lang.as_deref(), label.as_deref(), verified, cli.json),
+        #[cfg(feature = "code")]
+        Commands::Harvest { ref dir } => cmd_harvest(cli.path.as_deref(), dir, cli.json),
+        #[cfg(feature = "code")]
+        Commands::HarvestScan { ref dir } => cmd_harvest_scan(dir, cli.json),
+        #[cfg(feature = "code")]
+        Commands::RecallBlueprint { ref shape, min_similarity, top_k } =>
+            cmd_recall_blueprint(cli.path.as_deref(), shape, min_similarity, top_k, cli.json),
+        #[cfg(feature = "code")]
         Commands::Edit {
             ref file, ref mode, ref symbol, line, ref anchor, ref content, ref content_file,
             dry_run, allow_large, no_verify, explain,
@@ -1313,10 +1557,17 @@ fn main() {
             cli.path.as_deref(), file, mode, symbol.as_deref(), line, anchor.as_deref(),
             content.as_deref(), content_file.as_deref(), dry_run, allow_large, no_verify, explain, cli.json,
         ),
+        Commands::Hook { ref agent, ref mode } => cmd_hook(cli.path.as_deref(), agent, mode),
+        Commands::Setup { ref agent, remove, dry_run } => cmd_setup(cli.path.as_deref(), agent, remove, dry_run),
         Commands::History { ref name } => cmd_history(cli.path.as_deref(), name, cli.json),
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
         Commands::ListConcepts { prefix } => cmd_list_concepts(cli.path.as_deref(), prefix.as_deref(), cli.json),
+        Commands::ListTags { prefix } => cmd_list_tags(cli.path.as_deref(), prefix.as_deref(), cli.json),
+        Commands::SaveMemory { ref name, ref description, ref mtype, ref claim, ref claim_file, ref evidence } =>
+            cmd_save_memory(cli.path.as_deref(), name, description, mtype, claim.as_deref(), claim_file.as_deref(), evidence, cli.json),
+        Commands::RecallMemory { ref name } => cmd_recall_memory(cli.path.as_deref(), name, cli.json),
+        Commands::MemoryManifest {} => cmd_memory_manifest(cli.path.as_deref(), cli.json),
         Commands::Compact { drop_history, all, keep } => cmd_compact(cli.path.as_deref(), drop_history, all, keep, cli.json),
         Commands::Config { ref key, ref value } => {
             cmd_config(key.as_deref(), value.as_deref(), cli.json)
@@ -1382,9 +1633,39 @@ fn main() {
 // Command implementations
 // ---------------------------------------------------------------------------
 
-fn cmd_create(file: &str, mode: &str, json: bool) -> Result<(), String> {
+fn cmd_create(file: &str, mode: &str, force: bool, json: bool) -> Result<(), String> {
     if Path::new(file).exists() {
         return Err(format!("File already exists: {}", file));
+    }
+    // ONE-BRAIN-PER-PC. If a brain is already registered on this machine, `create`
+    // refuses a second one and points the user to `init` to GROW the existing brain
+    // (append, never wipe). MULTI-BRAIN is an Enterprise (`full` build) capability:
+    // only there does `--force` override the guard. On the free/dev tiers a second
+    // brain is refused even with --force, with an upsell — this is the single-brain
+    // free tier. See docs/said-structure/40-build-tier-capability-matrix.md.
+    #[cfg(not(feature = "enterprise"))]
+    let force = {
+        let _ = force; // multi-brain override is Enterprise-only; ignore --force here
+        false
+    };
+    if !force {
+        if let Some(existing) = crate::resolve::read_default() {
+            if Path::new(&existing).exists() {
+                #[cfg(feature = "enterprise")]
+                let override_hint = "To create an ADDITIONAL brain anyway, re-run with --force.";
+                #[cfg(not(feature = "enterprise"))]
+                let override_hint = "Multiple brains on one machine is an Enterprise feature — this \
+                                     free build keeps one brain per PC. Grow the one above, or use \
+                                     the Enterprise (`full`) build for multi-brain.";
+                return Err(format!(
+                    "A brain already exists on this PC:\n  {existing}\n\n\
+                     One brain per PC is the default — grow that brain instead of making a second:\n  \
+                     said --path \"{existing}\" init <dir>     # append a codebase (never wipes)\n  \
+                     said --path \"{existing}\" ask \"...\"       # query it\n\n\
+                     {override_hint}"
+                ));
+            }
+        }
     }
     let brain_mode = sca_core::said_file::BrainMode::parse(mode)
         .ok_or_else(|| format!("Unknown mode '{}'. Use 'portable' or 'enterprise'.", mode))?;
@@ -1393,6 +1674,17 @@ fn cmd_create(file: &str, mode: &str, json: bool) -> Result<(), String> {
     // `said mode` command.
     let mut brain = SaidFile::create_with_mode(file, brain_mode);
     brain.save()?;
+    // Register this as THE brain for the PC (the one-brain-per-PC anchor) unless one
+    // is already registered — so the next bare `create` sees it and the guardrail fires.
+    // Only auto-register when there's no existing default (don't silently repoint the
+    // owner's default when they --force a second scratch brain).
+    if crate::resolve::read_default().is_none() {
+        if let Ok(abs) = std::fs::canonicalize(file) {
+            let _ = crate::resolve::set_default(&abs.to_string_lossy());
+        } else {
+            let _ = crate::resolve::set_default(file);
+        }
+    }
     if json {
         println!("{}", serde_json::json!({"created": file, "mode": brain_mode.as_str()}));
     } else {
@@ -1524,6 +1816,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::LegalHoldAdd { doc_id, case } => {
             let mut brain = open_brain(path)?;
             let n = brain.admin_legal_hold_add(doc_id, case);
@@ -1535,6 +1828,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 if n == 0 { println!("  (no frames found with that doc_id)"); }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::LegalHoldRelease { doc_id, case } => {
             let mut brain = open_brain(path)?;
             let n = brain.admin_legal_hold_release(doc_id, case);
@@ -1545,6 +1839,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 println!("âœ“ Released legal hold '{}' from {} frame(s) for doc_id '{}'.", case, n, doc_id);
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::Audit { verify, actor, kind } => {
             let brain = open_brain(path)?;
             let log = brain.audit();
@@ -1594,6 +1889,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::RetentionSweep { older_than_days, keep_per_doc } => {
             let mut brain = open_brain(path)?;
             // For the day-based filter, we need to tombstone frames created
@@ -1662,6 +1958,65 @@ fn cmd_vault(action: &VaultAction, json: bool) -> Result<(), String> {
                 println!("{}", serde_json::json!({"ok": true, "path": path, "admin": admin}));
             } else {
                 println!("initialized: {} (admin: {})", path, admin);
+            }
+            Ok(())
+        }
+        VaultAction::WorkstateSave { vault, project, note, note_file, chain } => {
+            // Work-state is a CORE memory function (sca-core, like blueprint/learn_fix) -- NOT a vault
+            // feature. Free-form note (the agent's own words), captured so it survives a host compaction.
+            let text = match (note, note_file) {
+                (Some(_), Some(_)) => return Err("pass only one of --note / --note-file".into()),
+                (Some(n), None) => n.clone(),
+                (None, Some(f)) => std::fs::read_to_string(f)
+                    .map_err(|e| format!("read --note-file {}: {}", f, e))?
+                    .trim_start_matches('\u{feff}').to_string(),
+                (None, None) => return Err("missing --note or --note-file".into()),
+            };
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            let id = if *chain {
+                sca_core::workstate::append_work_state(&mut brain, project, &text)
+            } else {
+                sca_core::workstate::save_work_state(&mut brain, project, &text)
+            };
+            brain.save().map_err(|e| format!("save: {}", e))?;
+            if json { println!("{}", serde_json::json!({"ok": true, "workstate": id, "project": project, "chained": chain})); }
+            else { println!("captured work-state for '{}' ({}){}", project, id, if *chain { " [chained]" } else { "" }); }
+            Ok(())
+        }
+        VaultAction::WorkstateHistory { vault, project } => {
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            let history = sca_core::workstate::work_state_history(&mut brain, project);
+            if json {
+                println!("{}", serde_json::json!({"project": project, "rounds": history.len(), "history": history}));
+            } else if history.is_empty() {
+                println!("no work-state history for '{}'", project);
+            } else {
+                println!("=== work-state history for '{}' ({} rounds, newest first) ===", project, history.len());
+                for (i, note) in history.iter().enumerate() {
+                    println!("\n--- [{}] ---\n{}", history.len() - i, note);
+                }
+            }
+            Ok(())
+        }
+        VaultAction::WorkstateShow { vault, project } => {
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            match sca_core::workstate::load_work_state(&mut brain, project) {
+                Some(note) => { if json { println!("{}", serde_json::json!({"project": project, "note": note})); }
+                                else { println!("{}", note); } }
+                None => { if json { println!("{}", serde_json::json!({"workstate": serde_json::Value::Null})); }
+                          else { println!("no work-state captured for '{}'", project); } }
+            }
+            Ok(())
+        }
+        VaultAction::WorkstateResume { vault, project } => {
+            let mut brain = sca_core::said_file::SaidFile::open(vault)
+                .map_err(|e| format!("open {}: {}", vault, e))?;
+            match sca_core::workstate::resume_block(&mut brain, project) {
+                Some(block) => println!("{}", block),
+                None => println!("no work-state to resume for '{}'", project),
             }
             Ok(())
         }
@@ -1917,23 +2272,32 @@ fn cmd_add(
     let content = if let Some(f) = file {
         std::fs::read_to_string(f).map_err(|e| format!("Cannot read file '{}': {}", f, e))?
     } else if let Some(t) = text {
-        t.to_string()
+        // WRITE-TIME temporal grounding (Mem0 Layer-1, deterministic): resolve relative phrases
+        // ("last quarter"/"last year") to absolute dates against TODAY so later recall finds the
+        // memory. Inline-text adds only — a `--file` add is document ingest, not a personal note,
+        // and must be stored verbatim. `today` from the clock here; the transform itself is pure.
+        let (ty, tm, td) = sca_core::time_compat::today_ymd();
+        sca_core::time_compat::ground_relative_dates(t, ty, tm, td)
     } else {
         return Err("Provide text or --file or --dir".into());
     };
 
+    let mut brain = open_brain(path)?;
+
+    // Auto doc_id when the user gives none. BUG FIX: the old fallback was `doc_{seconds}` — two `add`s
+    // in the SAME wall-clock second generated the IDENTICAL id, so the second silently OVERWROTE the
+    // first (doc_id dedup), losing memories on any rapid succession of adds. Use the brain's monotonic
+    // frame counter instead (`mem_<N>`, the same scheme `remember()` uses) — unique regardless of timing.
     let doc_id = if let Some(i) = id {
         i.to_string()
     } else if let Some(f) = file {
         Path::new(f)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| format!("doc_{}", chrono_free_timestamp()))
+            .unwrap_or_else(|| format!("mem_{}", brain.frames.total_count()))
     } else {
-        format!("doc_{}", chrono_free_timestamp())
+        format!("mem_{}", brain.frames.total_count())
     };
-
-    let mut brain = open_brain(path)?;
 
     // BLAKE3 dedup for --file
     if let Some(f) = file {
@@ -1960,6 +2324,17 @@ fn cmd_add(
     } else {
         brain.add(&doc_id, &content);
     }
+
+    // OKF concept graph for MEMORY brains (default-on, opt out with SAID_OKF_LINKS=0). `init` builds
+    // this graph so code brains get the wiki-link reachability; a `remember`-built personal brain must
+    // get it too, or the ask Engine-D bridge (which pulls in sibling memories sharing a concept) never
+    // fires and recall on cross-referenced notes ("what is Alice leading" → the sibling that names the
+    // project) collapses. build_concept_links routes personal-memory frames to the single-word-aware
+    // extractor (so "Alice"/"Berlin" link), leaving code/doc frames on the multi-word extractor. It is
+    // idempotent (skips a link a frame already carries), so re-running per `add` only adds NEW edges.
+    if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
+        let _ = brain.build_concept_links();
+    }
     brain.save()?;
 
     if json {
@@ -1983,8 +2358,15 @@ fn cmd_add(
 const SQL_EXTENSIONS: &[&str] = &["sql", "ddl", "tsql"];
 
 // Pure-text formats with no AST chunker; whole-file storage at ingest.
+// `.csv` is DELIBERATELY EXCLUDED: CSV is a data-EXPORT format, not searchable code/text. The Wonga
+// bank repo's "Wonga Compressed" dir carries 1,137 CSV transaction-dumps each UNDER the 5 MB per-file
+// cap (85 MB total) that char-chunked into ~346k passages — measured as the sole cause of that dir's
+// 750 MB ingest spike, while every code/SQL-only dir (incl. heavy-SQL AB) peaked ≤202 MB. The per-file
+// size cap can't catch this (each file is individually small); the right fix is excluding the TYPE.
+// Data you genuinely want searchable should be ingested as text, not left as a raw multi-MB CSV dump.
+// Opt back in with SAID_INGEST_CSV=1 (still subject to the SAID_TEXT_MAX_BYTES per-file cap).
 const PLAIN_TEXT_EXTENSIONS: &[&str] = &[
-    "txt", "html", "xml", "csv", "cfg", "ini",
+    "txt", "html", "xml", "cfg", "ini",
 ];
 
 /// File-enrollment filter for `init` (which extensions get walked + ingested).
@@ -2002,7 +2384,106 @@ fn code_extension(ext: &str) -> bool {
 }
 
 fn text_extension(ext: &str) -> bool {
-    PLAIN_TEXT_EXTENSIONS.contains(&ext)
+    if PLAIN_TEXT_EXTENSIONS.contains(&ext) {
+        return true;
+    }
+    // CSV is excluded by default (data dumps — see PLAIN_TEXT_EXTENSIONS note). Opt back in explicitly;
+    // it still passes through the SAID_TEXT_MAX_BYTES per-file cap in should_enroll().
+    if ext == "csv" && std::env::var("SAID_INGEST_CSV").as_deref() == Ok("1") {
+        return true;
+    }
+    false
+}
+
+/// Enroll a file for ingest? Filters by extension AND — for non-code plain-text/data files (csv, txt,
+/// xml, …) — by SIZE. A large CSV/TXT is a DATA DUMP, not knowledge: e.g. the Wonga bank repo carries
+/// 3 GB of `african_bank_data/source/*.csv` (an 831 MB transaction export), which char-chunks into a
+/// multi-GB passage explosion — the real cause of the "word index" OOM. Code/SQL files stay UNCAPPED
+/// (a big source file is legitimate and AST-chunks cleanly). Override the cap with SAID_TEXT_MAX_BYTES
+/// (0 disables). Default 5 MB — generous for real config/docs, far below any data dump.
+/// ONE ingestion memory budget — the spill safety-net for low-RAM / mobile devices.
+///
+/// This used to be a 3-way "accountant" (frames 40% / encode 40% / word-index 20%) built to stop three
+/// budgets stacking to ~3× peak. Measured reality (per-directory A/B on the 37k Wonga corpus): the peak
+/// is ~505 MB regardless of the budget — disabling it entirely gave the SAME 505 MB / 124 s. The peak is
+/// set by the corpus + the fixed process baseline, not by these knobs, so the elaborate split was dead
+/// weight. What DOES matter is the spill FLOOR on a genuine low-RAM device (a phone with <1 GB free): the
+/// frame `pending` buffer must be allowed to flush to disk before it exhausts RAM. So we keep ONE simple
+/// per-device budget and publish it to the sca-core env vars; no split, no stacking to reason about.
+///
+///   budget = clamp(available_RAM × 12%, 16 MB, 512 MB)   (Elasticsearch/Lucene ~10% of heap; Lucene's
+///            16 MB IndexWriter floor; 512 MB ceiling — above it spill cost rises and big-RAM machines
+///            never need to spill anyway.) Override with SAID_INGEST_BUDGET (bytes).
+fn ingest_budget() -> usize {
+    const FLOOR: u64 = 16 * 1024 * 1024;
+    const CEILING: u64 = 512 * 1024 * 1024;
+    match std::env::var("SAID_INGEST_BUDGET").ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(b) => b.clamp(FLOOR, CEILING) as usize,
+        None => {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_memory();
+            let available = sys.available_memory(); // bytes
+            if available == 0 { CEILING as usize }
+            else { ((available as f64 * 0.12) as u64).clamp(FLOOR, CEILING) as usize }
+        }
+    }
+}
+
+/// Publish the single budget to the env vars sca-core reads (frame spill + index window). Explicit user
+/// overrides (SAID_SPILL_BUDGET / SAID_INDEX_BUDGET) are respected — only unset ones are filled in.
+fn apply_ingest_budget() {
+    let b = ingest_budget().to_string();
+    if std::env::var("SAID_SPILL_BUDGET").is_err() { std::env::set_var("SAID_SPILL_BUDGET", &b); }
+    if std::env::var("SAID_INDEX_BUDGET").is_err() { std::env::set_var("SAID_INDEX_BUDGET", &b); }
+}
+
+/// The frame spill budget (same single per-device budget).
+fn auto_spill_budget() -> usize { ingest_budget() }
+
+fn should_enroll(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e.to_lowercase(),
+        None => return false,
+    };
+    // .json EXCLUDED by default (same class as .csv): JSON is registered as a code grammar
+    // (tree-sitter-json), so code_extension("json")==true and the non-code size cap below does NOT
+    // apply -> a data-dump JSON is ingested UNCAPPED. Measured wall: Advisory/Vulncheck/mitre-cve.json
+    // (1.4 GB CVE dump) drove `said init` to ~4.9 GB RAM. Real source is rarely a giant JSON; a big
+    // JSON is almost always a data export, not code. Skipped by default (proper size-aware fix parked,
+    // like CSV). Opt back in with SAID_INGEST_JSON=1 (then still subject to the size cap logic below).
+    if ext == "json" && std::env::var("SAID_INGEST_JSON").as_deref() != Ok("1") {
+        return false;
+    }
+    let is_code = code_extension(&ext);
+    let is_textish = text_extension(&ext) || doc_extension(&ext);
+    if !is_code && !is_textish {
+        return false;
+    }
+    // Size cap applies to non-code text/data files AND to opted-in JSON (data-shaped, not source).
+    if !is_code || ext == "json" {
+        let cap: u64 = std::env::var("SAID_TEXT_MAX_BYTES")
+            .ok().and_then(|s| s.parse().ok())
+            .unwrap_or(5 * 1024 * 1024);
+        if cap > 0 {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.len() > cap {
+                    return false; // data dump — skip
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Binary document formats that `init` can ingest when the `docs` feature is built —
+/// extracted to text via `document_ingest` (DOCX/PDF) rather than decoded as raw text.
+/// Enables `said init <dir-of-docx>` to build a queryable brain from a document corpus
+/// (e.g. the legal bench-corpus), with the OKF cross-link pass on top.
+fn doc_extension(ext: &str) -> bool {
+    #[cfg(feature = "docs")]
+    { matches!(ext, "docx" | "pdf") }
+    #[cfg(not(feature = "docs"))]
+    { let _ = ext; false }
 }
 
 /// AST-aware (chunker is invoked) â€” same as `code_extension` since the
@@ -2092,6 +2573,13 @@ fn is_junk_dir(name: &str) -> bool {
         | "__pycache__" | ".mypy_cache" | ".pytest_cache" | ".tox"
         | ".gradle" | ".turbo" | ".parcel-cache" | ".cache" | ".vite"
         | ".next" | ".nuxt" | ".svelte-kit"
+        // .NET / MSBuild / SQL (DACPAC) build artifacts. A .NET repo with no root .gitignore
+        // (e.g. the Wonga banking codebase) otherwise pulls in 374 obj/Debug dirs full of
+        // `*.generated.sql` stored-proc dumps -- a passage explosion that OOMed index_batch
+        // (2.2GB alloc) while every other language ingested fine. These are regenerated by the
+        // build and are never original source.
+        | "bin" | "obj" | "Debug" | "Release" | "x64" | "x86"
+        | "packages" | "TestResults" | "BenchmarkDotNet.Artifacts"
     )
 }
 
@@ -2138,15 +2626,8 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     let mut files = Vec::new();
     walk_dir(&dir_path, &mut files);
 
-    // Filter to known extensions
-    let files: Vec<PathBuf> = files.into_iter().filter(|p| {
-        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower)
-        } else {
-            false
-        }
-    }).collect();
+    // Filter to known extensions (+ skip oversized non-code data dumps, e.g. huge CSVs).
+    let files: Vec<PathBuf> = files.into_iter().filter(|p| should_enroll(p)).collect();
 
     // Open or create. If file has zero frames, start fresh to avoid mmap issues
     // (compact on empty mmap data produces corrupt blocks)
@@ -2169,8 +2650,31 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
     // brains refuse. Callers should use pointer ingest via `said ingest --pointer`.
     brain.ensure_content_ingest_allowed()?;
 
+    // PROJECT SCOPE (code-ingest only): `add --dir` is a CODE-project ingest, so when SAID_PROJECT is set
+    // every chunk/file gets `project:<name>` + the `link:project-<name>` wiki edge — so recall can scope
+    // to one project and the graph fan-out reaches the whole project cluster (docs/28 keystone). Bare
+    // `remember`/`add <text>` is left global (handled elsewhere). Empty when unset => today's behavior.
+    let project_tags: Vec<String> = match sca_core::project::current_project() {
+        Some(p) => vec![sca_core::project::project_tag(&p), sca_core::project::project_link_tag(&p)],
+        None => Vec::new(),
+    };
+
     let mut added = 0u64;
     let mut skipped = 0u64;
+    // Content-hash dedup set. Seeded from the brain's existing frames (cross-run dedup) and then
+    // updated as we go (INTRA-run dedup): a repo with content-identical files at different paths —
+    // e.g. duplicated nested trees like `Database1/Database1/…` or `wow go go/wow go go/…` in the
+    // Wonga corpus — would otherwise ingest every copy, doubling frames + exploding the token vocab
+    // (SQL schema is vocab-dense). This also replaces the old O(N) `active_doc_ids().any()` scan per
+    // file (O(N²) total) with an O(1) HashSet lookup.
+    let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for did in brain.frames.active_doc_ids() {
+        if let Some(m) = brain.frames.get_meta(&did) {
+            for t in &m.tags {
+                if let Some(h) = t.strip_prefix("blake3:") { seen_hashes.insert(h.to_string()); }
+            }
+        }
+    }
 
     for file_path in &files {
         let file_bytes = match std::fs::read(file_path) {
@@ -2178,15 +2682,12 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
             Err(_) => { skipped += 1; continue; }
         };
         let hash = blake3::hash(&file_bytes);
-        let hash_tag = format!("blake3:{}", hash.to_hex());
+        let hash_hex = hash.to_hex().to_string();
+        let hash_tag = format!("blake3:{}", hash_hex);
 
-        // Check if already indexed with same hash
-        let already_indexed = brain.frames.active_doc_ids().iter().any(|did| {
-            brain.frames.get_meta(did)
-                .map(|m| m.tags.iter().any(|t| t == &hash_tag))
-                .unwrap_or(false)
-        });
-        if already_indexed {
+        // Skip if this exact content was already ingested — in a PRIOR run (seeded above) OR earlier
+        // in THIS run (intra-run dedup of duplicate copies).
+        if !seen_hashes.insert(hash_hex) {
             skipped += 1;
             continue;
         }
@@ -2222,12 +2723,13 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                     for chunk in &chunks {
                         let doc_id = format!("{}::{}", rel_path, chunk.name);
                         let title = format!("{}:{}-{} ({})", filename, chunk.start_line, chunk.end_line, chunk.kind);
-                        let tags = vec![
+                        let mut tags = vec![
                             format!("lang:{}", ext),
                             format!("kind:{}", chunk.kind),
                             format!("file:{}", rel_path),
                             hash_tag.clone(),
                         ];
+                        tags.extend(project_tags.iter().cloned());
                         let opts = PutOptions {
                             doc_id: &doc_id,
                             content: &chunk.content,
@@ -2235,7 +2737,10 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                             tags,
                             ..PutOptions::new(&doc_id, &chunk.content)
                         };
-                        brain.put_with(&opts);
+                        // KIND CLASSIFICATION: AST code chunks live in the Code pillar so a code query
+                        // can be scoped to code and a non-code ("which commit") query can exclude it
+                        // (row-31 per-pillar scope). Default Episodic would mix code into every result.
+                        brain.put_with_pillar(&opts, sca_core::frames::Pillar::Code);
                         added += 1;
                     }
                     continue;
@@ -2251,12 +2756,13 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
         {
             let doc_id = rel_path.clone();
             let title = filename.clone();
-            let tags = vec![
+            let mut tags = vec![
                 format!("lang:{}", ext),
                 format!("kind:file"),
                 format!("file:{}", rel_path),
                 hash_tag.clone(),
             ];
+            tags.extend(project_tags.iter().cloned());
             let opts = PutOptions {
                 doc_id: &doc_id,
                 content: &content,
@@ -2264,7 +2770,17 @@ fn cmd_add_dir(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> 
                 tags,
                 ..PutOptions::new(&doc_id, &content)
             };
-            brain.put_with(&opts);
+            // KIND CLASSIFICATION for whole-file ingest: a code file with no AST chunks -> Code;
+            // a doc/markdown file -> Semantic (distilled knowledge); plain text -> Episodic (default).
+            // This is what lets a "which commit" query route AWAY from code/doc frames (row-31 scope).
+            let pillar = if code_extension(&ext) {
+                sca_core::frames::Pillar::Code
+            } else if doc_extension(&ext) {
+                sca_core::frames::Pillar::Semantic
+            } else {
+                sca_core::frames::Pillar::Episodic
+            };
+            brain.put_with_pillar(&opts, pillar);
             added += 1;
         }
     }
@@ -2319,15 +2835,8 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     let mut files = Vec::new();
     walk_dir_gitignore(&dir_path, &dir_path, &gitignore_patterns, &mut files);
 
-    // Filter to indexable extensions
-    let files: Vec<PathBuf> = files.into_iter().filter(|p| {
-        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            code_extension(&ext_lower) || text_extension(&ext_lower)
-        } else {
-            false
-        }
-    }).collect();
+    // Filter to indexable extensions (+ skip oversized non-code data dumps, e.g. huge CSVs).
+    let files: Vec<PathBuf> = files.into_iter().filter(|p| should_enroll(p)).collect();
 
     let total_files = files.len();
     if !json {
@@ -2356,6 +2865,26 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     };
     try_load_encoder(&mut brain);
 
+    // Streaming-ingest spill (#4): cap the in-RAM `pending` frame buffer so a
+    // large `said init` ingests at constant memory instead of holding the whole
+    // corpus until save(). Override with SAID_SPILL_BUDGET (bytes); 0 disables
+    // (legacy hold-in-RAM). Must be set BEFORE the phase-1 ingest loop so every
+    // remember_as honours it.
+    //
+    // ONE coordinated ingest budget (the SPIMI "single accountant"): compute the per-device total
+    // once and publish the frame/encode/word-index sub-budgets into the env vars each phase reads, so
+    // the three phases draw from ONE budget instead of three independent maxes that could stack to ~3×
+    // peak. Explicit SAID_SPILL_BUDGET / SAID_INDEX_BUDGET overrides are respected. See docs (streaming
+    // memory model). SAID_INGEST_BUDGET overrides the total.
+    apply_ingest_budget();
+    let spill_budget: usize = std::env::var("SAID_SPILL_BUDGET")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or_else(auto_spill_budget);
+    if spill_budget > 0 {
+        brain.set_stream_spill_budget(spill_budget);
+    }
+
     // Mode guard: `said init` embeds AST chunks as full frames, which counts
     // as content ingest. Enterprise brains refuse this. Callers should use
     // `said admin convert-to-pointer` (planned) or switch to portable mode.
@@ -2365,6 +2894,16 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     // a future `said watch` daemon uses to re-register filesystem watchers
     // across all sources (code dirs, docs, emails, media mounts).
     let source_tag = format!("source:{}", dir_path.to_string_lossy().replace('\\', "/"));
+
+    // PROJECT SCOPE on the INIT path (the keystone gap — was only on cmd_add_dir). When SAID_PROJECT is
+    // set, every ingested code frame gets `project:<name>` + `link:project-<name>` — so recall can scope
+    // to one project AND `delete(tag_filter: project:<name>)` / `wipe --project` can remove the whole
+    // project. Without this, `init` (the MCP + CLI ingest path) produced UN-tagged frames, so
+    // project-scoping and remove-a-project silently found nothing. Empty when SAID_PROJECT is unset.
+    let project_tags: Vec<String> = match sca_core::project::current_project() {
+        Some(p) => vec![sca_core::project::project_tag(&p), sca_core::project::project_link_tag(&p)],
+        None => Vec::new(),
+    };
 
     // Track which rel_paths we see this run so we can tombstone deleted files
     // at the end (anything tagged with this source_tag but not touched).
@@ -2434,15 +2973,31 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
             continue;
         }
 
-        let content = match decode_text(&file_bytes) {
-            Some(s) => s,
-            None => { skipped += 1; continue; }
-        };
-
         let ext = file_path.extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
+        // DOCX/PDF: route through the ONE in-core entry `document_ingest::ingest_document`
+        // (sca_core — per docs/said-structure/06-ingestion-plugins/docs.md: a single public
+        // ingest_document() that detects format, routes, and runs the OCR fallback for scanned
+        // PDFs). It extracts + stores the frame(s) + the blake3 tag directly, so we move on —
+        // the file is a binary zip/pdf that decode_text would reject as binary.
+        #[cfg(feature = "docs")]
+        if doc_extension(&ext) {
+            match sca_core::document_ingest::ingest_document(
+                &mut brain, &file_path.to_string_lossy(), |_, _, _| {},
+            ) {
+                Ok(_) => { brain.add_tag(&rel_path, &hash_tag); added += 1; }
+                Err(_) => { skipped += 1; }
+            }
+            continue;
+        }
+
+        let content = match decode_text(&file_bytes) {
+            Some(s) => s,
+            None => { skipped += 1; continue; }
+        };
 
         let filename = file_path.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -2476,10 +3031,20 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
                             rel_path, chunk.name, base_kind, chunk.start_line
                         );
                         let title = format!("{}:{}-{} ({})", filename, chunk.start_line, chunk.end_line, base_kind);
-                        brain.remember_as(&doc_id, &chunk.content, Some(&title));
+                        let fid = brain.remember_as(&doc_id, &chunk.content, Some(&title));
+                        // KIND CLASSIFICATION (mirrors cmd_add_dir): AST code chunks live in the Code
+                        // pillar so per-pillar scope (row-31) can separate code from commits/docs — without
+                        // this, init stored everything as default Episodic and `--pillar episodic` leaked
+                        // code into "which commit" queries (recall collapse). Same rule for both ingest paths.
+                        brain.frames.set_pillar(fid, sca_core::frames::Pillar::Code);
                         brain.add_tag(&doc_id, &source_tag);
                         brain.add_tag(&doc_id, "ingest:code");
                         brain.add_tag(&doc_id, &hash_tag);
+                        // project:<name> + link:project-<name> — so this frame is scopable + deletable
+                        // by project (the init-path keystone fix).
+                        for ptag in &project_tags {
+                            brain.add_tag(&doc_id, ptag);
+                        }
                         if let Some(ref ctag) = client_tag {
                             brain.add_tag(&doc_id, ctag);
                         }
@@ -2538,11 +3103,22 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
         }
 
         // Non-code files OR code files where AST chunking failed: store whole file
-        brain.remember_as(&rel_path, &content, Some(&filename));
+        let fid = brain.remember_as(&rel_path, &content, Some(&filename));
+        // KIND CLASSIFICATION (mirrors cmd_add_dir whole-file path): code file -> Code, doc/markdown ->
+        // Semantic, plain text (commits etc.) -> Episodic (default). Lets "which commit" scope to episodic.
+        let wf_pillar = if code_extension(&ext) {
+            sca_core::frames::Pillar::Code
+        } else if doc_extension(&ext) {
+            sca_core::frames::Pillar::Semantic
+        } else {
+            sca_core::frames::Pillar::Episodic
+        };
+        brain.frames.set_pillar(fid, wf_pillar);
         brain.add_tag(&rel_path, &source_tag);
         let kind_tag = if code_extension(&ext) { "ingest:code" } else { "ingest:text" };
         brain.add_tag(&rel_path, kind_tag);
         brain.add_tag(&rel_path, &hash_tag);
+        for ptag in &project_tags { brain.add_tag(&rel_path, ptag); }
         if let Some(ref ctag) = client_tag {
             brain.add_tag(&rel_path, ctag);
         }
@@ -2587,9 +3163,21 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     }
 
     // PHASE 2: SCA encoding (flat-memory mmap streaming with progress)
+    // 580MB ceiling: skip building the ~1.6GB resident word_inverted_fast/phonetic maps during this
+    // bulk init — we save() immediately after (Phase 3), and save derives the WIDX word-index section
+    // from the per-doc data, so the resident maps are never needed. A reopened brain reads postings
+    // from WIDX in place. Opt out with SAID_SKIP_RESIDENT_WORDIDX=0. (Recall is bit-identical —
+    // test skip_resident_wordidx_recall_matches_normal.)
+    if std::env::var("SAID_SKIP_RESIDENT_WORDIDX").is_err() {
+        std::env::set_var("SAID_SKIP_RESIDENT_WORDIDX", "1");
+    }
     let t_phase2 = std::time::Instant::now();
     let json_mode = json;
-    let _ = brain.build_index_with_progress(|done, total, passages| {
+    // Propagate index failure (e.g. an OOM-class allocation error) instead of swallowing it with
+    // `let _ =`. Swallowing it made a failed build proceed to "save" + print success with an EMPTY
+    // brain (exit 0) — a 50-minute silent failure on the Wonga corpus. A failed index is fatal: the
+    // brain would be empty/corrupt, so the user must see a nonzero exit + a real error.
+    brain.build_index_with_progress(|done, total, passages| {
         if !json_mode {
             let pct = done * 100 / total.max(1);
             eprint!("\r  [2/3] Encoding (SCA): {:3}% ({}/{} docs)  passages: {}    ",
@@ -2597,16 +3185,52 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
             use std::io::Write;
             let _ = std::io::stderr().flush();
         }
-    });
+    }).map_err(|e| format!("build_index (phase 2 encode) failed: {} — the brain was NOT saved", e))?;
     if !json {
         eprintln!("\r  [2/3] Encoded (SCA):  100%  ({:.1}s)                                        ",
                   t_phase2.elapsed().as_secs_f64());
     }
     if std::env::var("SAID_MEM_REPORT").is_ok() {
         eprintln!("  {}", brain.lexical_mem_report());
+        eprintln!("  {}", brain.saidfile_mem_report());
+        eprintln!("  {}", brain.frame_store_mem_report());
     }
 
     // PHASE 3: Compact blocks + save to disk
+    // OKF deterministic cross-link pass — DEFAULT ON (opt OUT with SAID_OKF_LINKS=0). Builds the
+    // section-level concept graph: links PIECES (paragraph/chunk frames) that share a content entity
+    // (party, ref-number, key phrase) + literal title mentions — no LLM, hash-safe link: tags (a few
+    // bytes each in the existing tag list, ~2% size growth, NOT a duplicate index). Traversal
+    // (frames_linking_concept / the ask Engine-D bridge, doc 3.5) then reaches every memory about an
+    // entity — the "we cannot miss anything" property; this is what makes recall reach cross-referenced
+    // commits/docs, not just the single best lexical hit. Default-on so EVERY init (CLI + the MCP init
+    // that shells to it) gets the wiki graph; code frames are excluded internally regardless. Set
+    // SAID_OKF_LINKS=0 to skip (e.g. a pure-code brain where the body scan isn't worth it).
+    if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
+        let edges = brain.build_concept_links();
+        if !json { eprintln!("  [okf] section concept graph: {edges} entity/title link edges"); }
+    }
+
+    // HARVEST-ON-INIT — DEFAULT ON (opt OUT with SAID_INIT_HARVEST=0). A full `init` already AST-chunks
+    // every code file, so it also scans for REPEATED structures and auto-learns blueprints (the 80% canon)
+    // from them -- doc 14.15 "harvest-at-init". Min-support 2 (a structure must repeat) + size/similarity
+    // gates; keep-first so re-running never clobbers a hand-tuned/promoted blueprint. This makes building
+    // the coding brain learn its canon automatically (owner: "part of global"), not a separate command.
+    #[cfg(feature = "code")]
+    if std::env::var("SAID_INIT_HARVEST").map(|v| v != "0").unwrap_or(true) {
+        let h_files: Vec<PathBuf> = {
+            let mut v = Vec::new();
+            walk_dir_gitignore(&dir_path, &dir_path, &gitignore_patterns, &mut v);
+            v
+        };
+        let report = sca_core::harvest::harvest_blueprints(
+            &mut brain, h_files, |p| std::fs::read_to_string(p).ok());
+        if !json && report.clusters_found > 0 {
+            eprintln!("  [harvest] auto-learned {} blueprint(s) from {} repeated structure(s)",
+                      report.clusters_found, report.clusters_found);
+        }
+    }
+
     let t_phase3 = std::time::Instant::now();
     if !json {
         eprint!("  [3/3] Compacting + saving...");
@@ -2618,6 +3242,9 @@ fn cmd_init(path: Option<&str>, dir: &str, incremental: bool, json: bool) -> Res
     if !json {
         eprintln!("\r  [3/3] Compacted + saved  ({:.1}s)                        ",
                   t_phase3.elapsed().as_secs_f64());
+    }
+    if std::env::var("SAID_MEM_REPORT").is_ok() {
+        eprintln!("  [post-save] {}", brain.saidfile_mem_report());
     }
 
     // Auto-tag new frames for any lens files (State Synchronization)
@@ -2819,8 +3446,33 @@ fn cmd_get(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String> {
     }
 }
 
-fn cmd_delete(path: Option<&str>, doc_id: &str, json: bool) -> Result<(), String> {
+fn cmd_delete(path: Option<&str>, doc_id: Option<&str>, project: Option<&str>, dry_run: bool, json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
+
+    // PROJECT WIPE: tombstone every frame tagged project:<name> -- "delete everything for project X" on the
+    // portable brain (doc 28). Lineage preserved (recoverable via `admin`). Mirrors the MCP tag_filter path.
+    if let Some(proj) = project {
+        let want = format!("project:{}", proj.trim());
+        let targets: Vec<String> = brain.frames.active_doc_ids().iter()
+            .filter(|did| brain.frames.get_meta(did).map(|m| m.tags.iter().any(|t| t == &want)).unwrap_or(false))
+            .map(|s| s.to_string())
+            .collect();
+        if dry_run {
+            if json { println!("{}", serde_json::json!({"dry_run": true, "project": proj, "would_delete": targets.len(), "doc_ids": targets})); }
+            else { println!("[DRY RUN] would wipe {} frame(s) for project '{}'", targets.len(), proj);
+                   for d in targets.iter().take(20) { println!("  {}", d); } }
+            return Ok(());
+        }
+        let mut n = 0;
+        for d in &targets { if brain.tombstone_frame(d) { n += 1; } }
+        brain.save()?;
+        if json { println!("{}", serde_json::json!({"wiped": n, "project": proj})); }
+        else { println!("Wiped {} frame(s) for project '{}' (tombstoned, recoverable via admin)", n, proj); }
+        return Ok(());
+    }
+
+    // single doc_id delete (the original path)
+    let Some(doc_id) = doc_id else { return Err("provide a doc_id, or --project <name> to wipe a whole project".into()); };
     let deleted = brain.delete(doc_id);
     brain.save()?;
     if json {
@@ -2908,14 +3560,24 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &str, json: bool) -> Result<(), String> {
+fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, engine: &str, pillar: Option<&str>, tags: &[String], json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
+    ask_on_brain(&mut brain, query, top, deep, engine, pillar, tags, json)
+}
+
+/// RESIDENT-friendly query: run a single `ask` against an ALREADY-OPEN brain (encoder + indexes already
+/// loaded). `cmd_ask` opens-then-calls (one-shot); `cmd_serve` opens ONCE then calls this in a loop so the
+/// 16MB encoder + word index load a single time and every subsequent query is fast (~100ms warm).
+fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engine: &str, pillar: Option<&str>, tags: &[String], json: bool) -> Result<(), String> {
     let t0 = Instant::now();
 
-    // Tag-scope detection: if the query contains a scoping token like
-    // "version 4", resolve matching doc_ids from frame metadata. Passed
-    // into the shared `ask` fusion so sym/grep/SCA all filter against it.
-    let scope_doc_ids: Option<std::collections::HashSet<String>> =
+    // Tag scoping. Explicit `--tag` filter (narrow to a facet BEFORE scoring — the fix for
+    // concept-link tie bleed on vague queries) intersected with the auto-detected query-text
+    // scope ("version 4" → version:4). An explicit filter that matches nothing yields an empty
+    // scope (recall empty — honest), NOT a silent unscoped fallback.
+    let explicit_scope = if tags.is_empty() { None }
+        else { Some(brain.tag_scope(tags).unwrap_or_default()) };
+    let auto_scope: Option<std::collections::HashSet<String>> =
         if let Some((ns, val)) = sca_core::recall::detect_scope_tag(query) {
             let tag = format!("{}:{}", ns, val);
             let active = brain.frames.active_doc_ids();
@@ -2931,6 +3593,41 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
         } else {
             None
         };
+    let scope_doc_ids: Option<std::collections::HashSet<String>> = match (explicit_scope, auto_scope) {
+        (Some(e), Some(a)) => Some(e.intersection(&a).cloned().collect()),
+        (Some(e), None) => Some(e),
+        (None, a) => a,
+    };
+
+    // PILLAR SCOPE: `--pillar episodic,code,...` restricts recall to those pillars by resolving their
+    // doc_ids and intersecting with any tag-scope, then passing the set into the SAME fusion (so the
+    // wiki-link graph fan-out and rerank all run within the chosen kind). A "which commit" query with
+    // `--pillar episodic` thus excludes Code/Semantic frames and ranks the right commit first (row-31).
+    let scope_doc_ids = match pillar {
+        Some(raw) => {
+            let wanted: std::collections::HashSet<sca_core::frames::Pillar> = raw.split(',')
+                .filter_map(|s| match s.trim().to_lowercase().as_str() {
+                    "episodic" => Some(sca_core::frames::Pillar::Episodic),
+                    "semantic" => Some(sca_core::frames::Pillar::Semantic),
+                    "procedural" => Some(sca_core::frames::Pillar::Procedural),
+                    "code" => Some(sca_core::frames::Pillar::Code),
+                    "external" => Some(sca_core::frames::Pillar::External),
+                    _ => None,
+                }).collect();
+            if wanted.is_empty() { scope_doc_ids } else {
+                let in_pillar: std::collections::HashSet<String> = brain.frames.active_doc_ids().iter()
+                    .filter(|did| brain.frames.get_meta(did).map(|m| wanted.contains(&m.pillar)).unwrap_or(false))
+                    .map(|s| s.to_string())
+                    .collect();
+                // intersect with an existing tag-scope if present, else use the pillar set alone.
+                match scope_doc_ids {
+                    Some(tag_scope) => Some(tag_scope.intersection(&in_pillar).cloned().collect()),
+                    None => Some(in_pillar),
+                }
+            }
+        }
+        None => scope_doc_ids,
+    };
 
     // Delegate to the shared 3-engine fusion. MCP's ask tool calls the same
     // function so CLI and MCP return identical result sets. Auto-dream now fires
@@ -2938,7 +3635,7 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
     // observe whether a cycle ran by watching the consolidation counter.
     let cycles_before = brain.engine.brain.consolidation_cycles;
     let (kept, keywords) = sca_core::ask::ask(
-        &mut brain, query, top, deep, scope_doc_ids.as_ref(),
+        brain, query, top, deep, scope_doc_ids.as_ref(),
     );
 
     if keywords.is_empty() {
@@ -3012,6 +3709,249 @@ fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, _engine: &st
     Ok(())
 }
 
+/// `said serve` — RESIDENT CLI mode. Opens the brain + loads the 16MB encoder + indexes ONCE, then reads
+/// queries from STDIN (one per line) and answers each against the already-warm brain. This is the fix for
+/// the per-process reload cost: instead of `said ask` spawning a fresh process (re-loading the encoder +
+/// rebuilding the word index) on every query, `serve` pays that once and every subsequent query is fast
+/// (~100ms warm on a 5k-frame brain, vs ~500ms+ cold per spawn). For hot loops / benchmarking / an agent
+/// that asks many questions, use this (or the resident MCP server). Protocol: write a query line to stdin,
+/// read the answer (JSON if --json) from stdout; a blank line or EOF exits. First line printed is `READY`.
+fn cmd_serve(path: Option<&str>, top: usize, pillar: Option<&str>, json: bool) -> Result<(), String> {
+    use std::io::{BufRead, Write};
+    let t_load = Instant::now();
+    let mut brain = open_brain(path)?;
+    // warm the encoder + word index with one throwaway query so the FIRST real query is already fast.
+    let _ = sca_core::ask::ask(&mut brain, "warmup", 1, false, None);
+    eprintln!("[serve] brain + encoder loaded in {:.0}ms — resident, ready. One query per stdin line; blank line/EOF exits.",
+              t_load.elapsed().as_secs_f64() * 1000.0);
+    println!("READY");
+    let _ = std::io::stdout().flush();
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let q = match line { Ok(l) => l, Err(_) => break };
+        let q = q.trim();
+        if q.is_empty() { break; }
+        // each query reuses the warm brain — no reopen, no reload.
+        let _ = ask_on_brain(&mut brain, q, top, false, "current", pillar, &[], json);
+        let _ = std::io::stdout().flush();
+    }
+    Ok(())
+}
+
+/// `said hook` — the agent-steering PreToolUse hook. Reads the agent's hook JSON from STDIN, runs the
+/// `.said` decision, and writes the agent's decision JSON to STDOUT (or nothing = passthrough). This is
+/// the subprocess the agent's hook system invokes; it must be FAST and FAIL-OPEN (any error → emit
+/// nothing so the agent is never blocked). See sca_core::steering.
+fn cmd_hook(path: Option<&str>, agent: &str, mode: &str) -> Result<(), String> {
+    use std::io::Read;
+    let Some(agent) = sca_core::steering::Agent::from_str_ci(agent) else {
+        // Unknown agent → fail open (emit nothing), don't error the agent's tool call.
+        return Ok(());
+    };
+    let mode = sca_core::steering::SteerMode::from_str_ci(mode)
+        .unwrap_or(sca_core::steering::SteerMode::Inject);
+    // Read the agent's hook JSON from stdin.
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() { return Ok(()); }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&buf) else { return Ok(()); };
+    // Open the brain (auto-detect path). If there's no brain, fail open.
+    let mut brain = match open_brain(path) { Ok(b) => b, Err(_) => return Ok(()) };
+    if let Some(decision) = sca_core::steering::run_hook(&mut brain, agent, &v, mode) {
+        // Emit the decision JSON on stdout for the agent to read.
+        println!("{}", serde_json::to_string(&decision).unwrap_or_default());
+    }
+    Ok(())
+}
+
+/// `said setup [--remove] [--dry-run]` — opt-in registration of the agent-steering hook + bundled
+/// skill. Writes the agent's GITIGNORED local settings (never CLAUDE.md), so removal leaves no git
+/// trace. Idempotent; `--remove` cleanly undoes it.
+fn cmd_setup(path: Option<&str>, agent: &str, remove: bool, dry_run: bool) -> Result<(), String> {
+    use sca_core::steering::Agent;
+    let Some(agent) = Agent::from_str_ci(agent) else {
+        return Err(format!("unknown agent '{agent}' (supported: claude)"));
+    };
+    // Resolve the absolute path to THIS binary so the hook command is unambiguous.
+    let exe = std::env::current_exe().map_err(|e| format!("cannot resolve said binary path: {e}"))?;
+    let exe_str = exe.to_string_lossy().to_string();
+    // Resolve the brain path NOW and embed it ABSOLUTELY in the hook command, so the hook subprocess
+    // (run by the agent, possibly from a different cwd) always loads the right brain — cwd auto-detect
+    // is unreliable as a subprocess (the live A/B showed the hook silently not finding the brain).
+    // Absolute path WITHOUT canonicalize: on Windows canonicalize() returns the `\\?\` extended-length
+    // prefix, which the said binary can't open (the live A/B proved the hook silently failed with it).
+    // Make it absolute by joining cwd if relative, and strip any `\\?\` prefix defensively.
+    let brain_abs: Option<String> = resolve::resolve(path).ok().map(|p| {
+        let abs = if p.is_absolute() { p } else {
+            std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p)
+        };
+        let s = abs.to_string_lossy().to_string();
+        s.strip_prefix(r"\\?\").map(|x| x.to_string()).unwrap_or(s)
+    });
+
+    let settings_path = std::path::Path::new(agent.settings_path()); // .claude/settings.local.json
+    let skill_path = std::path::Path::new(".claude/skills/said/SKILL.md");
+
+    if remove {
+        // ---- REMOVE: strip the said hook from settings + delete the bundled skill ----
+        let mut removed = Vec::new();
+        if settings_path.exists() {
+            let raw = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
+            if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if remove_said_hook(&mut json) {
+                    if dry_run { removed.push(format!("would strip said hook from {}", agent.settings_path())); }
+                    else {
+                        std::fs::write(settings_path, serde_json::to_string_pretty(&json).unwrap())
+                            .map_err(|e| e.to_string())?;
+                        removed.push(format!("stripped said hook from {}", agent.settings_path()));
+                    }
+                }
+            }
+        }
+        if skill_path.exists() {
+            if dry_run { removed.push("would delete .claude/skills/said/SKILL.md".into()); }
+            else { let _ = std::fs::remove_file(skill_path); removed.push("deleted .claude/skills/said/SKILL.md".into()); }
+        }
+        if removed.is_empty() { println!("said setup: nothing to remove (hook/skill not found)."); }
+        else { for r in &removed { println!("said setup --remove: {r}"); } }
+        println!("(no git trace — settings.local.json is gitignored.)");
+        return Ok(());
+    }
+
+    // ---- INSTALL ----
+    // 1) Bundle the skill (guidance lives here, NEVER CLAUDE.md). Code bundles ship the coding skill
+    //    (learn_fix/blueprint/grep-first); the free brain bundle ships the memory-only skill
+    //    (remember/ask/journal) so it never nudges toward tools the brain doesn't have.
+    #[cfg(feature = "code")]
+    let skill_body: &str = said_prompts::steering::SKILL_BODY;
+    #[cfg(not(feature = "code"))]
+    let skill_body: &str = said_prompts::steering::SKILL_BODY_BRAIN;
+    if dry_run {
+        println!("would write .claude/skills/said/SKILL.md ({} bytes)", skill_body.len());
+    } else {
+        std::fs::create_dir_all(".claude/skills/said").map_err(|e| e.to_string())?;
+        std::fs::write(skill_path, skill_body).map_err(|e| e.to_string())?;
+        println!("said setup: wrote .claude/skills/said/SKILL.md");
+    }
+
+    // 2) Register the PreToolUse hook into .claude/settings.local.json (gitignored), backing up first.
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let raw = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
+        if !dry_run {
+            // back up before mutating (nudge's *.bak convention)
+            let _ = std::fs::write(format!("{}.bak", agent.settings_path()), &raw);
+        }
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    add_said_hook(&mut settings, &exe_str, brain_abs.as_deref());
+
+    if dry_run {
+        println!("would register PreToolUse hook in {} →\n{}",
+            agent.settings_path(), serde_json::to_string_pretty(&settings).unwrap());
+    } else {
+        if let Some(parent) = settings_path.parent() { let _ = std::fs::create_dir_all(parent); }
+        std::fs::write(settings_path, serde_json::to_string_pretty(&settings).unwrap())
+            .map_err(|e| e.to_string())?;
+        #[cfg(feature = "code")]
+        println!("said setup: registered agent hooks (recall + write + code re-injection) in {} (gitignored, backed up to *.bak)", agent.settings_path());
+        #[cfg(not(feature = "code"))]
+        println!("said setup: registered agent memory hooks (recall + session-end write) in {} (gitignored, backed up to *.bak)", agent.settings_path());
+    }
+
+    #[cfg(feature = "code")]
+    println!("\n{}", said_prompts::steering::STEERING_SUMMARY);
+    #[cfg(not(feature = "code"))]
+    println!("\n{}", said_prompts::steering::STEERING_SUMMARY_BRAIN);
+    println!("To remove cleanly (no git trace): said setup --remove");
+    Ok(())
+}
+
+/// Merge the `.said` PreToolUse hook into a Claude settings JSON object. Matcher `Grep|Bash` (the
+/// Registers on UserPromptSubmit — the TRUSTED channel proven by the live A/B + Anthropic's docs: a
+/// PreToolUse/PostToolUse `additionalContext` lands "next to the tool result" (the lowest-trust slot
+/// the model is TRAINED to distrust → it flags it as prompt-injection), whereas UserPromptSubmit
+/// context rides the user-message slot and the model USES it. On each prompt the hook recalls `.said`
+/// and injects the matching code as FACTUAL labeled data. UserPromptSubmit fires for EVERY prompt (no
+/// tool matcher). Idempotent — replaces any prior said entry.
+fn add_said_hook(settings: &mut serde_json::Value, exe: &str, brain: Option<&str>) {
+    // Embed the resolved brain path so the hook subprocess always loads the right brain regardless of
+    // the cwd the agent invokes it from (cwd auto-detect is unreliable as a subprocess).
+    let command = match brain {
+        Some(b) => format!("{} --path {} hook --agent claude", shell_quote(exe), shell_quote(b)),
+        None => format!("{} hook --agent claude", shell_quote(exe)),
+    };
+    // The SAME command serves every phase — the hook auto-detects the phase from its stdin JSON
+    // (UserPromptSubmit → inject recall; SessionEnd → backstop write). One binary, two jobs.
+    let make_entry = || serde_json::json!({
+        "hooks": [ { "type": "command", "command": command, "__said": true } ]
+    });
+    let hooks = settings.as_object_mut().unwrap()
+        .entry("hooks").or_insert_with(|| serde_json::json!({}));
+    let hooks_obj = hooks.as_object_mut().unwrap();
+
+    // 1) UserPromptSubmit — the READ side (inject recall before the prompt). NO matcher (every prompt).
+    let ups = hooks_obj.entry("UserPromptSubmit").or_insert_with(|| serde_json::json!([]));
+    let arr = ups.as_array_mut().unwrap();
+    arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+    arr.push(make_entry());
+
+    // 2) SessionEnd — the WRITE backstop (captures the last context as a journal IF the agent didn't
+    // already, the safety net under the agent's own model-judged journal/remember/learn_fix writes).
+    let se = hooks_obj.entry("SessionEnd").or_insert_with(|| serde_json::json!([]));
+    let se_arr = se.as_array_mut().unwrap();
+    se_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+    se_arr.push(make_entry());
+
+    // 3) PreToolUse — DECISION-POINT re-injection (nudge's anti-decay mechanism, RESEARCH.md). When the
+    // agent is about to investigate (Read/Grep/Bash) and a VERIFIED fix already covers the intent, the
+    // hook re-surfaces that fix as allow+context so the agent doesn't re-derive what it already concluded
+    // (the A2 over-investigation). Matcher scopes it to the investigation tools so it doesn't fire on
+    // Write/Edit. Fail-open (allow + context, never blocks); the fix-recall floor self-abstains otherwise.
+    // CODE BUNDLES ONLY: this re-injection is about code-investigation tools (Grep/Bash) — a free
+    // memory brain never greps a codebase, so it installs only the UserPromptSubmit recall + SessionEnd
+    // write above. Skipping it here keeps the brain hook memory-pure; code bundles are unaffected.
+    #[cfg(feature = "code")]
+    {
+        let pre_entry = serde_json::json!({
+            "matcher": "Read|Grep|Bash",
+            "hooks": [ { "type": "command", "command": command, "__said": true } ]
+        });
+        let pre = hooks_obj.entry("PreToolUse").or_insert_with(|| serde_json::json!([]));
+        let pre_arr = pre.as_array_mut().unwrap();
+        pre_arr.retain(|e| !hook_entry_is_said(e)); // idempotent
+        pre_arr.push(pre_entry);
+    }
+}
+
+/// Remove the `.said` hook entries from a Claude settings JSON object. Returns true if anything changed.
+/// Cleans BOTH PostToolUse (current) and PreToolUse (legacy, in case an old setup wrote there).
+fn remove_said_hook(settings: &mut serde_json::Value) -> bool {
+    let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false; };
+    let mut changed = false;
+    for key in ["UserPromptSubmit", "SessionStart", "SessionEnd", "PostToolUse", "PreToolUse"] {
+        if let Some(arr) = hooks.get_mut(key).and_then(|p| p.as_array_mut()) {
+            let before = arr.len();
+            arr.retain(|e| !hook_entry_is_said(e));
+            if arr.len() != before { changed = true; }
+        }
+    }
+    changed
+}
+
+/// Does a PreToolUse entry belong to `.said`? (marked with our `__said` flag inside its hooks).
+fn hook_entry_is_said(entry: &serde_json::Value) -> bool {
+    entry.get("hooks").and_then(|h| h.as_array())
+        .map(|arr| arr.iter().any(|h| h.get("__said").and_then(|x| x.as_bool()).unwrap_or(false)))
+        .unwrap_or(false)
+}
+
+/// Minimal shell-quote for the binary path inside the hook command (handles spaces).
+fn shell_quote(s: &str) -> String {
+    if s.contains(' ') || s.contains('"') { format!("\"{}\"", s.replace('"', "\\\"")) } else { s.to_string() }
+}
+
 /// Helper: emit an empty `ask` result (no confident match) with proper JSON shape.
 fn emit_ask_empty(query: &str, _top: usize, t0: Instant, json: bool, reason: &str) -> Result<(), String> {
     let elapsed = t0.elapsed();
@@ -3071,6 +4011,92 @@ fn cmd_list_concepts(path: Option<&str>, prefix: Option<&str>, json: bool) -> Re
     Ok(())
 }
 
+fn cmd_list_tags(path: Option<&str>, prefix: Option<&str>, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let tags = brain.tag_counts(prefix);
+    if json {
+        let arr: Vec<_> = tags.iter()
+            .map(|(t, n)| serde_json::json!({ "tag": t, "memories": n }))
+            .collect();
+        println!("{}", serde_json::json!(arr));
+        return Ok(());
+    }
+    if tags.is_empty() {
+        match prefix {
+            Some(p) => println!("No tags starting with '{}'. Add tags when saving (e.g. add \"...\" --tag project:said).", p),
+            None => println!("No tags yet. Add tags when saving a memory (e.g. add \"...\" --tag project:said --tag topic:launch) to build a browsable vocabulary."),
+        }
+        return Ok(());
+    }
+    println!("Tags ({} distinct):", tags.len());
+    for (t, n) in &tags {
+        println!("  {:>4}  {}", n, t);
+    }
+    Ok(())
+}
+
+fn cmd_save_memory(path: Option<&str>, name: &str, description: &str, mtype: &str,
+                   claim: Option<&str>, claim_file: Option<&str>, evidence: &[String], json: bool) -> Result<(), String> {
+    let claim_text = match (claim, claim_file) {
+        (Some(_), Some(_)) => return Err("pass only one of --claim / --claim-file".into()),
+        (Some(c), None) => c.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f)
+            .map_err(|e| format!("read --claim-file {}: {}", f, e))?
+            .trim_start_matches('\u{feff}').to_string(),
+        (None, None) => return Err("missing --claim or --claim-file".into()),
+    };
+    let mut brain = open_brain(path)?;
+    let id = sca_core::memory::save_memory(&mut brain, name, description, mtype, &claim_text, evidence);
+    brain.save()?;
+    if json {
+        println!("{}", serde_json::json!({"ok": true, "memory": id, "type": mtype, "evidence": evidence}));
+    } else {
+        println!("saved memory '{}' ({}) [{}]{}", name, id, mtype,
+            if evidence.is_empty() { String::new() } else { format!(" -> evidence: {}", evidence.join(", ")) });
+    }
+    Ok(())
+}
+
+fn cmd_recall_memory(path: Option<&str>, name: &str, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    match sca_core::memory::recall_memory(&mut brain, name) {
+        Some(m) => {
+            if json {
+                println!("{}", serde_json::json!({"memory": m.doc_id, "claim": m.claim, "evidence_links": m.evidence_links}));
+            } else {
+                println!("{}", m.claim);
+                if !m.evidence_links.is_empty() {
+                    println!("\nEvidence (verify before acting): {}", m.evidence_links.join(", "));
+                }
+            }
+        }
+        None => {
+            if json { println!("{}", serde_json::json!({"memory": serde_json::Value::Null})); }
+            else { println!("no memory named '{}'", name); }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_memory_manifest(path: Option<&str>, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let man = sca_core::memory::manifest(&brain);
+    if json {
+        let arr: Vec<_> = man.iter()
+            .map(|e| serde_json::json!({"name": e.name, "description": e.description, "type": e.mtype}))
+            .collect();
+        println!("{}", serde_json::json!(arr));
+    } else if man.is_empty() {
+        println!("no memories yet. save one with: said save-memory --name <n> --description <d> --claim <c> --evidence <commit/file>");
+    } else {
+        println!("Memory manifest ({} memories) — the list to SELECT from:", man.len());
+        for e in &man {
+            println!("  [{}] {} — {}", e.mtype, e.name, e.description);
+        }
+    }
+    Ok(())
+}
+
 fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String> {
     let brain = open_brain(path)?;
     let s = brain.stats();
@@ -3120,6 +4146,19 @@ fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String
             println!("  Recoverable:       {} deleted memories, {} bytes ({:.1}% of file) [said compact --drop-history to purge]",
                 tombstones, tomb_bytes, pct);
         }
+        // Plain-English learning summary (the default view). The brain quietly learns from how you
+        // search and, after enough queries, reorganizes so the right memory surfaces faster. Say
+        // that in human terms; the raw query-log / dream-cycle counters live under --verbose.
+        if s.brain_queries == 0 {
+            println!("  Learning:          not yet — ask it questions and it learns from how you search");
+        } else {
+            let dreamed = if s.brain_cycles > 0 {
+                format!(", reorganized itself {} time{} to surface answers faster",
+                    s.brain_cycles, if s.brain_cycles == 1 { "" } else { "s" })
+            } else { String::new() };
+            println!("  Learning:          active — learned from {} search{}{}",
+                s.brain_queries, if s.brain_queries == 1 { "" } else { "es" }, dreamed);
+        }
         // Everything below is internal/diagnostic — only shown with --verbose so the
         // default view stays focused on what a memory user cares about. (Search-index
         // counts like Symbol table / Trigram are code-feature internals and read 0 /
@@ -3131,8 +4170,13 @@ fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String
             println!();
             println!("=== Search Indexes ===");
             println!("  Memories indexed:  {}", s.index_docs);
-            println!("  Symbol table:      {} unique names", s.symbol_count);
-            println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
+            // Symbol table + trigram are CODE-tier internals the brain build doesn't expose;
+            // they read "0 / absent" on a memory brain and only confuse. Show them only when
+            // this brain actually has code indexed (a code bundle that ingested source).
+            if s.symbol_count > 0 || s.trigram_present {
+                println!("  Symbol table:      {} unique names", s.symbol_count);
+                println!("  Trigram index:     {}", if s.trigram_present { "present" } else { "absent" });
+            }
             println!();
             println!("=== Brain State ===");
             println!("  Query log:         {} entries", s.brain_queries);
@@ -3212,7 +4256,8 @@ fn cmd_compact(
 fn cmd_config(key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), String> {
     match (key, value) {
         (Some(k), Some(v)) => {
-            // For now, config is stored in a simple file next to the default config
+            // Persist to config.json in the config dir (was a no-op stub before).
+            resolve::set_config(k, v)?;
             if json {
                 println!("{}", serde_json::json!({"set": k, "value": v}));
             } else {
@@ -3221,19 +4266,27 @@ fn cmd_config(key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), 
             Ok(())
         }
         (Some(k), None) => {
+            let val = resolve::get_config(k);
             if json {
-                let null_val: Option<String> = None;
-                println!("{}", serde_json::json!({"key": k, "value": null_val}));
+                println!("{}", serde_json::json!({"key": k, "value": val}));
             } else {
-                println!("{}: (not set)", k);
+                match val {
+                    Some(v) => println!("{}: {}", k, v),
+                    None => println!("{}: (not set)", k),
+                }
             }
             Ok(())
         }
         _ => {
+            let map = resolve::list_config();
             if json {
-                println!("{}", serde_json::json!({"config": {}}));
-            } else {
+                println!("{}", serde_json::json!({"config": map}));
+            } else if map.is_empty() {
                 println!("No config keys set. Usage: said config <key> [value]");
+            } else {
+                for (k, v) in &map {
+                    println!("{} = {}", k, v);
+                }
             }
             Ok(())
         }
@@ -6499,23 +7552,36 @@ struct FixIteration<'a> {
 /// so this is note-only — no payload, no hashing, no tags here.
 #[cfg(feature = "code")]
 fn make_fix_note(it: &FixIteration) -> String {
-    let steps = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
+    // Render each edit as a step ONLY if it carries a real action (a mode/op AND a target). A bare
+    // {"file":"x","op":"note"} or {"file":"x"} has no actionable step — rendering it as "1. ? x.rs"
+    // produces a CONTENT-FREE pointer that, when this note is recalled + injected, INVITES the agent to
+    // go read x.rs to "complete" the dangling step — i.e. it triggers exactly the over-investigation the
+    // memory was meant to prevent (measured: A2 spent 13-16 turns re-reading source despite the LEARNINGS
+    // line already holding the full answer). The documented intent (docs/15-orchestration §body layout):
+    // the note's LEARNINGS carry the recipe; steps are the real change-set, not vague file pointers.
+    let steps: Vec<String> = match serde_json::from_str::<serde_json::Value>(it.edits_json) {
         Ok(serde_json::Value::Array(arr)) => arr.iter().enumerate()
-            .map(|(i, e)| {
-                let mode = e.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
-                let file = e.get("file").and_then(|v| v.as_str()).unwrap_or("?");
+            .filter_map(|(i, e)| {
+                // A real action verb: prefer `mode`, else `op` if it's not a content-free marker.
+                let mode = e.get("mode").and_then(|v| v.as_str())
+                    .or_else(|| e.get("op").and_then(|v| v.as_str()).filter(|op| *op != "note"));
+                let file = e.get("file").and_then(|v| v.as_str()).unwrap_or("");
                 let tgt = e.get("symbol").and_then(|v| v.as_str())
                     .or_else(|| e.get("anchor").and_then(|v| v.as_str())).unwrap_or("");
-                format!("  {}. {} {} {}", i + 1, mode, file, tgt)
+                match mode {
+                    Some(m) if !file.is_empty() => Some(format!("  {}. {} {} {}", i + 1, m, file, tgt).trim_end().to_string()),
+                    _ => None, // no actionable step — skip (don't emit a dangling "? file" pointer)
+                }
             })
-            .collect::<Vec<_>>().join("\n"),
-        _ => "  (change-set)".to_string(),
+            .collect(),
+        _ => Vec::new(),
     };
     let mut note = String::new();
     if let Some(f) = it.files { if !f.trim().is_empty() { note.push_str(&format!("FILES: {}\n", f.trim())); } }
-    note.push_str(&format!("STEPS:\n{}\n", steps));
-    if let Some(e) = it.errors { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    // LEARNINGS (the answer/recipe) lead; STEPS only when there are real, actionable ones.
     if let Some(l) = it.learnings { if !l.trim().is_empty() { note.push_str(&format!("LEARNINGS: {}\n", l.trim())); } }
+    if let Some(e) = it.errors { if !e.trim().is_empty() { note.push_str(&format!("ERRORS: {}\n", e.trim())); } }
+    if !steps.is_empty() { note.push_str(&format!("STEPS:\n{}\n", steps.join("\n"))); }
     note.push_str("RESULT: success — built+passed");
     note
 }
@@ -6611,6 +7677,147 @@ fn emit_no_fix(json: bool, min_similarity: f32) -> Result<(), String> {
         println!("{}", serde_json::json!({ "ok": true, "fix": serde_json::Value::Null }));
     } else {
         println!("No known fix above score {:.2} — fall through to the LLM.", min_similarity);
+    }
+    Ok(())
+}
+
+// BLUEPRINT (canon) handlers — same open-brain + JSON-output style as the fix handlers. The frame
+// format, keep-first dedup, and hashing live in the ONE shared writer in sca_core::ask
+// (learn_blueprint / promote_blueprint / recall_blueprints) so CLI + MCP never drift.
+#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "code")]
+fn cmd_blueprint_write(
+    path: Option<&str>, shape: &str, sections: Option<&str>, sections_file: Option<&str>,
+    lang: Option<&str>, label: Option<&str>, verified: bool, json: bool,
+) -> Result<(), String> {
+    let sections_json = match (sections, sections_file) {
+        (Some(_), Some(_)) => return Err("pass only one of --sections / --sections-file".into()),
+        (Some(s), None) => s.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| format!("read --sections-file {}: {}", f, e))?,
+        (None, None) => return Err("missing --sections or --sections-file".into()),
+    };
+    let sections_json = sections_json.trim_start_matches('\u{feff}').trim().to_string();
+    let mut brain = open_brain(path)?;
+    // verified (build green) -> auto-update; else keep-first.
+    let doc_id = sca_core::ask::learn_blueprint(&mut brain, shape, &sections_json, lang, label, verified);
+    // keep-first feedback: an UNVERIFIED learn is a no-op when the shape already exists, so the stored
+    // body won't contain the sections we just passed. Read back to report what happened.
+    let kept_first = !verified && brain.read(&doc_id)
+        .map(|body| !body.contains(sections_json.trim())).unwrap_or(false);
+    brain.save()?;
+    if json {
+        println!("{}", serde_json::json!({ "ok": true, "blueprint": doc_id,
+            "action": if verified { "auto-updated (verified)" } else if kept_first { "kept-first (no-op)" } else { "learned" } }));
+    } else if verified {
+        println!("Auto-updated blueprint {} (verified build -> new standard for this shape)", doc_id);
+    } else if kept_first {
+        println!("Kept-first: blueprint {} already exists for this shape (no-op)", doc_id);
+    } else {
+        println!("Learned blueprint {}", doc_id);
+    }
+    Ok(())
+}
+
+/// `said harvest <dir>` — scan an existing repo and auto-learn blueprints from REPEATED structures.
+/// Reuses the gitignore-aware walk; the core harvest engine (support>=2, size + similarity gates) does
+/// the clustering. Keep-first: re-running never clobbers a hand-tuned blueprint.
+#[cfg(feature = "code")]
+fn cmd_harvest(path: Option<&str>, dir: &str, json: bool) -> Result<(), String> {
+    let root = Path::new(dir).canonicalize().map_err(|e| format!("resolve '{}': {}", dir, e))?;
+    if !root.is_dir() { return Err(format!("not a directory: {}", dir)); }
+    let patterns = load_gitignore(&root);
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_dir_gitignore(&root, &root, &patterns, &mut files);
+
+    let mut brain = open_brain(path)?;
+    let report = sca_core::harvest::harvest_blueprints(
+        &mut brain, files, |p| std::fs::read_to_string(p).ok());
+    brain.save()?;
+
+    if json {
+        let bps: Vec<_> = report.blueprints.iter()
+            .map(|(shape, support, id)| serde_json::json!({ "shape": shape, "support": support, "doc_id": id }))
+            .collect();
+        println!("{}", serde_json::json!({
+            "ok": true, "files_scanned": report.files_scanned, "functions_seen": report.functions_seen,
+            "blueprints_learned": report.clusters_found, "blueprints": bps,
+        }));
+    } else {
+        println!("Harvested {} blueprint(s) from {} files ({} functions scanned):",
+            report.clusters_found, report.files_scanned, report.functions_seen);
+        for (shape, support, id) in &report.blueprints {
+            println!("  {}  (seen {}x)  {}", shape, support, id);
+        }
+        if report.clusters_found == 0 {
+            println!("  (no structure repeated >=2x -- nothing to harvest)");
+        }
+    }
+    Ok(())
+}
+
+/// `said harvest-scan <dir>` -- step 1 of agent-in-the-loop harvest: print the clustered repeated
+/// structures (calls + sample code) for the coding agent to name into NL intent phases. Learns NOTHING.
+#[cfg(feature = "code")]
+fn cmd_harvest_scan(dir: &str, json: bool) -> Result<(), String> {
+    let root = Path::new(dir).canonicalize().map_err(|e| format!("resolve '{}': {}", dir, e))?;
+    if !root.is_dir() { return Err(format!("not a directory: {}", dir)); }
+    let patterns = load_gitignore(&root);
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_dir_gitignore(&root, &root, &patterns, &mut files);
+
+    let (mut scanned, mut seen) = (0usize, 0usize);
+    let clusters = sca_core::harvest::harvest_scan(
+        files, |p| std::fs::read_to_string(p).ok(), &mut scanned, &mut seen);
+
+    if json {
+        let arr: Vec<_> = clusters.iter().map(|c| serde_json::json!({
+            "shape_hint": c.shape_hint, "support": c.support, "lang": c.lang,
+            "calls": c.calls, "members": c.members,
+            "sample_file": c.sample_file, "sample_code": c.sample_code,
+        })).collect();
+        println!("{}", serde_json::json!({
+            "ok": true, "files_scanned": scanned, "functions_seen": seen,
+            "clusters": arr,
+            "next": "for each cluster, name its NL intent phases (framework 80% only) and call learn-blueprint",
+        }));
+    } else {
+        println!("Scanned {} files ({} functions); {} repeated structure(s) to name:", scanned, seen, clusters.len());
+        for c in &clusters {
+            println!("\n  shape_hint: {}  (seen {}x, lang {})", c.shape_hint, c.support, c.lang.as_deref().unwrap_or("?"));
+            println!("  calls: {}", c.calls.join(" -> "));
+            println!("  members: {}", c.members.join(", "));
+            println!("  sample: {} ...", c.sample_file);
+        }
+        if clusters.is_empty() { println!("  (no structure repeated >=2x)"); }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "code")]
+fn cmd_recall_blueprint(path: Option<&str>, shape: &str, min_similarity: f32, top_k: usize, json: bool) -> Result<(), String> {
+    let mut brain = open_brain(path)?;
+    // TOP-K, let the LLM decide (the recall_fix top-K pattern): the right shape isn't always rank #1 on
+    // short skeletons, so return several candidates for the model to pick the one that fits.
+    let k = top_k.max(1);
+    let hits = sca_core::ask::recall_blueprints(&mut brain, shape, k, min_similarity);
+    if hits.is_empty() {
+        if json { println!("{}", serde_json::json!({ "ok": true, "blueprints": [] })); }
+        else { println!("No known blueprint above score {:.2} — fall through to the LLM.", min_similarity); }
+        return Ok(());
+    }
+    if json {
+        let arr: Vec<_> = hits.iter().map(|h| {
+            let sections: serde_json::Value = serde_json::from_str(&h.sections_json)
+                .unwrap_or(serde_json::Value::String(h.sections_json.clone()));
+            serde_json::json!({ "score": h.score, "doc_id": h.doc_id, "shape": h.shape, "lang": h.lang, "sections": sections })
+        }).collect();
+        println!("{}", serde_json::json!({ "ok": true, "blueprints": arr,
+            "note": "pick the candidate whose sections fit the task; render in the active language; write only the 20%" }));
+    } else {
+        for (i, h) in hits.iter().enumerate() {
+            println!("[{}] Blueprint ({:.2}) {}  shape={}", i + 1, h.score, h.doc_id, h.shape);
+            println!("    sections: {}", h.sections_json);
+        }
     }
     Ok(())
 }
@@ -10945,5 +12152,108 @@ mod forge_cli {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod junk_dir_tests {
+    use super::{is_junk_dir, should_enroll, auto_spill_budget};
+    use std::io::Write;
+
+    // Per-system spill budget: clamp(available_RAM * 12%, 16MB, 512MB). Must always land in range on
+    // any host the test runs on, and never return the disable value (0).
+    #[test]
+    fn auto_spill_budget_is_clamped() {
+        let b = auto_spill_budget();
+        assert!(b >= 16 * 1024 * 1024 * 40 / 100, "frame sub-budget must be >= 40% of 16MB floor, got {}", b);
+        assert!(b <= 512 * 1024 * 1024, "budget must be <= 512MB ceiling, got {}", b);
+    }
+
+    // ONE ingest budget (the mobile spill safety-net), clamped to [16MB, 512MB]. The old 3-way split was
+    // removed — measured no-op on peak (per-dir A/B: 505MB with or without) — so we assert the single
+    // clamped value, not sub-budgets.
+    #[test]
+    fn ingest_budget_is_clamped() {
+        std::env::remove_var("SAID_INGEST_BUDGET");
+        let b = super::ingest_budget();
+        assert!(b >= 16 * 1024 * 1024 && b <= 512 * 1024 * 1024, "budget clamped, got {}", b);
+    }
+
+    // An explicit SAID_INGEST_BUDGET must be honoured (clamped to the [16MB,512MB] range).
+    #[test]
+    fn ingest_budget_honours_explicit() {
+        std::env::set_var("SAID_INGEST_BUDGET", (200 * 1024 * 1024).to_string());
+        let b = super::ingest_budget();
+        std::env::remove_var("SAID_INGEST_BUDGET");
+        assert_eq!(b, 200 * 1024 * 1024, "explicit budget honoured");
+    }
+
+    // The REAL cause of the Wonga ingest SPIKE (isolated per-dir): CSV DATA DUMPS. The "Wonga Compressed"
+    // dir carried 1,137 CSV transaction-exports EACH UNDER the 5 MB per-file cap (85 MB total) that
+    // char-chunked into ~346k passages — the sole cause of that dir's 750 MB peak (every code/SQL-only
+    // dir, incl. heavy-SQL AB, peaked ≤202 MB). The per-file cap can't catch a swarm of small-ish CSVs;
+    // the fix is excluding the TYPE. CSV is now skipped by default (opt in with SAID_INGEST_CSV=1).
+    #[test]
+    fn should_enroll_skips_csv_data_dumps_keeps_code() {
+        let dir = std::env::temp_dir().join(format!("said_enroll_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::remove_var("SAID_INGEST_CSV"); // default policy for this assertion
+
+        // even a SMALL CSV is skipped by default — CSV is a data-export type, not searchable text.
+        // (This is the fix: a swarm of small-ish CSV dumps was the memory spike; a per-file size cap
+        // can't catch them, so the TYPE is excluded.)
+        let small_csv = dir.join("small.csv");
+        std::fs::File::create(&small_csv).unwrap().write_all(b"a,b,c\n1,2,3\n").unwrap();
+        assert!(!should_enroll(&small_csv), "CSV must be skipped by default (data-export type)");
+
+        // a big .cs (source) -> kept (code is uncapped)
+        let big = 6 * 1024 * 1024; // 6 MB > 5 MB text cap
+        let cs = dir.join("Big.cs");
+        std::fs::File::create(&cs).unwrap().write_all(&vec![b'x'; big]).unwrap();
+        assert!(should_enroll(&cs), "a large source file must still be enrolled");
+
+        // a big TXT (still a capped text type) -> skipped over the 5 MB cap
+        let txt = dir.join("dump.txt");
+        std::fs::File::create(&txt).unwrap().write_all(&vec![b'a'; big]).unwrap();
+        assert!(!should_enroll(&txt), "a 6MB TXT data dump must be skipped by the size cap");
+
+        // JSON is a code-grammar ext but a data-export type: a giant JSON (1.4GB CVE dump) blew RAM
+        // to ~5GB because code exts bypass the cap. Skipped by default (like CSV); even a small one.
+        std::env::remove_var("SAID_INGEST_JSON");
+        let small_json = dir.join("config.json");
+        std::fs::File::create(&small_json).unwrap().write_all(b"{\"a\":1}").unwrap();
+        assert!(!should_enroll(&small_json), "JSON must be skipped by default (data-export type)");
+        // opted in, a BIG json is still capped (can't reopen the 1.4GB hole).
+        std::env::set_var("SAID_INGEST_JSON", "1");
+        let big_json = dir.join("dump.json");
+        std::fs::File::create(&big_json).unwrap().write_all(&vec![b'{'; big]).unwrap();
+        assert!(!should_enroll(&big_json), "even opted-in, a 6MB JSON is capped");
+        std::env::remove_var("SAID_INGEST_JSON");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The Wonga/African-bank ingest OOMed (2.2GB alloc in index_batch) NOT because of an
+    // engine flaw -- all other languages ingest fine -- but because the .NET/SQL repo carried
+    // BUILD ARTIFACTS the walker did not skip: 374 bin/obj dirs + obj/Debug/*.generated.sql
+    // (regenerated stored-proc dumps that AST-chunk into a passage explosion). is_junk_dir must
+    // skip these the same way it already skips node_modules/target/__pycache__.
+    #[test]
+    fn skips_dotnet_and_sql_build_dirs() {
+        for d in ["bin", "obj", "Debug", "Release", "packages", "TestResults"] {
+            assert!(is_junk_dir(d), "init must skip .NET/SQL build dir `{}` (the Wonga OOM cause)", d);
+        }
+    }
+
+    #[test]
+    fn still_skips_existing_junk_and_keeps_source() {
+        // regression: the dirs we already skipped stay skipped
+        for d in ["node_modules", "target", "__pycache__", ".venv"] {
+            assert!(is_junk_dir(d), "must still skip `{}`", d);
+        }
+        // real source dirs must NOT be skipped
+        for d in ["src", "StoredProcedures", "Amortization", "Services", "Controllers"] {
+            assert!(!is_junk_dir(d), "must NOT skip real source dir `{}`", d);
+        }
     }
 }

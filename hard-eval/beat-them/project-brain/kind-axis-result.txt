@@ -1,0 +1,23 @@
+KIND-AXIS FIX -- recall on the fly on the REAL project corpus (4,992 memories: 333 commits + 169 docs + 4,490 code).
+Question set: 20 real commits, "which commit: <subject>", gold = that commit's frame in top-K.
+
+                    UNSCOPED (baseline)   --pillar episodic (kind fix)
+  recall@1             0/20  (0%)            2/20  (10%)
+  recall@3             3/20 (15%)            8/20  (40%)
+  recall@10            7/20 (35%)           17/20  (85%)     <-- +50 points
+  missed (not top10)  13/20 (65%)            3/20  (15%)     <-- -50 points
+
+WHY: commits are Episodic; code is Code; docs are Semantic. Unscoped, a "which commit" query competed
+against 4,490 code chunks (93% of the corpus) and they drowned it. Scoping to the Episodic pillar excludes
+code/doc frames so the right commit ranks in the top-K. This is the documented row-31 per-pillar scope +
+3.5 Layer-0 routing -- the engine was never weak (MTEB 0.9655), it just had no kind to scope by because
+`add --dir` stored everything in the default pillar. FIX A classifies pillar at ingest; FIX B exposes
+`--pillar` on `said ask`.
+
+recall@1 still 10% = the WITHIN-KIND encoder ranking limit (short jargon-dense commit subjects, static
+mean-pool encoder) -- a separate, already-documented axis (memory: blueprint-recall-encoder-limit). The
+85% recall@10 is what matters for an agent re-grounding: the right commit IS retrieved; float-rerank /
+LLM-pick handles final ordering.
+
+Regression: 15/15 green (pure bash). Project-scope (episodic isolation + procedural cross-project) +
+kind-scope compose: SAID_RECALL_PROJECT narrows to a project, --pillar narrows to a kind within it.

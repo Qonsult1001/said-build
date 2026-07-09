@@ -36,6 +36,7 @@ pub mod conversation;
 pub mod core;
 pub mod mcp;
 pub mod retrieval;
+pub mod steering;
 pub mod strategy;
 pub mod tools;
 

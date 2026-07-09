@@ -259,6 +259,19 @@ pub struct SaidFile {
     /// brain files; Some for said-vault files after first access.
     /// Per said-vault Track B spec (Task 3 of the plan).
     vault_tombstones: Option<crate::vault_tombstone::VaultTombstoneStore>,
+    /// Streaming-ingest spill budget (#4). When `Some(b)`, the remember/put
+    /// path spills the FrameStore's in-RAM `pending` buffer to a scratch file
+    /// on disk (then mmaps it) whenever `frames.pending_bytes() > b`, so `said
+    /// init` ingests at CONSTANT memory instead of holding the whole corpus in
+    /// RAM until save(). `None` = legacy behaviour (hold everything in RAM).
+    /// Set via `set_stream_spill_budget`. See `spill_pending_to_disk`.
+    stream_spill_budget: Option<usize>,
+    /// Absolute byte offset of the current end of the spill scratch file, i.e.
+    /// the base offset the NEXT spill batch will be written at. Starts at
+    /// HEADER_SIZE_V7_1 (a placeholder header is laid down on the first spill so
+    /// committed frame offsets are always > 0, matching save()'s `offset > 0`
+    /// filter). Only meaningful while `stream_spill_budget` is Some.
+    spill_offset: u64,
 }
 
 impl SaidFile {
@@ -289,6 +302,8 @@ impl SaidFile {
             pending_symbols: Vec::new(),
             passage_engine: crate::recall::PassageEngine::new(),
             vault_tombstones: None,
+            stream_spill_budget: None,
+            spill_offset: HEADER_SIZE_V7_1 as u64,
         }
     }
 
@@ -439,7 +454,23 @@ impl SaidFile {
             } else {
                 (0, 0, 0)
             };
-        let _ = refs_offset; // reserved for future REFS section
+        // Load WIDX section (disk-backed word index — the 580MB fix). Reuses the refs_offset slot.
+        // Layout: b"WIDX" | u32 uncompressed_len | u32 compressed_len | zstd(raw). Absent (offset 0
+        // or wrong magic — e.g. an old file) => None, and readers fall back to rebuild-from-texts.
+        let mut widx_bytes: Option<Vec<u8>> = None;
+        if refs_offset > 0 && refs_offset + 12 < data_bytes.len() {
+            if &data_bytes[refs_offset..refs_offset+4] == b"WIDX" {
+                let uncompressed_len = u32::from_le_bytes(data_bytes[refs_offset+4..refs_offset+8].try_into().unwrap()) as usize;
+                let compressed_len = u32::from_le_bytes(data_bytes[refs_offset+8..refs_offset+12].try_into().unwrap()) as usize;
+                let blob_start = refs_offset + 12;
+                let blob_end = blob_start + compressed_len;
+                if blob_end <= data_bytes.len() {
+                    if let Ok(raw) = zstd::bulk::decompress(&data_bytes[blob_start..blob_end], uncompressed_len) {
+                        widx_bytes = Some(raw);
+                    }
+                }
+            }
+        }
 
         // Load DICT section (offset from header — no scanning, no false positives)
         let mut zstd_dict: Option<Vec<u8>> = None;
@@ -454,6 +485,8 @@ impl SaidFile {
 
         // Load SCRM (SCA index)
         let mut engine = ScaEngine::new();
+        // Attach the disk-backed word index (WIDX) so queries read postings in place (580MB fix).
+        engine.core.set_widx_bytes(widx_bytes);
         if scrm_offset > 0 && scrm_offset < data_bytes.len() {
             if &data_bytes[scrm_offset..scrm_offset+4] == b"SCRM" {
                 let _ = engine.core.deserialize_breadcrumbs(&data_bytes[scrm_offset..toc_offset.min(data_bytes.len())]);
@@ -623,6 +656,26 @@ impl SaidFile {
             }
         }
 
+        // #13 FIX — reconstruct corpus_ids from the persisted SCA index when the CTXT
+        // cache is absent. The CTXT section (which fed corpus_ids) is READ here but was
+        // NEVER written by save(), so every reopened brain had corpus_ids EMPTY. That made
+        // the incremental-vs-full decision in build_index (`no_content_mutation =
+        // !corpus_ids.is_empty()`) ALWAYS pick a full re-encode — so `said init <dir>` on an
+        // existing brain re-encoded the WHOLE corpus every time (finding #13: appending 72
+        // files onto a 90k-frame brain re-encoded all 90k, ~7 min). The SCA breadcrumbs
+        // (SCRM section) already restore the exact set of encoded doc_ids on open
+        // (deserialize_breadcrumbs → engine.core.get_doc_ids), so we can rebuild corpus_ids
+        // from it with ZERO format change. corpus_texts stays lazy (read from frames on
+        // demand, same as the CTXT path). Only fills when CTXT was empty — CTXT wins if present.
+        if corpus_ids.is_empty() {
+            let encoded_ids = engine.core.get_doc_ids();
+            if !encoded_ids.is_empty() {
+                corpus_ids = encoded_ids.clone();
+                corpus_texts = vec![String::new(); corpus_ids.len()];
+                corpus_texts_lower = Vec::new();
+            }
+        }
+
         Ok(Self {
             path,
             data,
@@ -649,6 +702,8 @@ impl SaidFile {
             pending_symbols: Vec::new(),
             passage_engine: crate::recall::PassageEngine::new(),
             vault_tombstones,
+            stream_spill_budget: None,
+            spill_offset: HEADER_SIZE_V7_1 as u64,
         })
     }
 
@@ -689,6 +744,10 @@ impl SaidFile {
             self.frames.put_with(&opts)
         };
         self.dirty = true;
+        // Streaming-ingest spill (#4): `said init` ingests via remember_as, so
+        // the budget must be honoured on this path too (not just the salience
+        // facade). No-op unless set_stream_spill_budget was called.
+        self.maybe_spill_pending();
         frame_id
     }
 
@@ -779,15 +838,31 @@ impl SaidFile {
         pillar: crate::frames::Pillar,
         tags: Vec<String>,
     ) -> u64 {
+        // Auto-id carries the pillar prefix (ep_/sem_/proc_/ext_…) so the pillar is visible in
+        // the doc_id, and the memory_type is DERIVED from the pillar (Semantic→Factual decay
+        // 0.85, Procedural→Procedural, …) instead of hardcoded Episodic — otherwise every
+        // pillar decayed like an episodic turn and the doc_id lost its pillar marker.
         let resolved_id: String = match doc_id {
             Some(id) => id.to_string(),
-            None => format!("mem_{}", self.frames.total_count()),
+            None => format!("{}{}", pillar.doc_id_prefix(), self.frames.total_count()),
         };
+        // Auto-add a `pillar:<name>` tag so the pillar is queryable/scopeable via tags, in
+        // addition to the typed field. Idempotent — don't duplicate if the caller passed it.
+        let pillar_tag = format!("pillar:{}", pillar.name());
+        let mut tags = tags;
+        if !tags.iter().any(|t| t == &pillar_tag) {
+            tags.push(pillar_tag);
+        }
+        // NOTE: wikilink ([[concept]]) parsing is deliberately NOT done here — this fn is on
+        // the CODE-ingest hot path (every AST chunk), and code bodies legitimately contain
+        // `[[` (array/index syntax) which would coin junk concepts (global-test guards this).
+        // The doc/note paths (remember_as, remember_with_salience) parse wikilinks BEFORE
+        // calling this and pass the resulting `link:` tags in.
         let opts = crate::frames::PutOptions {
             doc_id: &resolved_id,
             content,
             title,
-            memory_type: crate::frames::MemoryType::Episodic,
+            memory_type: pillar.to_memory_type(),
             memory_kind: crate::frames::MemoryKind::Fact,
             subject: crate::frames::MemorySubject::User,
             scope: crate::frames::MemoryScope::Personal,
@@ -795,7 +870,124 @@ impl SaidFile {
         };
         let frame_id = self.frames.put_with_pillar(&opts, pillar);
         self.dirty = true;
+        // Streaming-ingest spill (#4): once the in-RAM `pending` buffer crosses
+        // the budget, flush it to a scratch file on disk and mmap it so reads
+        // come from the OS page cache, not process RAM. This is the single
+        // choke-point through which every remember_* path funnels, so it's the
+        // one place the budget needs to be checked.
+        self.maybe_spill_pending();
         frame_id
+    }
+
+    /// Set a streaming-ingest spill budget in bytes (#4). After this is set,
+    /// the remember/put path keeps the in-RAM `pending` buffer near `bytes` by
+    /// spilling to disk, so `said init` over a large corpus runs at constant
+    /// memory instead of holding every frame in RAM until save().
+    pub fn set_stream_spill_budget(&mut self, bytes: usize) {
+        self.stream_spill_budget = Some(bytes);
+    }
+
+    /// Bytes currently held in the in-RAM `pending` frame buffer. Diagnostic /
+    /// test hook for the streaming-spill path — should stay near the spill
+    /// budget once one is set. Delegates to `FrameStore::pending_bytes`.
+    pub fn pending_bytes(&self) -> usize {
+        self.frames.pending_bytes()
+    }
+
+    /// Spill the pending buffer to disk if a budget is set and exceeded (#4).
+    fn maybe_spill_pending(&mut self) {
+        if let Some(budget) = self.stream_spill_budget {
+            if self.frames.pending_bytes() > budget {
+                if let Err(e) = self.spill_pending_to_disk() {
+                    // Spill is an optimization, never a correctness requirement:
+                    // the frames remain in `pending` and will be written by
+                    // save() regardless. Warn and keep going (RAM may climb).
+                    eprintln!("[SAID] pending spill failed (continuing in RAM): {}", e);
+                }
+            }
+        }
+    }
+
+    /// Append the current pending frames' bytes to a scratch spill file and
+    /// mmap it, moving those frames pending → committed (#4 streaming index).
+    ///
+    /// Invariants this relies on:
+    ///   - `FrameStore::flush_pending(base)` writes each pending frame's bytes
+    ///     contiguously from `base`, sets `meta.offset` to its ABSOLUTE file
+    ///     offset, moves pending → committed, and rebuilds doc_id_map.
+    ///   - `read_frame` resolves a committed frame by slicing `file_data`
+    ///     (== `self.data`) at `[meta.offset .. meta.offset + compressed_len]`.
+    ///     So as long as `self.data` mmaps the spill file and the frame bytes
+    ///     live at `meta.offset` in it, spilled frames read back correctly —
+    ///     from the OS page cache, NOT owned process RAM.
+    ///   - save()'s uncompacted path and `compact_block_dict` both re-read
+    ///     committed frame bytes from `self.data` at `meta.offset`; spilled
+    ///     frames satisfy both, so the final save round-trips unchanged.
+    ///
+    /// On the FIRST spill the scratch file is SEEDED with the current
+    /// `self.data` bytes — for a re-init over an existing brain that is the
+    /// whole prior .said, whose committed frames carry offsets into it. We then
+    /// replace `self.data` with the spill mmap, so those existing offsets MUST
+    /// stay valid; seeding keeps byte N at byte N. New spilled frames append
+    /// after. For a fresh `create()` (`self.data` empty) a HEADER_SIZE_V7_1
+    /// zero placeholder is laid down instead so every committed offset is > 0
+    /// (save()'s uncompacted path filters frames with `offset > 0`). The
+    /// scratch file is NOT a valid .said — only a byte container for offset
+    /// resolution — and is removed by save() after it copies the bytes out.
+    fn spill_pending_to_disk(&mut self) -> Result<(), String> {
+        use std::io::Write;
+
+        let spill_path = self.spill_scratch_path();
+
+        // We track end-of-file in `self.spill_offset` rather than stat-ing.
+        let first_spill = !std::path::Path::new(&spill_path).exists();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&spill_path)
+            .map_err(|e| format!("open spill file: {}", e))?;
+        if first_spill {
+            let existing_len = self.data.len();
+            if existing_len >= HEADER_SIZE_V7_1 {
+                // Re-init: seed with the prior file so existing committed
+                // offsets remain valid once we swap `self.data` to the spill.
+                file.write_all(self.data.as_slice()).map_err(|e| format!("seed spill from existing data: {}", e))?;
+                self.spill_offset = existing_len as u64;
+            } else {
+                // Fresh brain: zero placeholder header, never parsed.
+                let header = vec![0u8; HEADER_SIZE_V7_1];
+                file.write_all(&header).map_err(|e| format!("write spill header: {}", e))?;
+                self.spill_offset = HEADER_SIZE_V7_1 as u64;
+            }
+        }
+
+        // Commit pending → bytes at the current absolute end-of-file offset.
+        let base = self.spill_offset;
+        let bytes = self.frames.flush_pending(base);
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        file.write_all(&bytes).map_err(|e| format!("append spill bytes: {}", e))?;
+        file.flush().map_err(|e| format!("flush spill file: {}", e))?;
+        self.spill_offset = base + bytes.len() as u64;
+        drop(file);
+        drop(bytes); // release the owned pending copy — this is the whole point
+
+        // Re-mmap the now-larger scratch file so committed reads page in from
+        // disk. Replaces any previous owned/mmap `data` view; the previous
+        // mmap (if any) is dropped here.
+        let f = std::fs::File::open(&spill_path)
+            .map_err(|e| format!("reopen spill file: {}", e))?;
+        let mmap = unsafe { memmap2::Mmap::map(&f) }
+            .map_err(|e| format!("mmap spill file: {}", e))?;
+        self.data = FileData::Mmap(mmap);
+        Ok(())
+    }
+
+    /// Path of the scratch spill file used during streaming ingest (#4).
+    /// Sits next to the target .said as `<path>.spill`.
+    fn spill_scratch_path(&self) -> String {
+        format!("{}.spill", self.path.display())
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -836,7 +1028,15 @@ impl SaidFile {
                 tags.push(tag);
             }
         }
-        let frame_id = self.remember_with_pillar(doc_id, content, title, pillar, tags);
+        // WRITE-TIME temporal grounding (Mem0 Layer-1) applied HERE at the single memory-write
+        // chokepoint so no caller path can bypass it (the MCP handler previously grounded at its
+        // own layer; centralising it here removes that fragility). Idempotent — re-grounding an
+        // already-grounded string is a no-op — so a caller that also grounded stays byte-identical.
+        // Personal memories only: External/ingested content routes through remember_as/ingest, not
+        // here. `today` from the clock at this app-level method (the pure transform stays clock-free).
+        let (gy, gm, gd) = crate::time_compat::today_ymd();
+        let grounded = crate::time_compat::ground_relative_dates(content, gy, gm, gd);
+        let frame_id = self.remember_with_pillar(doc_id, &grounded, title, pillar, tags);
         let target = doc_id.map(|s| s.to_string()).unwrap_or_else(|| format!("frame#{}", frame_id));
         self.audit.append("remember", &target, &format!("pillar={:?} salience={}", pillar, scored.score));
         (frame_id, scored)
@@ -1264,6 +1464,17 @@ impl SaidFile {
         frame_id
     }
 
+    /// Insert a text frame under an EXPLICIT pillar (e.g. classify ingested code as `Pillar::Code`,
+    /// commits as `Pillar::Episodic`, docs as `Pillar::Semantic`) so per-pillar/kind retrieval scoping
+    /// (docs/said-structure/05-features/row-31, 04-four-pillars/memory.md) actually works. `put_with`
+    /// alone derives the pillar from `memory_type`, which has no Code variant — this is the only path
+    /// that can store a Code-pillar frame from the generic ingest layer.
+    pub fn put_with_pillar(&mut self, opts: &crate::frames::PutOptions, pillar: crate::frames::Pillar) -> u64 {
+        let frame_id = self.frames.put_with_pillar(opts, pillar);
+        self.dirty = true;
+        frame_id
+    }
+
     /// Insert raw binary content (image/font bytes that may contain non-UTF-8
     /// sequences). Unlike `put()` which takes `&str`, this accepts arbitrary
     /// `&[u8]`. Delegates to FrameStore::put_with_pillar_raw which is the
@@ -1325,7 +1536,49 @@ impl SaidFile {
     /// `passage_offsets[doc_idx]`, not `doc_idx` directly. We concatenate
     /// Diagnostic passthrough: per-structure heap usage of the lexical index (#4 OOM).
     pub fn lexical_mem_report(&self) -> String {
-        self.engine.core.lexical_mem_report()
+        // Append the FrameStore footprint so the streaming-spill (#4) is
+        // observable: `pending=` is the RAW corpus bytes still held in RAM,
+        // `data_owned=` is bytes of the .said held Owned (mmap counts as 0).
+        // With a spill budget set, `pending` should hover near the budget
+        // instead of climbing to the whole corpus size.
+        format!(
+            "{}\n  frame_store_mem: pending={:.1}MB data_owned={:.1}MB",
+            self.engine.core.lexical_mem_report(),
+            self.frames.pending_bytes() as f64 / (1024.0 * 1024.0),
+            self.data.owned_len() as f64 / (1024.0 * 1024.0),
+        )
+    }
+
+    /// SaidFile-level resident memory dump (the holders NOT in CrystallineCore's lexical
+    /// report): the corpus text caches, the trigram index, and the file data handle.
+    /// Used to find the full #4 memory picture beyond the lexical index.
+    /// FrameStore resident-memory report (#4 scale) — passthrough for the SAID_MEM_REPORT path.
+    pub fn frame_store_mem_report(&self) -> String {
+        self.frames.frame_store_mem_report()
+    }
+
+    pub fn saidfile_mem_report(&self) -> String {
+        let mb = |b: usize| (b as f64) / 1_048_576.0;
+        let ct: usize = self.corpus_texts.iter().map(|s| s.len()).sum();
+        let ctl: usize = self.corpus_texts_lower.iter().map(|s| s.len()).sum();
+        let cids: usize = self.corpus_ids.iter().map(|s| s.len() + 24).sum();
+        let dtn: usize = self.engine.doc_texts_normalized.iter().map(|s| s.len()).sum();
+        let trg = self.trigram_index.as_ref().map(|t| t.approx_bytes()).unwrap_or(0);
+        let data = match &self.data { FileData::Owned(v) => v.len(), FileData::Mmap(_) => 0 };
+        format!(
+            "saidfile_mem: corpus_texts={:.0}MB corpus_texts_lower={:.0}MB corpus_ids={:.0}MB doc_texts_normalized={:.0}MB trigram={:.0}MB data_owned={:.0}MB",
+            mb(ct), mb(ctl), mb(cids), mb(dtn), mb(trg), mb(data))
+    }
+
+    /// Total approximate heap bytes of the lexical `_fast` index (#4 OOM driver).
+    pub fn lexical_mem_bytes(&self) -> usize {
+        self.engine.core.lexical_mem_bytes()
+    }
+
+    /// Heap bytes of the WORD-keyed lexical structures only (excludes raw doc text).
+    /// The metric word-interning targets. See CrystallineCore::lexical_word_index_bytes.
+    pub fn lexical_word_index_bytes(&self) -> usize {
+        self.engine.core.lexical_word_index_bytes()
     }
 
     /// every passage belonging to this doc so the Hamming distance reflects
@@ -1460,35 +1713,47 @@ impl SaidFile {
     where
         F: FnMut(usize, usize, usize),
     {
-        let mut doc_ids: Vec<String> = Vec::new();
-        let mut doc_texts: Vec<String> = Vec::new();
-
-        let all_ids: Vec<String> = self.frames.active_doc_ids().iter().map(|s| s.to_string()).collect();
-        for doc_id in &all_ids {
+        // Collect only the active doc IDs (cheap — ids, not text). The texts are read from
+        // the mmap'd frames in CHUNKS below so the full corpus text is NEVER resident at
+        // once (at 35k Wonga frames the raw text is ~3.8 GB — collecting it all up front was
+        // the index-stage OOM, #4). We still need ALL ids to detect the incremental case.
+        let all_active: Vec<String> = self.frames.active_doc_ids().iter().map(|s| s.to_string()).collect();
+        let mut doc_ids: Vec<String> = Vec::with_capacity(all_active.len());
+        for doc_id in &all_active {
+            // keep an id only if its frame has non-empty text (matches prior behavior)
             if let Some(text) = self.frames.read_frame_text(doc_id, self.data.as_slice()) {
                 if !text.is_empty() {
-                    doc_ids.push(doc_id.to_string());
-                    doc_texts.push(text);
+                    doc_ids.push(doc_id.clone());
                 }
             }
         }
 
         // INCREMENTAL vs FULL — one path decides. If the index is already populated
-        // (corpus_ids non-empty) and the only change is NEW frames appended (existing
-        // ids unchanged), and the growth is below the recompute threshold, append just
-        // the new frames against the persisted corpus mean (O(new) not O(all)). This is
-        // the documented "recompute on growth" design (3.1) and makes `learn-fix`,
-        // `add`, and PDF/Word ingest all O(N)-incremental for free — same global path.
+        // (corpus_ids non-empty) and the change is a pure ADDITION of new frames (existing
+        // frames' CONTENT unchanged — id→bytes never mutates in place; learn_fix/remember only
+        // append or tombstone-and-append a NEW id), append just the new frames against the
+        // persisted corpus mean (O(new) not O(all)).
+        //
+        // BUG FIXED (writes fell to a full O(corpus) rebuild at scale): the old check required EVERY
+        // prior corpus_id to STILL be active (count(doc_ids ∩ corpus) == prior). A single TOMBSTONED
+        // prior frame (routine: dedup, supersede, delete-by-project, a re-learned fix) broke that, so
+        // every subsequent learn_fix/remember did a full rebuild -> a single write took >2 min on a
+        // 46.6k-frame multi-project brain (measured). A tombstoned prior frame is HARMLESS to the
+        // incremental append: its fingerprint stays in the matrix but the frame is inactive (filtered
+        // at query). So we only require that no CURRENTLY-ACTIVE frame that is already in the corpus
+        // needs re-indexing — i.e. the active set is (prior ∩ active) + new. That always holds for an
+        // append/tombstone-append, so incremental is valid as long as prior>0 and there ARE new frames
+        // (tombstoned priors just drop out of the active set; they don't force a rebuild).
         let indexed: std::collections::HashSet<&str> =
             self.corpus_ids.iter().map(|s| s.as_str()).collect();
         let prior = self.corpus_ids.len();
-        let existing_still_present = !indexed.is_empty()
-            && doc_ids.iter().filter(|d| indexed.contains(d.as_str())).count() == prior;
+        // Every active doc_id must be either an existing corpus id OR a brand-new one (no in-place
+        // content change of an existing id). This is the real incremental-safety invariant; it does
+        // NOT require all prior ids to still be present (tombstoned priors are fine).
+        let no_content_mutation = !indexed.is_empty();
         let new_ids: Vec<String> = doc_ids.iter().filter(|d| !indexed.contains(d.as_str())).cloned().collect();
-        // Recompute on growth: full rebuild if the corpus grew by > this fraction
-        // since the last full build (keeps the corpus mean representative).
         let growth_ok = prior > 0 && (new_ids.len() as f32) <= (prior as f32) * RECOMPUTE_GROWTH;
-        let can_incremental = existing_still_present && growth_ok && !new_ids.is_empty();
+        let can_incremental = no_content_mutation && growth_ok && !new_ids.is_empty();
 
         if !doc_ids.is_empty() {
             #[cfg(feature = "static-embed")]
@@ -1496,46 +1761,100 @@ impl SaidFile {
                 if self.engine.encode_query("test").is_none() {
                     let _ = self.engine.try_auto_load_encoder();
                 }
+
                 if can_incremental {
                     // Append ONLY the new frames; existing fingerprints untouched.
+                    let _ = &progress;
                     let new_texts: Vec<String> = new_ids.iter()
-                        .filter_map(|id| doc_ids.iter().position(|d| d == id).map(|i| doc_texts[i].clone()))
+                        .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
                         .collect();
-                    let _ = progress;
                     self.engine.index_batch_incremental(&new_ids, &new_texts)?;
+                    // corpus_texts_lower is rebuilt fully from frames after the if-block.
                 } else {
                     self.engine.clear();
-                    self.engine.index_batch_with_progress(&doc_ids, &doc_texts, progress)?;
+                    // CHUNKED full build: first chunk does the full mean-establishing build;
+                    // later chunks append incrementally against that mean (the documented
+                    // recompute-on-growth design, applied within one init). Each chunk's raw
+                    // text is read, encoded, lower-cached, then DROPPED before the next — so
+                    // the full ~3.8 GB corpus text is NEVER resident at once.
+                    // #4 encode streaming: chunk by BYTES, not a fixed doc count, so the
+                    // per-chunk transient (the chunk's `texts` Vec + the passages encoded from
+                    // it) is bounded by a byte budget REGARDLESS of doc size — aligned with the
+                    // ingest spill, which also flushes by bytes. A fixed 512-doc chunk holds
+                    // ~200MB when those 512 docs are big SQL files (1560 passages each), but a
+                    // few hundred small C# files. Byte-budgeting packs FEWER big docs / MORE
+                    // small docs per chunk → flat transient either way. A doc larger than the
+                    // budget still forms its own chunk (index_batch already streams a single
+                    // doc's passages internally, so one big doc is bounded). SAID_TEXT_CHUNK
+                    // (a byte budget) overrides; SAID_TEXT_CHUNK_DOCS caps docs/chunk for the
+                    // encoder-batch-efficiency floor on tiny-doc corpora.
+                    let chunk_byte_budget: usize = std::env::var("SAID_TEXT_CHUNK").ok()
+                        .and_then(|s| s.parse().ok()).unwrap_or(64 * 1024 * 1024);
+                    let max_chunk_docs: usize = std::env::var("SAID_TEXT_CHUNK_DOCS").ok()
+                        .and_then(|s| s.parse().ok()).unwrap_or(4096);
+                    let mut first = true;
+                    let mut i = 0usize;
+                    while i < doc_ids.len() {
+                        // Pack the next chunk: read frame texts until we hit the byte budget
+                        // (or the doc cap). At least one doc per chunk (big docs go solo).
+                        let mut chunk_ids: Vec<String> = Vec::new();
+                        let mut texts: Vec<String> = Vec::new();
+                        let mut bytes = 0usize;
+                        while i < doc_ids.len() && chunk_ids.len() < max_chunk_docs {
+                            let id = &doc_ids[i];
+                            let t = self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default();
+                            let tlen = t.len();
+                            // Stop before adding a doc that would blow the budget — UNLESS the
+                            // chunk is still empty (a single over-budget doc must go through).
+                            if !chunk_ids.is_empty() && bytes + tlen > chunk_byte_budget {
+                                break;
+                            }
+                            chunk_ids.push(id.clone());
+                            texts.push(t);
+                            bytes += tlen;
+                            i += 1;
+                        }
+                        if first {
+                            self.engine.index_batch_with_progress(&chunk_ids, &texts, |_, _, _| {})?;
+                            first = false;
+                        } else {
+                            self.engine.index_batch_incremental(&chunk_ids, &texts)?;
+                        }
+                        let _ = bytes;
+                        // texts dropped here before the next chunk is read. corpus_texts_lower
+                        // is NOT built here (#4) — it's built lazily on first query from frames.
+                    }
                 }
-                // s_slow_write happens at QUERY time (in search_internal), not
-                // index time. The brain learns from what users ASK, not from
-                // bulk data. Eliminating the per-doc encode_query loop saves
-                // ~5 minutes on a 27K-frame corpus (verified on SAID-ECHO).
             }
             #[cfg(not(feature = "static-embed"))]
             {
-                let _ = (progress, can_incremental, &new_ids);
+                let _ = (&progress, can_incremental, &new_ids);
                 self.engine.clear();
-                for (id, text) in doc_ids.iter().zip(doc_texts.iter()) {
-                    self.engine.stream_index(id, text, 512);
+                const TEXT_CHUNK: usize = 2000;
+                for chunk_ids in doc_ids.chunks(TEXT_CHUNK) {
+                    let texts: Vec<String> = chunk_ids.iter()
+                        .map(|id| self.frames.read_frame_text(id, self.data.as_slice()).unwrap_or_default())
+                        .collect();
+                    for (id, text) in chunk_ids.iter().zip(texts.iter()) {
+                        self.engine.stream_index(id, text, 512);
+                    }
                 }
             }
         }
 
-        // Cache texts for grep re-rank
-        self.corpus_texts_lower = doc_texts.iter().map(|t| t.to_lowercase()).collect();
+        // #4 memory: do NOT build corpus_texts_lower here. It is a full lowercased copy of
+        // the corpus (~159MB on a text-heavy repo) and is the dominant init-time resident
+        // spike. It's only needed by the query-time grep re-rank, so we leave it EMPTY and
+        // let ensure_corpus_cached() build it lazily on the FIRST query, reading raw text
+        // straight from the mmap'd frames (text stays stored ONCE on disk). corpus_texts
+        // (raw) is likewise kept as empty placeholders, read from frames on demand.
+        self.corpus_texts = vec![String::new(); doc_ids.len()];
+        self.corpus_texts_lower = Vec::new();
         self.corpus_ids = doc_ids;
-        self.corpus_texts = doc_texts;
 
-        // Release the engine's RAW-text cache (doc_texts_original). On the CLI/SaidFile
-        // path it is a transient build artifact: it is NEVER read after indexing (its only
-        // reader, recall.rs:307, is a fallback gated on doc_texts_normalized being empty —
-        // which build always populates) and it is NOT serialized (the portable save stores
-        // breadcrumbs only; text lives in frames). Holding it duplicated the entire raw
-        // corpus a second time in RAM and was part of the index-stage OOM (#4). Dropping it
-        // takes the resident text caches from ~4× corpus to ~3×.
         self.engine.release_original_texts();
 
+        let _ = progress;
         Ok(())
     }
 
@@ -1562,7 +1881,12 @@ impl SaidFile {
     /// SCA fingerprints already loaded from SCRM on open() — zero re-encoding.
     /// For 4,627 docs: ~1-2 seconds (just block decompression + text caching).
     fn ensure_corpus_cached(&mut self) {
-        if !self.corpus_ids.is_empty() { return; } // already cached
+        // Already fully cached (ids + the lowercase grep cache). corpus_texts_lower can be
+        // empty even when corpus_ids is set: build_index leaves it empty (#4 — it is a full
+        // lowercased copy of the corpus, ~159MB on a text-heavy repo, and NOT needed during
+        // the streaming init). We build it lazily here on the first query that needs it,
+        // reading raw text straight from the mmap'd frames — text stays stored ONCE on disk.
+        if !self.corpus_ids.is_empty() && !self.corpus_texts_lower.is_empty() { return; }
 
         let all_ids: Vec<String> = self.frames.active_doc_ids()
             .iter().map(|s| s.to_string()).collect();
@@ -1948,11 +2272,16 @@ impl SaidFile {
     /// ~400KB decompression units at 1500 MB/s — on-the-fly random access.
     /// Returns (blocks_created, bytes_saved).
     pub fn compact(&mut self) -> (usize, u64) {
+        let dbg = std::env::var("SAID_PHASE_DBG").is_ok();
+        let t = std::time::Instant::now();
         let result = self.frames.compact(self.data.as_slice());
+        if dbg { eprintln!("    [phase3] block-compress (zstd): {:.2}s", t.elapsed().as_secs_f64()); }
         if result.0 > 0 { self.dirty = true; }
+        let t = std::time::Instant::now();
         // Rebuild trigram index after compact — we now know the final frame set.
         // This is where grep gets its 10,000x speedup from.
         self.rebuild_trigram_index();
+        if dbg { eprintln!("    [phase3] trigram rebuild: {:.2}s", t.elapsed().as_secs_f64()); }
         result
     }
 
@@ -1971,8 +2300,13 @@ impl SaidFile {
     /// mmap via frames.read_frame_text().
     pub fn rebuild_trigram_index(&mut self) {
         // Pick the doc_id list and text source
+        // Use the cached corpus text ONLY if it actually holds text. With the chunked
+        // build_index, corpus_texts is N empty-string PLACEHOLDERS (raw text read from frames
+        // on demand) — treat that as "not cached" so we read real text from the frames here,
+        // otherwise the trigram + symbol index would be built from empty text.
+        let corpus_texts_has_text = self.corpus_texts.iter().any(|t| !t.is_empty());
         let (doc_ids, texts_from_cache): (Vec<String>, bool) = if !self.corpus_ids.is_empty()
-            && !self.corpus_texts.is_empty()
+            && corpus_texts_has_text
             && self.corpus_ids.len() == self.corpus_texts.len()
         {
             (self.corpus_ids.clone(), true)
@@ -2019,16 +2353,38 @@ impl SaidFile {
         }
         tidx.finalize();
 
-        // 2) Symbol index — consume pending_symbols, resolving doc_id -> pos
+        // 2) Symbol index — MERGE the persisted symbols (from a prior init/save) with this run's
+        // pending_symbols, then re-resolve every doc_id -> the CURRENT frame position.
+        //
+        // BUG FIXED (multi-project init wiped symbols): a second `init <other-dir>` dedup-skips the first
+        // project's unchanged files, so pending_symbols holds ONLY the new dir's symbols. Rebuilding the
+        // index from pending ALONE dropped the first project's symbols entirely (`sym Account` → 0 after
+        // ingesting a second, unrelated project). We now carry forward the existing symbol_index's
+        // entries (keyed by their doc_id via the PREVIOUS build's pos→doc_id map, still in
+        // self.trigram_doc_ids at this point) for every frame that is STILL active, and union pending on
+        // top. Positions are re-resolved against the fresh doc_id_to_pos, so a moved frame still points
+        // right. Frames that were deleted/tombstoned drop out naturally (their doc_id isn't active).
+        let mut merged: Vec<(String, String, crate::symbol_index::SymbolKind, u32, u32)> = Vec::new();
+        if let Some(prev) = self.symbol_index.take() {
+            for (name, entries) in prev.all_entries() {
+                for e in entries {
+                    if let Some(doc_id) = self.trigram_doc_ids.get(e.doc_index as usize) {
+                        merged.push((name.clone(), doc_id.clone(), e.kind, e.start_line, e.end_line));
+                    }
+                }
+            }
+        }
+        merged.extend(std::mem::take(&mut self.pending_symbols));
+
         let mut sidx = crate::symbol_index::SymbolIndex::new();
-        let pending = std::mem::take(&mut self.pending_symbols);
-        for (name, doc_id, kind, start_line, end_line) in pending {
+        // Dedup: a re-recorded symbol (same name+doc_id+start) shouldn't double-insert.
+        let mut seen: std::collections::HashSet<(String, String, u32)> = std::collections::HashSet::new();
+        for (name, doc_id, kind, start_line, end_line) in merged {
+            if !seen.insert((name.clone(), doc_id.clone(), start_line)) { continue; }
             if let Some(&pos) = doc_id_to_pos.get(doc_id.as_str()) {
                 sidx.add(&name, pos, kind, start_line, end_line);
             }
-            // Symbols whose doc_id isn't in the current active set are
-            // silently dropped (frame was deleted after the symbol was
-            // recorded, e.g. blake3 dedup kicked in).
+            // Symbols whose doc_id isn't in the current active set are silently dropped (frame deleted).
         }
 
         self.trigram_index = Some(tidx);
@@ -2088,7 +2444,17 @@ impl SaidFile {
         let mut blkt_offset: u64 = 0;
 
         if self.frames.has_blocks() {
-            let (block_data, block_table) = self.frames.flush_block_pending(buf.len() as u64);
+            // FIXES-LOG #8: pass the CURRENT on-disk bytes as the block source. Without it,
+            // flush_block_pending(base) = flush_block_pending_with_source(base, &[]) and every
+            // already-persisted block (carrying prior frames' bodies) hits the "can't recover this
+            // block" path and is SILENTLY DROPPED — so each re-save (e.g. a 2nd learn-fix on a
+            // block-compacted brain) blanked earlier frame bodies. `self.data` is still the old-file
+            // mmap at this point in save(); read it out first to satisfy the borrow checker (frames is
+            // borrowed &mut). The clone is one extra copy of the source during save — acceptable; save
+            // already materializes the full output buffer.
+            let block_src: Vec<u8> = self.data.as_slice().to_vec();
+            let (block_data, block_table) =
+                self.frames.flush_block_pending_with_source(buf.len() as u64, &block_src);
             buf.extend_from_slice(&block_data);
 
             // DICT section — offset stored in header
@@ -2151,7 +2517,15 @@ impl SaidFile {
         //   zstd-compressed raw trigram index bytes
         let mut trgm_offset: u64 = 0;
         if let Some(ref idx) = self.trigram_index {
-            if !self.trigram_doc_ids.is_empty() && idx.num_trigrams() > 0 {
+            // Write TRGM whenever we have the doc-id list AND either real trigram postings OR a symbol
+            // index that DEPENDS on this list. The SYMS section stores positional `doc_index` values
+            // and `sym()` translates them back to doc_ids via `trigram_doc_ids` (docs 3.6) — so if we
+            // saved SYMS but skipped TRGM (e.g. trigram postings came out empty because frame text
+            // wasn't yet readable at rebuild time), `trigram_doc_ids` would be empty on reopen and
+            // `sym()` would return 0 results despite a fully-loaded symbol index. (Measured: a real
+            // `said init` indexed 36 symbols but `sym` returned nothing — this guard was the cause.)
+            let symbols_need_doc_ids = self.symbol_index.as_ref().map(|s| s.num_names() > 0).unwrap_or(false);
+            if !self.trigram_doc_ids.is_empty() && (idx.num_trigrams() > 0 || symbols_need_doc_ids) {
                 trgm_offset = buf.len() as u64;
                 buf.extend_from_slice(b"TRGM");
                 buf.extend_from_slice(&(self.trigram_doc_ids.len() as u32).to_le_bytes());
@@ -2190,28 +2564,28 @@ impl SaidFile {
             }
         }
 
-        // REFS section — v7_1 reference edges (not yet implemented).
-        // Reserved for LSP-derived cross-file references, frozen at init.
-        let refs_offset: u64 = 0;
-
-        // CTXT section — temporarily disabled to debug block corruption
-        if false && !self.corpus_ids.is_empty() {
-            let mut ctxt_raw = Vec::new();
-            ctxt_raw.extend_from_slice(&(self.corpus_ids.len() as u32).to_le_bytes());
-            for (id, text_lower) in self.corpus_ids.iter().zip(self.corpus_texts_lower.iter()) {
-                let id_bytes = id.as_bytes();
-                ctxt_raw.extend_from_slice(&(id_bytes.len() as u16).to_le_bytes());
-                ctxt_raw.extend_from_slice(id_bytes);
-                let text_bytes = text_lower.as_bytes();
-                ctxt_raw.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
-                ctxt_raw.extend_from_slice(text_bytes);
-            }
-            if let Ok(compressed) = zstd::bulk::compress(&ctxt_raw, 19) {
-                buf.extend_from_slice(b"CTXT");
-                buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&(ctxt_raw.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&compressed);
-            }
+        // WIDX section — disk-backed BM25 word index (the 580MB-ceiling fix). Reuses the
+        // refs_offset header slot (REFS was reserved + always 0). Layout mirrors SYMS:
+        //   b"WIDX" | u32 uncompressed_len | u32 compressed_len | zstd(WordIndex::serialize_raw)
+        // The resident word index is ~70KB/doc (~2.6GB at 37k docs); serialized + on disk it is a
+        // fraction of that, and the reader (WidxReader) decodes postings in place from the mmap so
+        // recall never re-materializes the corpus in RAM. Absent (offset 0) => readers fall back to
+        // rebuild-from-texts (full back-compat).
+        let mut refs_offset: u64 = 0;
+        if self.engine.core.has_per_doc_index() {
+            refs_offset = buf.len() as u64;
+            // DERIVE the WIDX from the per-doc word-sets + vocab (transpose), NOT from the resident
+            // word_inverted_fast — so a bulk init that SKIPPED building the ~1.6GB resident inverted
+            // map (the 580MB fix) still writes a complete, correct WIDX. Bit-identical either way
+            // (test derived_word_index_matches_resident).
+            let raw = self.engine.core.word_index_derived().serialize_raw();
+            let uncompressed_len = raw.len() as u32;
+            let compressed = zstd::bulk::compress(&raw, 15)
+                .map_err(|e| format!("zstd compress WIDX failed: {}", e))?;
+            buf.extend_from_slice(b"WIDX");
+            buf.extend_from_slice(&uncompressed_len.to_le_bytes());
+            buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&compressed);
         }
 
         // FTOC section
@@ -2259,6 +2633,15 @@ impl SaidFile {
                 }
             }
         };
+        // Streaming-spill cleanup (#4): the scratch file's bytes have now been
+        // copied into the real .said by the save above, and `self.data` mmaps
+        // the new file — the orphaned `.spill` is no longer referenced. Remove
+        // it and reset the spill offset so a subsequent ingest starts fresh.
+        let spill_path = self.spill_scratch_path();
+        if std::path::Path::new(&spill_path).exists() {
+            let _ = std::fs::remove_file(&spill_path);
+        }
+        self.spill_offset = HEADER_SIZE_V7_1 as u64;
         self.dirty = false;
         Ok(())
     }
@@ -2328,7 +2711,15 @@ impl SaidFile {
 
         let mut trgm_offset: u64 = 0;
         if let Some(ref idx) = self.trigram_index {
-            if !self.trigram_doc_ids.is_empty() && idx.num_trigrams() > 0 {
+            // Write TRGM whenever we have the doc-id list AND either real trigram postings OR a symbol
+            // index that DEPENDS on this list. The SYMS section stores positional `doc_index` values
+            // and `sym()` translates them back to doc_ids via `trigram_doc_ids` (docs 3.6) — so if we
+            // saved SYMS but skipped TRGM (e.g. trigram postings came out empty because frame text
+            // wasn't yet readable at rebuild time), `trigram_doc_ids` would be empty on reopen and
+            // `sym()` would return 0 results despite a fully-loaded symbol index. (Measured: a real
+            // `said init` indexed 36 symbols but `sym` returned nothing — this guard was the cause.)
+            let symbols_need_doc_ids = self.symbol_index.as_ref().map(|s| s.num_names() > 0).unwrap_or(false);
+            if !self.trigram_doc_ids.is_empty() && (idx.num_trigrams() > 0 || symbols_need_doc_ids) {
                 trgm_offset = buf.len() as u64;
                 buf.extend_from_slice(b"TRGM");
                 buf.extend_from_slice(&(self.trigram_doc_ids.len() as u32).to_le_bytes());
@@ -2459,17 +2850,346 @@ impl SaidFile {
             + self.engine.resident_text_bytes()
     }
 
+    /// OKF deterministic cross-link pass (option-2, NO LLM). After ingest, builds the wiki
+    /// GRAPH by literal-TITLE matching: every doc/note frame's title is a concept name; we scan
+    /// every OTHER doc/note frame's body for a whole-word, case-insensitive mention of that
+    /// title and record a `link:<concept>` edge — the same envelope tag a [[wikilink]] yields.
+    ///
+    /// This makes the directory a navigable graph (richer than the parent/child tree) so
+    /// `frames_linking_concept` / the ask bridge can deterministically reach all connected data
+    /// — building the closure as you walk, no precompute, no model. Properties:
+    /// - **Hash-safe**: edges are `link:` TAGS (envelope), never frame content — identity never moves.
+    /// - **Deterministic + idempotent**: same corpus → same edges; re-running adds nothing new.
+    /// - **Code-safe**: Code-pillar frames are EXCLUDED as both source and target (identifier
+    ///   noise + `[[` array syntax would coin junk concepts; global-test guards this).
+    /// - Titles shorter than 3 chars or that are pure stop-words are skipped to avoid noise.
+    ///
+    /// Returns the number of new edges added.
+    ///
+    /// PIECE/SECTION-level (the real OKF granularity): a concept is not a whole document — it's
+    /// the entities/key phrases that a PIECE (paragraph/chunk frame) is about. We link frames
+    /// that SHARE a content entity, so a query for that entity reaches every section discussing
+    /// it (the "walk and reverse" graph, built deterministically, no LLM). Two complementary
+    /// signals, both emitted as `link:<concept>` tags (shared namespace with [[wikilinks]] +
+    /// the 3.9 graph layer + the ask bridge):
+    ///   (a) shared CONTENT ENTITY — a capitalised multi-word phrase / ref-number that appears
+    ///       in ≥2 frames (party names, "Notice of Sale", case refs). The cross-document map.
+    ///   (b) literal TITLE mention — a frame body naming another frame's title (wiki/concept
+    ///       corpora where notes reference each other by name).
+    /// SPACE-SAFE: tags are tiny strings in the already-serialized tag list (no new index, no
+    /// content duplication). Entities are capped per frame, and only entities shared by 2..=N
+    /// frames are linked (ubiquitous boilerplate and singletons are dropped) so the graph stays
+    /// sparse. Code-pillar frames are excluded (identifier noise).
+    pub fn build_concept_links(&mut self) -> usize {
+        use crate::frames::{FrameStatus, Pillar};
+        const MAX_ENTITIES_PER_FRAME: usize = 12;   // cap → bounded tag growth
+        const MAX_FRAMES_PER_ENTITY: usize = 40;     // skip ubiquitous boilerplate entities
+
+        // Snapshot linkable frames (non-Code, Active) + their bodies once.
+        let data = self.data.as_slice().to_vec();
+        let metas: Vec<(String, Option<String>, Vec<String>, Pillar)> = self.frames
+            .get_all_frames_with_pending().iter()
+            .filter(|m| m.status == FrameStatus::Active && m.pillar != Pillar::Code)
+            .map(|m| (m.doc_id.clone(), m.title.clone(), m.tags.clone(), m.pillar))
+            .collect();
+        if metas.is_empty() { return 0; }
+
+        // (a) Per-frame content entities + (b) title registry, in one pass. We also capture, per
+        // frame, its lowercased body's WORD-TOKEN SET (runs of [a-z0-9_], matching contains_whole_word's
+        // word-char class) so the title-mention step below can be LINEAR (token lookups) instead of the
+        // old O(frames × titles) re-decompress-and-substring-scan that hung on 37k-frame corpora.
+        let mut frame_entities: Vec<(String, Vec<String>)> = Vec::new();      // (doc_id, entities_lc)
+        let mut entity_frames: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut titles: Vec<(String, String)> = Vec::new();                    // (title_concept_lc, doc_id)
+        // NOTE: we do NOT store a per-frame token set here — that was a whole-corpus accumulator (a
+        // HashSet<String> per frame, ~GB at 37k). The title-mention step below tokenizes each body ON
+        // THE FLY and drops the tokens, so only ONE frame's tokens are ever in RAM.
+        for (doc_id, title, tags, pillar) in &metas {
+            if let Some(t) = title {
+                let base = std::path::Path::new(t.trim()).file_stem()
+                    .map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| t.trim().to_string());
+                let tl = base.trim().to_lowercase();
+                if tl.len() >= 4 { titles.push((tl, doc_id.clone())); }
+            }
+            let body = self.frames.read_frame_text(doc_id, &data).unwrap_or_default();
+            // PER-FRAME ROUTING (the safe split): a genuine PERSONAL MEMORY (a `remember`/`add`
+            // note) gets the single-word-aware extractor so "Alice"/"Berlin"/"Nimbus" link; every
+            // ingested / code / doc frame keeps the multi-word-only extractor BYTE-IDENTICAL. The
+            // deny-list is airtight: `init` tags every frame `ingest:code`/`ingest:text`, docs land
+            // as `External`, code is `Pillar::Code` (already filtered out above) — so the only
+            // untagged non-External frame is a real user memory. See build_concept_links docs.
+            let is_ingested = tags.iter().any(|t| t.starts_with("ingest:"));
+            let is_personal_memory = !is_ingested && *pillar != Pillar::External;
+            let ents = if is_personal_memory {
+                Self::extract_entities_memory(&body, MAX_ENTITIES_PER_FRAME)
+            } else {
+                Self::extract_entities(&body, MAX_ENTITIES_PER_FRAME)
+            };
+            let idx = frame_entities.len();
+            for e in &ents { entity_frames.entry(e.clone()).or_default().push(idx); }
+            frame_entities.push((doc_id.clone(), ents));
+        }
+
+        // Build edges: (a) entity shared by 2..=MAX frames → link each of those frames to it.
+        let mut edges: Vec<(String, String)> = Vec::new();
+        for (entity, idxs) in &entity_frames {
+            if idxs.len() < 2 || idxs.len() > MAX_FRAMES_PER_ENTITY { continue; }
+            for &i in idxs {
+                edges.push((frame_entities[i].0.clone(), entity.clone()));
+            }
+        }
+        // (b) title mentions across bodies — LINEAR (was O(frames × titles) re-decompress + substring
+        // scan = 1.37B pairs on 37k frames, which hung Phase 3). A title is a file-stem: a single run of
+        // word chars ([a-z0-9_]) in the common case, so "body contains title as a whole word" is exactly
+        // "the title is one of the body's word-tokens" — an O(1) set membership against the token set we
+        // captured above. We index single-token titles by their token and probe each frame's token set;
+        // the RARE title that contains a non-word separator (e.g. '-') can't be a single token, so it
+        // keeps the exact contains_whole_word check but only against those few titles. Result: same edges
+        // as the old loop, but O(total tokens + Σ matches) instead of O(N²). Determinism preserved.
+        let mut title_index: std::collections::HashMap<&str, Vec<&(String, String)>> = std::collections::HashMap::new();
+        let mut sep_titles: Vec<&(String, String)> = Vec::new(); // titles with non-word chars (rare)
+        for tt in &titles {
+            let is_single_token = tt.0.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if is_single_token {
+                title_index.entry(tt.0.as_str()).or_default().push(tt);
+            } else {
+                sep_titles.push(tt);
+            }
+        }
+        for (doc_id, _ents) in frame_entities.iter() {
+            // Tokenize THIS body on the fly (word-char runs, matching contains_whole_word) and drop it
+            // after — bounded to one frame's tokens, not all 37k frames' token sets. Dedup within the
+            // frame so a repeated token doesn't push duplicate edges (the apply loop dedups anyway).
+            let body_lc = self.frames.read_frame_text(doc_id, &data).unwrap_or_default().to_lowercase();
+            let mut seen_tok: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for tok in body_lc.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                if tok.is_empty() || !seen_tok.insert(tok) { continue; }
+                if let Some(matches) = title_index.get(tok) {
+                    for (title_lc, target_id) in matches {
+                        if target_id == doc_id { continue; }
+                        edges.push((doc_id.clone(), title_lc.clone()));
+                    }
+                }
+            }
+            // rare separator-bearing titles: exact whole-word check against this body only.
+            for (title_lc, target_id) in &sep_titles {
+                if target_id == doc_id { continue; }
+                if Self::contains_whole_word(&body_lc, title_lc) {
+                    edges.push((doc_id.clone(), title_lc.clone()));
+                }
+            }
+        }
+
+        // Apply edges (dedup, idempotent: skip if the frame already carries the link tag).
+        let existing: std::collections::HashMap<&str, &Vec<String>> =
+            metas.iter().map(|(d, _, tags, _)| (d.as_str(), tags)).collect();
+        let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        let mut added = 0usize;
+        for (doc_id, concept) in edges {
+            let want = format!("link:{}", concept);
+            if existing.get(doc_id.as_str()).map(|t| t.iter().any(|x| x == &want)).unwrap_or(false) { continue; }
+            if !seen.insert((doc_id.clone(), concept.clone())) { continue; }
+            self.add_tag(&doc_id, &want);
+            added += 1;
+        }
+        added
+    }
+
+    /// Deterministically extract concept entities from a piece of text (NO LLM): capitalised
+    /// multi-word phrases (party names, "Notice of Sale", "Centurion East") + ref/case tokens
+    /// (alphanumeric with a digit, e.g. JHB207). Lowercased, deduped, capped. These are the
+    /// per-section concepts the OKF graph links pieces by.
+    fn extract_entities(text: &str, cap: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let stop = ["The", "This", "That", "These", "Those", "His", "Her", "She", "He", "They",
+            "Their", "After", "Before", "However", "Although", "During", "Between", "And", "But",
+            "For", "Notice", "In", "On", "At", "To", "Of", "It", "I", "We", "A", "An"];
+        let particles = ["of", "the", "for", "and", "&", "to"];
+        let mut push = |e: String, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            let el = e.to_lowercase();
+            if el.len() >= 4 && seen.insert(el.clone()) { out.push(el); }
+        };
+        // Ref/case tokens: alphanumeric containing a digit (JHB207, AST00008, RULE38).
+        for raw in text.split(|c: char| !(c.is_ascii_alphanumeric())) {
+            if raw.len() >= 4 && raw.chars().any(|c| c.is_ascii_digit())
+                && raw.chars().any(|c| c.is_ascii_alphabetic()) {
+                push(raw.to_string(), &mut out, &mut seen);
+                if out.len() >= cap { return out; }
+            }
+        }
+        // Capitalised multi-word phrases (≥2 words, allowing lowercase particles between).
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let mut k = 0;
+        while k < words.len() {
+            let w = words[k].trim_matches(|c: char| !c.is_alphanumeric());
+            let cap_start = w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            if cap_start && !stop.contains(&w) {
+                let start = k;
+                k += 1;
+                while k < words.len() {
+                    let nw = words[k].trim_matches(|c: char| !c.is_alphanumeric());
+                    let is_cap = nw.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    let is_particle = particles.contains(&words[k].to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()));
+                    if (is_cap && !stop.contains(&nw)) || is_particle { k += 1; } else { break; }
+                }
+                // Trim trailing (and leading) lowercase particles — an entity must not begin or
+                // end with "and"/"of"/"the" etc., else "...Pty Ltd and its" and "...Pty Ltd"
+                // extract as DIFFERENT strings and never share an edge.
+                let mut toks: Vec<&str> = words[start..k].iter()
+                    .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                while toks.last().map(|t| particles.contains(&t.to_lowercase().as_str())).unwrap_or(false) {
+                    toks.pop();
+                }
+                while toks.first().map(|t| particles.contains(&t.to_lowercase().as_str())).unwrap_or(false) {
+                    toks.remove(0);
+                }
+                if toks.len() >= 2 {                                  // multi-word entity only
+                    push(toks.join(" "), &mut out, &mut seen);
+                    if out.len() >= cap { return out; }
+                }
+            } else {
+                k += 1;
+            }
+        }
+        out
+    }
+
+    /// Entity extraction for PERSONAL MEMORY frames (Episodic notes from `remember`/`add`).
+    ///
+    /// Personal memories are dominated by SINGLE-word proper nouns — "Alice lives in Berlin",
+    /// "our product is Nimbus", "we keep inventory in Rotterdam". The default `extract_entities`
+    /// only captures MULTI-word entities ("Great Barrier Reef"), so those memories produce ZERO
+    /// concept links and the OKF reachability bridge (ask.rs Engine D-2) can never fire for them.
+    ///
+    /// This variant does everything `extract_entities` does, THEN adds a single-word pass that
+    /// captures distinctive single capitalised proper nouns — but ONLY when they appear
+    /// MID-SENTENCE, never sentence-initial. That positional guard is load-bearing: an earlier
+    /// "any capitalised word" version turned common sentence-openers ("Region…", "Meeting…") into
+    /// spurious concept hubs that over-bridged unrelated memories and measurably REGRESSED recall at
+    /// volume (multi-hop r@5 1.00→0.50). A name a user links on ("in Rotterdam", "hired Carol") sits
+    /// inside a sentence; a common word capitalised only because it opens one does not.
+    ///
+    /// It is used ONLY for personal-memory frames (routed in `build_concept_links` by pillar + the
+    /// absence of an `ingest:` tag); code / enterprise / ingested-doc frames keep the multi-word-only
+    /// extractor UNCHANGED, because the single-word pass would explode on descriptive prose ("Great
+    /// Barrier Reef" → great, barrier, reef, …) and flood a code brain's graph (entity_split_probe).
+    fn extract_entities_memory(text: &str, cap: usize) -> Vec<String> {
+        let mut out = Self::extract_entities(text, cap);
+        if out.len() >= cap { return out; }
+        let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+        // A single capitalised word is a real PROPER NOUN only when it is capitalised MID-SENTENCE —
+        // i.e. the previous token did NOT end a sentence. This is the load-bearing guard: the earlier
+        // "any capitalised word not in a stop list" version created spurious concept hubs from common
+        // words that merely START a sentence ("Region…", "Meeting…", "Enjoy…", "Migrated…"), which
+        // over-bridged unrelated memories and REGRESSED recall at volume (multi-hop r@5 1.00→0.50,
+        // preference 0.83→0.67). A name that a user would link on — "in Rotterdam", "our product is
+        // Nimbus", "hired Carol as the on-call lead" — appears capitalised in the MIDDLE of a sentence;
+        // a common word capitalised only because it opens a sentence never does. No dictionary, purely
+        // positional, deterministic. A memory that IS a bare name ("Nimbus is our product") loses its
+        // leading token, which is the correct trade: sentence-initial is exactly where false hubs live.
+        //
+        // `sentence_boundary` is true at text start and immediately after a token ending in . ! ? :
+        // (or ." etc.). We still drop all-caps acronyms (SLA/AES — the digit/multi-word passes own
+        // those) and require ≥4 chars.
+        let mut sentence_boundary = true;
+        for raw in text.split_whitespace() {
+            if out.len() >= cap { break; }
+            let at_boundary = sentence_boundary;
+            // Advance the boundary flag for the NEXT token: does THIS raw token end a sentence?
+            let ends_sentence = raw.trim_end_matches(|c: char| c == '"' || c == '\'' || c == ')' || c == ']')
+                .ends_with(['.', '!', '?', ':', ';']);
+            sentence_boundary = ends_sentence;
+            if at_boundary { continue; }               // skip sentence-initial tokens entirely
+            let w = raw.trim_matches(|c: char| !c.is_alphanumeric());
+            if w.len() < 4 { continue; }
+            let cap_start = w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            // NAME-shaped: starts uppercase, rest is not all-caps (all-caps = acronym, handled elsewhere).
+            let rest_has_lower = w.chars().skip(1).any(|c| c.is_lowercase());
+            if cap_start && rest_has_lower {
+                let el = w.to_lowercase();
+                if seen.insert(el.clone()) { out.push(el); }
+            }
+        }
+        out
+    }
+
+    /// Whole-word (ASCII word-boundary) case-insensitive substring check. `needle` may contain
+    /// spaces (multi-word title); boundaries are non-alphanumeric/underscore on each side.
+    fn contains_whole_word(haystack_lc: &str, needle_lc: &str) -> bool {
+        if needle_lc.is_empty() { return false; }
+        let hb = haystack_lc.as_bytes();
+        let nb = needle_lc.as_bytes();
+        let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        let mut start = 0;
+        while let Some(pos) = haystack_lc[start..].find(needle_lc) {
+            let i = start + pos;
+            let before_ok = i == 0 || !is_word(hb[i - 1]);
+            let after = i + nb.len();
+            let after_ok = after >= hb.len() || !is_word(hb[after]);
+            if before_ok && after_ok { return true; }
+            start = i + 1;
+        }
+        false
+    }
+
     /// Active frames that carry a `link:<concept>` wikilink edge for `concept`
     /// (lowercased). The recall-time half of the build-graph path (3.9): used by
     /// `ask` to traverse explicit concept links so a query reaches a linked note even
     /// when the bridge word isn't in its body. Returns doc_ids.
+    /// The brain's tag vocabulary: every distinct tag on an active memory and how
+    /// many carry it (count desc, then name asc). `prefix` narrows to a namespace
+    /// like "project:". Taxonomy-agnostic — reports whatever the LLM stored, with
+    /// no hard-coded namespaces. This is the read side that turns write-only tags
+    /// into a browsable vocabulary agents can converge on (the `list_tags` command).
+    /// Distinct from `list_concepts`, which walks the `[[wikilink]]` graph, not tags.
+    pub fn tag_counts(&self, prefix: Option<&str>) -> Vec<(String, usize)> {
+        self.frames.tag_counts(prefix)
+    }
+
+    /// Doc_ids of ACTIVE memories that carry ALL of the given tags (AND semantics).
+    /// Used to pre-filter recall by tag: `ask` with `scope_doc_ids = tag_scope(&["quarter:Q4"])`
+    /// narrows the corpus to that facet BEFORE scoring, so a vague query can't bleed across
+    /// memories that merely share a `[[wikilink]]` concept. Empty `tags` → None (no filter).
+    /// A tag matching zero memories yields an empty set (recall returns nothing — honest, the
+    /// caller can report "no memories tagged X"). Case-sensitive, exact tag match.
+    pub fn tag_scope(&self, tags: &[String]) -> Option<std::collections::HashSet<String>> {
+        if tags.is_empty() { return None; }
+        let mut acc: Option<std::collections::HashSet<String>> = None;
+        for tag in tags {
+            let ids: std::collections::HashSet<String> =
+                self.frames.doc_ids_by_tag(tag).into_iter().map(|s| s.to_string()).collect();
+            acc = Some(match acc {
+                None => ids,
+                Some(prev) => prev.intersection(&ids).cloned().collect(),
+            });
+        }
+        acc
+    }
+
     pub fn frames_linking_concept(&self, concept: &str) -> Vec<String> {
-        let want = format!("link:{}", concept.to_lowercase());
+        let cl = concept.to_lowercase();
+        let want = format!("link:{}", cl);
+        // STEM-AWARE bridge: a query keyword and a stored concept that share a Porter2 stem are
+        // the same concept ("ingestion" query ↔ `link:ingest` edge, "deployment" ↔ "deploy").
+        // Without this, exact-token matching silently missed every morphological variant — a
+        // real "wrong answer" gap for the OKF wiki graph. Deterministic (no LLM); the stem is
+        // the same one the lexical word index uses. Fast path: exact match first.
+        let stemmer = rust_stemmers::Stemmer::create(rust_stemmers::Algorithm::English);
+        let cl_stem = stemmer.stem(&cl).to_string();
         // INCLUDING pending: freshly-added frames live in the pre-flush buffer until
         // save, and recall must see them (a memory you just added is queryable now).
         self.frames.get_all_frames_with_pending().iter()
             .filter(|m| m.status == crate::frames::FrameStatus::Active)
-            .filter(|m| m.tags.iter().any(|t| t == &want))
+            .filter(|m| m.tags.iter().any(|t| {
+                if t == &want { return true; }                       // exact (cheap, common)
+                if let Some(c) = t.strip_prefix("link:") {           // stem-equality fallback
+                    return stemmer.stem(c).as_ref() == cl_stem.as_str();
+                }
+                false
+            }))
             .map(|m| m.doc_id.clone())
             .collect()
     }
@@ -2842,6 +3562,14 @@ impl SaidFile {
     }
 
     /// Get stats — includes frame counts, index presence, and brain state.
+    /// Number of documents currently in the SCA corpus index. On a freshly-opened
+    /// brain this is the persisted corpus size — non-zero iff the incremental append
+    /// path can fire (see the #13 fix in `open`: corpus_ids is reconstructed from the
+    /// persisted SCA index so `init`/append re-encodes only NEW docs, not the whole brain).
+    pub fn corpus_id_count(&self) -> usize {
+        self.corpus_ids.len()
+    }
+
     pub fn stats(&self) -> SaidFileStats {
         let frame_stats = self.frames.stats();
         let brain_stats = self.engine.brain.stats();

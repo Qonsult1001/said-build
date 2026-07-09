@@ -1,0 +1,30 @@
+{
+  "IE": {
+    "n": 3,
+    "recall_at_1": 1,
+    "recall_at_5": 1,
+    "recall_at_10": 1
+  },
+  "MS": {
+    "n": 2,
+    "recall_at_1": 1,
+    "recall_at_5": 1,
+    "recall_at_10": 1
+  },
+  "TR": {
+    "n": 2,
+    "recall_at_1": 1,
+    "recall_at_5": 1,
+    "recall_at_10": 1
+  },
+  "KU": {
+    "n": 2,
+    "recall_at_1": 0.5,
+    "recall_at_5": 0.5,
+    "recall_at_10": 1
+  },
+  "ABS": {
+    "n": 3,
+    "abstention_accuracy": 0
+  }
+}

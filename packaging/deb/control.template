@@ -1,0 +1,12 @@
+Package: said
+Version: __VERSION__
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: said <noreply@said.dev>
+Homepage: https://github.com/Qonsult1001/said-build
+Description: said — portable single-file brain (personal memory)
+ said is a portable personal memory in a single .said file. Store notes, facts,
+ decisions, and preferences, and recall them by meaning in plain English — on
+ the terminal (said) or through an AI agent over MCP (said-mcp). Offline, no
+ cloud, no LLM inside; the encoder is embedded in the binary.

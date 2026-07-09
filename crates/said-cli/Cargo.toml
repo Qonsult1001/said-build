@@ -1,6 +1,6 @@
 [package]
 name = "said-cli"
-version = "0.11.1"
+version = "0.11.3"
 edition = "2021"
 description = "CLI for .said portable brain files — add, query, get in one binary"
 
@@ -11,12 +11,14 @@ path = "src/main.rs"
 [dependencies]
 sca-core = { path = "../sca-core", features = ["static-embed"] }
 said-vault = { path = "../said-vault" }
+said-prompts = { path = "../said-prompts" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 blake3 = "1.5"
 pathdiff = "0.2.3"
 said-forge = { path = "../said-forge", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 
 # Cross-platform config dir lookup (used on non-Windows in resolve.rs).
 [target.'cfg(not(target_os = "windows"))'.dependencies]
@@ -34,6 +36,9 @@ code = ["sca-core/code"]
 lsp = ["sca-core/lsp"]
 docs = ["sca-core/docs"]
 ocr = ["sca-core/ocr"]
+# enterprise — compliance admin actions (legal-hold, retention-sweep, tamper-evident audit) for
+# regulated/production deployments. Gated out of the free brain + dev tiers; shipped in `full` only.
+enterprise = []
 forge = ["dep:said-forge", "dep:tokio"]
 # XLSX/XLSM ingest in forge sync (calamine-backed).
 forge-xlsx = ["forge", "said-forge/forge-xlsx"]
@@ -59,6 +64,11 @@ release = ["code", "docs", "ocr", "whisper", "embed-model", "lsp", "forge", "for
 #   full         everything readable: code + docs (PDF/DOCX) + OCR + LSP
 # ---------------------------------------------------------------------------
 brain = ["embed-model"]
-coding = ["embed-model", "code"]
-coding-plus = ["embed-model", "code", "lsp"]
-full = ["embed-model", "code", "docs", "ocr", "lsp"]
+# `simd` pulls in simsimd's runtime-dispatched (AVX2/AVX-512 auto-detected) Hamming core —
+# the documented 3-4× speedup on the top-50 retrieval path (docs/said-structure/09-cargo-
+# features.md). Enabled by default in the coding builds; the scalar count_ones() fallback
+# remains for targets without it.
+simd = ["sca-core/simd"]
+coding = ["embed-model", "code", "simd"]
+coding-plus = ["embed-model", "code", "lsp", "simd"]
+full = ["embed-model", "code", "docs", "ocr", "lsp", "simd", "enterprise"]

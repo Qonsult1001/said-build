@@ -84,10 +84,101 @@ dropped from 277 memories to 2. Must narrow the junk list to the doc-sanctioned 
 (node_modules, target, .venv, .git-style + true build-artifact dirs) and NOT generic names
 like `out`/`packages` that frequently hold real content.
 
-## Fix directions (NOT yet applied — for a focused session)
+## Fixes applied (TDD, one structure per commit, recall gate green after each)
 
-1. Narrow `is_junk_dir` to safe entries only (fixes the _deploy regression).
-2. Word interning: store each word once in a `Vec<String>` vocab, key all per-doc
-   sets/maps + the inverted index on `u32`. ~80% lexical-memory cut (2.3GB→~0.5GB).
-   Touches ~103 String-keyed sites in crystalline.rs (prefilter + BM25 scoring + phonetic).
-   Both build sites (add_docs_quantized + rebuild_word_index_from_texts) must match exactly.
+1. **`is_junk_dir` narrowed** (89c7333) — removed generic names (`out`/`bin`/`obj`/`build`/
+   `dist`/`packages`/`coverage`) that hold real content; kept only always-dependency/cache
+   dirs (`node_modules`/`vendor`/`target`/tool-caches). Fixed the `_deploy/out/` regression
+   (277 memories restored). `.gitignore` still honored for everything else.
+
+2. **Word interning** (fe5e08b, 6555e83, 8448c5b, ee07095) — DONE. A single shared vocab
+   (`word_vocab: Vec<String>` + `word_to_id: HashMap<String,u32>`, `intern_word()`) now backs
+   all four word-keyed lexical structures, each migrated to `u32` keys/values one commit at a
+   time with the recall gate (`test_lexical_interning` + `scripts/regression-check.sh`) green
+   each step:
+   - `phonetic_index_fast` (soundex→word-ids), `word_inverted_fast` (word-id→docset),
+     `doc_word_sets_fast` (per-doc word-ids), `doc_word_tf_fast` (word-id→tf).
+   - `vocabulary_fast` removed entirely (its words live in `word_to_id`).
+   - Each unique word stored ONCE instead of ~9× as a String. Readers resolve query words
+     via `word_to_id` / new `doc_has_word()` + `doc_words_joined()` helpers.
+   - **Subtle bug fixed:** the clear sites (`clear`/`clear_word_index`/`rebuild_*`) must ALSO
+     clear `word_vocab`+`word_to_id`, else recompute-on-growth re-interns words into an
+     ever-growing vocab.
+   - Verified: `lexical_word_index_bytes` (word-keyed only) 1,865 B/doc on a realistic
+     vocab-reuse corpus; recall + lexical + sym + wikilinks + multi-hop all preserved.
+
+3. **Corpus-text caches streamed out** (the second OOM lever, after interning) — applied the
+   `stream_index`/SPIMI/mmap principle: *text is stored ONCE on disk in the mmap'd FrameStore
+   (`read_frame_text`); everything else is derived on demand, never a resident full-corpus
+   String copy.* Four such copies were built at init; each removed, recall green after each
+   (`scripts/regression-check.sh` 15/15). Measured on `G:/development/Wonga/Amortization`
+   (918 text-heavy SQL docs):
+
+   | step | what | peak |
+   |------|------|------|
+   | — | baseline (after interning) | 1083 MB |
+   | a | drop `doc_texts_normalized` (Option A, 47aa7ed) — entity match reads `doc_texts_fast` | 920 MB |
+   | b | `corpus_texts_lower` built LAZILY on first query from frames (5a17402) | 832 MB |
+   | c | drop `all_doc_words` `Vec<Vec<String>>` — tokenize per-doc on demand (636866d) | 729 MB |
+   | d | stop caching `doc_texts_fast` — reconstruct from interned word set (c5a609e) | 531 MB |
+
+   - **(a)** `doc_texts_normalized` (full normalized corpus, ~159MB) gated behind
+     `SAID_KEEP_NORMALIZED`; `entity_match_score` now reads `CrystallineCore::doc_normalized_text`.
+   - **(b)** `corpus_texts_lower` (full lowercased corpus, 159MB) is no longer built in
+     `build_index`. `ensure_corpus_cached()` builds it lazily on the first query that needs the
+     grep re-rank, reading raw text from the mmap'd frames. (`corpus_texts` raw was already
+     empty-placeholder + read-on-demand.)
+   - **(c)** `add_docs_quantized` now takes `doc_texts: &[String]` (borrowed) and calls
+     `simple_tokenize` per-doc INSIDE the word-index loop — one doc's words, then dropped.
+     Phase A keeps only the `doc_freq` map; gammas tokenize per-doc transiently. The ~237MB
+     `Vec<Vec<String>>` of every word is gone.
+   - **(d)** `doc_texts_fast` (per-doc normalized text, ~150MB) is REDUNDANT with
+     `doc_word_sets_fast` (interned u32 ids). Build sites push empty strings; phrase-match
+     readers already had a `doc_words_joined(idx)` fallback; added `doc_normalized_text(idx)`
+     for the one reader that lacked it.
+
+   After (a)–(d): tracked lexical+saidfile caches = **~25MB** (was 184MB). The remaining
+   ~500MB peak is the **FrameStore** — every frame's content held in RAM until `save()`
+   (read-phase floor measured ~190–287MB) plus compact/save transients. That is the
+   architectural floor and a SEPARATE concern from the corpus-text caches (it is the same
+   data the `.said` file holds; the lever is mmap-streaming the FrameStore itself).
+   Smaller `SAID_TEXT_CHUNK` does NOT lower the peak (chunk=128 → 553MB vs chunk=512 → 531MB):
+   the encode transient is already bounded; the floor is the FrameStore, not the chunk.
+
+   Diagnostics (gated by `SAID_MEM_REPORT=1`): `lexical_mem_report()`,
+   `saidfile_mem_report()`, `frame_store_mem_report()`, `TrigramIndex::approx_bytes()`,
+   phase-A `[mem]` line. Measured the FrameStore floor on Amortization:
+   `frame_store_mem: pending=159MB (919 frames) blocks=0MB` — `pending` holds the WHOLE
+   corpus' (RAW, uncompressed — `put` stores `Plain`, compresses lazily at `compact`) content
+   until `save()`. This is the dominant floor once the corpus-text caches are gone.
+
+4. **Constant-memory ingest spill** (the FrameStore floor) — SPIMI / streaming-index pattern.
+   `SaidFile::set_stream_spill_budget(bytes)`: during phase-1 ingest, when
+   `frames.pending_bytes()` exceeds the budget, spill those frames to a `<path>.spill` scratch
+   file (append bytes, set each `meta.offset` to its absolute file offset via `flush_pending`,
+   move pending→committed, re-mmap `self.data` to the spill file so committed frames page from
+   the OS cache, not process RAM). At `save()` the spill bytes are copied into the real `.said`
+   and the scratch removed. CLI sets a default budget before the ingest loop
+   (`SAID_SPILL_BUDGET` bytes; `0` disables). PROVEN: spill ON keeps all frames
+   (`Memories added` identical, recall matches spill-OFF — no documents dropped); test
+   `test_stream_spill` (pending bounded ≤2×budget + round-trip); 15/15 regression green.
+
+   **Measured cost/benefit (this is the important nuance):** the spill bounds `pending` but
+   has real overhead (mmap of the spill file + the save-time `compact_block_dict` re-pack page
+   the data back in). On Amortization (918 frames):
+
+   | config | pending | peak RSS |
+   |--------|---------|----------|
+   | spill off (budget=0) | 159 MB | 533 MB |
+   | budget=256MB (no spill) | 159 MB | 554 MB |
+   | budget=32MB (spills) | 28 MB | **657 MB** ← spill RAISED the peak |
+
+   On small/medium repos the peak is the **encode + save-repack transient, NOT `pending`** —
+   so spilling there hurts. The spill only pays off on pathological corpora (full Wonga, 35K
+   frames, where `pending` heads to GBs and is the actual OOM). Hence the CLI default is a
+   HIGH 512MB budget: normal repos never spill (zero overhead), only the huge case engages.
+   Lower `SAID_SPILL_BUDGET` on memory-tight hosts.
+
+Note: the passage-count "explosion" in the SCA encode (char-chunked 512/256 → ~700 passages
+on a 400KB SQL chunk) is EXPECTED and tuned (see memory `said-index-memory-oom`) — NOT a bug,
+and a SEPARATE concern from the lexical/corpus-text caches above.

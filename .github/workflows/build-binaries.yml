@@ -78,6 +78,33 @@ jobs:
             cp "target/release/${{ matrix.target.orch }}" dist/
           fi
           ls -la dist
+
+      # ── Native installers (per OS). GitHub builds the packages for us on tag push; no local
+      #    packaging toolchains needed. Unsigned for now — signing/notarisation is the CIRCLE_PLAN
+      #    distribution step (needs Apple Developer ID / Authenticode certs). Packages land in dist/
+      #    alongside the raw binaries and are uploaded as part of the same artifact.
+      - name: Package — Linux .deb
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          VER="$(./dist/said --version | awk '{print $NF}')"
+          bash packaging/build-deb.sh "$VER" dist/said dist/said-mcp dist
+      - name: Package — macOS .pkg
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VER="$(./dist/said --version | awk '{print $NF}')"
+          bash packaging/build-macos-pkg.sh "$VER" dist/said dist/said-mcp dist
+      - name: Package — Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = (& .\dist\said.exe --version).Split(' ')[-1]
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$ver" "/DBinDir=$(Resolve-Path dist)" `
+            "/O$(Resolve-Path dist)" packaging\windows\said.iss
+
       - uses: actions/upload-artifact@v5
         with:
           name: said-${{ matrix.bundle }}-${{ matrix.target.name }}
@@ -90,8 +117,21 @@ jobs:
     runs-on: ubuntu-22.04
     permissions: { contents: write }
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with: { path: artifacts }
+      # Zip each bundle-target (raw binaries + its native installer) …
       - run: cd artifacts && for d in */; do (cd "$d" && zip -r "../${d%/}.zip" .); done
+      # … and lift the native installers OUT to the release root as first-class downloads,
+      # so a user can grab `said_<ver>_amd64.deb` / `said-setup-*.exe` / `said-*.pkg` directly.
+      - name: Collect native installers
+        run: |
+          mkdir -p release
+          cp artifacts/*.zip release/ 2>/dev/null || true
+          find artifacts -type f \( -name '*.deb' -o -name '*.pkg' -o -name 'said-setup-*.exe' \) \
+            -exec cp {} release/ \;
+          # the one-line install scripts (curl … | sh  /  irm … | iex resolve to these)
+          cp packaging/install.sh packaging/install.ps1 release/
+          ls -la release
       - uses: softprops/action-gh-release@v2
-        with: { files: artifacts/*.zip }
+        with: { files: release/* }

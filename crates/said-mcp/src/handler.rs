@@ -41,6 +41,26 @@ pub struct SaidServerHandler {
 /// contains `head` followed by `tail` separated only by ASCII whitespace
 /// (spaces, tabs, newlines), optionally with `OR ALTER` between them.
 /// `haystack` is expected uppercase. Catches dialect quirks like
+/// Resolve candidate `said` CLI paths for tools that shell out (init / ingest / sync).
+/// PREFER siblings shipped next to this MCP exe (they match this build) under every name we
+/// ship the coding CLI as, BEFORE a bare `said` on PATH — which can be an older/feature-stripped
+/// build lacking subcommands like `init` (the live failure: "unrecognized subcommand 'init'").
+/// `SAID_CLI` env overrides everything.
+fn resolve_said_cli() -> Vec<std::ffi::OsString> {
+    let exe = |n: &str| if cfg!(windows) { format!("{n}.exe") } else { n.to_string() };
+    let mut paths: Vec<std::ffi::OsString> = Vec::new();
+    if let Ok(p) = std::env::var("SAID_CLI") {
+        if !p.trim().is_empty() { paths.push(p.into()); }
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        for n in ["said-coding", "said"] {
+            paths.push(dir.join(exe(&n)).into_os_string());
+        }
+    }
+    paths.push(std::ffi::OsString::from("said")); // last resort: PATH
+    paths
+}
+
 /// `CREATE   PROCEDURE` (multi-space), `CREATE\nFUNCTION` (newline-separated),
 /// and `CREATE OR ALTER PROCEDURE` in a single check.
 fn contains_sql_keyword_pair(haystack: &str, head: &str, tail: &str) -> bool {
@@ -446,9 +466,25 @@ impl SaidServerHandler {
                 "SAID-LAM-private/said-lam-static",
             ] {
                 if Path::new(p).exists() {
-                    let _ = brain.load_encoder(p);
-                    break;
+                    if brain.load_encoder(p).is_ok() {
+                        return;
+                    }
                 }
+            }
+            // NO encoder loaded — SCA semantic ranking is DEAD (every fingerprint scores 0.000), so
+            // `ask`/`search` fall back to symbol+grep only and `recall_fix` can never clear its score
+            // floor. This is almost always a BUILD error: the server was compiled without `embed-model`
+            // (e.g. a plain `cargo build -p said-mcp` uses default features, which omit it). Warn loudly
+            // ONCE so it can't silently degrade — rebuild with a bundle that bakes the encoder in
+            // (`--features coding`/`full`). Measured: this exact misbuild made every MCP recall_fix
+            // return "No known fix" while the CLI (built with `coding`) recalled the same fix at 0.82.
+            static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "said-mcp WARNING: no SCA encoder available — semantic search + recall_fix are \
+                     DISABLED (symbol+grep only). Rebuild said-mcp with `--features coding` (or `full`) \
+                     so the embed-model is baked in."
+                );
             }
         }
 
@@ -505,40 +541,75 @@ impl ServerHandler for SaidServerHandler {
         let tool = SaidTools::try_from(params).map_err(CallToolError::new)?;
 
         match tool {
+            // BRAIN (free) keeps only the memory verbs mirroring the CLI. All non-memory / paid-tier
+            // tools are hidden from the brain tool list, so their enum variants exist ONLY in `code`
+            // builds — every dispatch arm for a hidden tool is gated `#[cfg(feature = "code")]` to match.
+            #[cfg(feature = "code")]
             SaidTools::SearchTool(t) => self.handle_search(t),
             SaidTools::AskTool(t) => self.handle_ask(t),
             SaidTools::GetTool(t) => self.handle_get(t),
             SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
+            SaidTools::ListTagsTool(t) => self.handle_list_tags(t),
+            #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
             SaidTools::StatusTool(_) => self.handle_status(),
+            #[cfg(feature = "code")]
             SaidTools::SymTool(t) => self.handle_sym(t),
             SaidTools::HistoryTool(t) => self.handle_history(t),
             SaidTools::CheckoutTool(t) => self.handle_checkout(t),
+            #[cfg(feature = "code")]
             SaidTools::EditTool(t) => self.handle_edit(t),
+            #[cfg(feature = "code")]
             SaidTools::EditBatchTool(t) => self.handle_edit_batch(t),
             SaidTools::DeleteTool(t) => self.handle_delete(t),
+            #[cfg(feature = "code")]
             SaidTools::DiscoverTool(_) => self.handle_discover(),
             SaidTools::OpenTool(t) => self.handle_open(t),
             SaidTools::CreateTool(t) => self.handle_create(t),
+            #[cfg(feature = "code")]
             SaidTools::InitTool(t) => self.handle_init(t),
+            #[cfg(feature = "code")]
+            SaidTools::HarvestBlueprintsTool(t) => self.handle_harvest_blueprints(t),
+            #[cfg(feature = "code")]
+            SaidTools::HarvestScanTool(t) => self.handle_harvest_scan(t),
+            #[cfg(feature = "code")]
             SaidTools::SyncTool(t) => self.handle_sync(t),
+            #[cfg(feature = "code")]
             SaidTools::JournalTool(t) => self.handle_journal(t),
+            #[cfg(feature = "code")]
             SaidTools::OverviewTool(t) => self.handle_overview(t),
+            #[cfg(feature = "code")]
             SaidTools::SnapshotTool(t) => self.handle_snapshot(t),
+            #[cfg(feature = "code")]
             SaidTools::SandboxTool(t) => self.handle_sandbox(t),
+            #[cfg(feature = "code")]
             SaidTools::CleanTool(t) => self.handle_clean(t),
+            #[cfg(feature = "code")]
             SaidTools::SessionEndTool(t) => self.handle_session_end(t),
+            #[cfg(feature = "code")]
             SaidTools::ToolCompletionTool(t) => self.handle_tool_completion(t),
+            #[cfg(feature = "code")]
             SaidTools::SalienceTool(t) => self.handle_salience(t),
+            #[cfg(feature = "code")]
             SaidTools::DreamTool(t) => self.handle_dream(t),
             SaidTools::AdminTool(t) => self.handle_admin(t),
+            #[cfg(feature = "code")]
             SaidTools::LspDefTool(t) => self.handle_lsp_def(t),
+            #[cfg(feature = "code")]
             SaidTools::LspRefsTool(t) => self.handle_lsp_refs(t),
+            #[cfg(feature = "code")]
             SaidTools::LspHoverTool(t) => self.handle_lsp_hover(t),
+            #[cfg(feature = "code")]
             SaidTools::LspSymbolsTool(t) => self.handle_lsp_symbols(t),
+            #[cfg(feature = "code")]
             SaidTools::RecallFixTool(t) => self.handle_recall_fix(t),
+            #[cfg(feature = "code")]
             SaidTools::LearnFixTool(t) => self.handle_learn_fix(t),
+            #[cfg(feature = "code")]
+            SaidTools::RecallBlueprintTool(t) => self.handle_recall_blueprint(t),
+            #[cfg(feature = "code")]
+            SaidTools::LearnBlueprintTool(t) => self.handle_learn_blueprint(t),
             #[cfg(feature = "forge")]
             SaidTools::ForgeListTool(t) => self.handle_forge_list(t),
             #[cfg(feature = "forge")]
@@ -607,6 +678,22 @@ impl ServerHandler for SaidServerHandler {
                     icons: vec![],
                     meta: None,
                 },
+                Prompt {
+                    name: "fix-template".to_string(),
+                    title: Some("Coding-fix iteration template".to_string()),
+                    description: Some(
+                        "The 10-section coding-iteration note template (Title / Current \
+                         State / Task / Files and Functions / Workflow / Errors and \
+                         Corrections / Codebase Documentation / Learnings / Key Results / \
+                         Worklog). Fill it in after a green gate and pass it to `learn_fix` \
+                         â€” the SAME structured story the orchestrator stores, so the saved \
+                         memory recalls well (not a one-line label)."
+                            .to_string(),
+                    ),
+                    arguments: vec![],
+                    icons: vec![],
+                    meta: None,
+                },
             ],
         })
     }
@@ -665,6 +752,22 @@ impl ServerHandler for SaidServerHandler {
                     }],
                 })
             }
+            "fix-template" => Ok(GetPromptResult {
+                description: Some(
+                    "The 10-section coding-iteration note template to fill after a green \
+                     gate and pass to learn_fix (same structure the orchestrator stores)."
+                        .to_string(),
+                ),
+                meta: None,
+                messages: vec![PromptMessage {
+                    role: Role::Assistant,
+                    content: ContentBlock::TextContent(TextContent::new(
+                        said_prompts::coding::ITERATION_TEMPLATE.to_string(),
+                        None,
+                        None,
+                    )),
+                }],
+            }),
             other => Err(RpcError::invalid_params()
                 .with_message(format!("Unknown prompt: '{}'", other))),
         }
@@ -753,9 +856,17 @@ impl SaidServerHandler {
         let top = t.top.map(|v| v as usize).unwrap_or(10);
         let deep = t.deep.unwrap_or(false);
 
-        // Tag-scope detection: same logic as CLI cmd_ask. Let a query like
-        // "version 4 ..." narrow the candidate pool to frames tagged version:4.
-        let scope_doc_ids: Option<std::collections::HashSet<String>> =
+        // Tag scoping. TWO sources, intersected:
+        //   1. Explicit `tags` arg — the caller asked to scope recall to a facet (e.g.
+        //      quarter:Q4). This is the fix for concept-link tie bleed: on a vague query,
+        //      many memories sharing a [[wikilink]] all tie, so narrow to the exact tag
+        //      BEFORE scoring. Empty result if the tag matches nothing (honest — report it).
+        //   2. Auto-detected scope from the query text ("version 4 …" → version:4), the
+        //      existing CLI-parity behavior.
+        // An explicit tag filter that matches ZERO memories must NOT silently fall back to
+        // unscoped (that would defeat the filter); it returns an empty scope so recall is empty.
+        let explicit_scope = t.tags.as_ref().map(|tags| brain.tag_scope(tags).unwrap_or_default());
+        let auto_scope: Option<std::collections::HashSet<String>> =
             if let Some((ns, val)) = sca_core::recall::detect_scope_tag(&t.query) {
                 let tag = format!("{}:{}", ns, val);
                 let active = brain.frames.active_doc_ids();
@@ -769,6 +880,11 @@ impl SaidServerHandler {
                     .collect();
                 if !matching.is_empty() { Some(matching) } else { None }
             } else { None };
+        let scope_doc_ids: Option<std::collections::HashSet<String>> = match (explicit_scope, auto_scope) {
+            (Some(e), Some(a)) => Some(e.intersection(&a).cloned().collect()),
+            (Some(e), None) => Some(e),   // explicit wins even if empty (no silent fallback)
+            (None, a) => a,
+        };
 
         // THE SHARED CALL â€” same function the CLI uses. CLI and MCP return
         // byte-identical result sets (modulo formatting) for any query.
@@ -828,6 +944,20 @@ impl SaidServerHandler {
         // Return JSON so the caller's LLM can parse and reuse concepts programmatically.
         let arr: Vec<serde_json::Value> = concepts.iter()
             .map(|(c, n)| serde_json::json!({ "concept": c, "memories": n }))
+            .collect();
+        let body = serde_json::to_string_pretty(&arr)
+            .unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+    }
+
+    fn handle_list_tags(&self, t: ListTagsTool) -> Result<CallToolResult, CallToolError> {
+        let brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let tags = brain.tag_counts(t.prefix.as_deref());
+        // JSON so the caller's LLM can parse the vocabulary and REUSE existing tags.
+        let arr: Vec<serde_json::Value> = tags.iter()
+            .map(|(tag, n)| serde_json::json!({ "tag": tag, "memories": n }))
             .collect();
         let body = serde_json::to_string_pretty(&arr)
             .unwrap_or_else(|_| "[]".to_string());
@@ -968,7 +1098,9 @@ impl SaidServerHandler {
         // reconsolidation tagging. Lexical correction markers + semantic
         // contradiction are detected automatically; no new tool parameter
         // needed. The salience.tags + surprise tags flow through into
-        // FrameMeta.tags alongside any caller-provided extras.
+        // FrameMeta.tags alongside any caller-provided extras. WRITE-TIME temporal
+        // grounding ("last year"→2025) now happens INSIDE remember_with_salience —
+        // the single memory-write chokepoint — so it can't be bypassed.
         let (frame_id, scored) = brain.remember_with_salience(
             t.id.as_deref(),
             &t.content,
@@ -978,6 +1110,13 @@ impl SaidServerHandler {
         );
 
         let _ = brain.build_index();
+        // OKF concept graph for memory brains (default-on, opt out with SAID_OKF_LINKS=0) — mirrors
+        // the CLI `add` path so an MCP-`remember`-built brain gets the wiki-link reachability the ask
+        // Engine-D bridge needs. Routes personal-memory frames to the single-word-aware extractor;
+        // code/doc frames are untouched. Idempotent, so re-running per remember only adds new edges.
+        if std::env::var("SAID_OKF_LINKS").map(|v| v != "0").unwrap_or(true) {
+            let _ = brain.build_concept_links();
+        }
         brain.save().map_err(|e| CallToolError::from_message(e))?;
         let frame_count = brain.frames.active_count();
         // Pull tags off the just-written frame so the response can surface
@@ -1384,23 +1523,31 @@ impl SaidServerHandler {
             CallToolError::from_message(format!("brain lock: {}", e))
         })?;
         let min = t.min_score.unwrap_or(0.45);
-        match sca_core::ask::recall_coding_fix(&mut brain, &t.problem, min) {
-            Some(hit) => {
-                let label = brain.frames.get_meta(&hit.doc_id)
-                    .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned())
-                    .unwrap_or_else(|| "-".into());
-                let body = format!(
-                    "Fix ({:.2}) {}  provenance={}\n\n{}\n\n## Verified change-set\n{}",
-                    hit.score, hit.doc_id, label, hit.note, hit.edits_json,
-                );
-                Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
-            }
-            None => Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+        // TOP-K (recall@k contract, doc: "measured recall@5 = 100% at 1000 records"). Returning ONLY
+        // rank-1 meant that when a semantically-adjacent fix out-scored the right one, the caller could
+        // not page down -> the right learning was unreachable via MCP. We return the top-k candidates so
+        // the agent picks the one whose TASK/change-set fits — the same "several returned, you choose"
+        // contract recall_blueprint already uses. Default k=5.
+        let k = t.top_k.unwrap_or(5).max(1) as usize;
+        let hits = sca_core::ask::recall_coding_fixes(&mut brain, &t.problem, k, min);
+        if hits.is_empty() {
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
                 "No known fix above score {:.2} for \"{}\" — drive your own LLM, then store \
                  the verified result with learn_fix.",
                 min, t.problem,
-            ))])),
+            ))]));
         }
+        let mut body = format!("{} candidate fix(es) for \"{}\" (highest first — pick the one whose TASK fits):\n", hits.len(), t.problem);
+        for (i, hit) in hits.iter().enumerate() {
+            let label = brain.frames.get_meta(&hit.doc_id)
+                .and_then(|m| m.tags.iter().find(|t| t.starts_with("pr:")).cloned())
+                .unwrap_or_else(|| "-".into());
+            body.push_str(&format!(
+                "\n#{} Fix ({:.2}) {}  provenance={}\n{}\n## Verified change-set\n{}\n",
+                i + 1, hit.score, hit.doc_id, label, hit.note, hit.edits_json,
+            ));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
     }
 
     fn handle_learn_fix(&self, t: LearnFixTool) -> Result<CallToolResult, CallToolError> {
@@ -1432,6 +1579,125 @@ impl SaidServerHandler {
              recall_fix / orchestrator runs can reuse it.",
             doc_id, t.label.as_deref().unwrap_or("-"),
         ))]))
+    }
+
+    fn handle_recall_blueprint(&self, t: RecallBlueprintTool) -> Result<CallToolResult, CallToolError> {
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let min = t.min_score.unwrap_or(0.45);
+        // TOP-K, let the LLM decide (the proven recall_fix pattern — its hook injects top-3 and lets the
+        // model PICK). Fingerprint ranking on short skeletons can put the right shape at rank 2-3, not
+        // always #1; returning several candidates and letting the model choose the one that fits the task
+        // is FAR more robust than chasing rank@1. Default k=3 (== HOOK_FIX_TOPK).
+        let k = (t.top_k.unwrap_or(3).max(1)) as usize;
+        let hits = sca_core::ask::recall_blueprints(&mut brain, &t.shape, k, min);
+        if hits.is_empty() {
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                "No known blueprint above score {:.2} for \"{}\" — derive the structure, then \
+                 store it with learn_blueprint.", min, t.shape,
+            ))]));
+        }
+        let mut body = String::new();
+        if hits.len() > 1 {
+            body.push_str(&format!(
+                "{} candidate blueprints for \"{}\", most relevant first. PICK the one whose sections \
+                 match what you're building, render it in the active language, and write only the \
+                 entity-specific slots:\n", hits.len(), t.shape));
+        } else {
+            body.push_str("Render these sections in the active language; write only the entity-specific slots.\n");
+        }
+        for (i, hit) in hits.iter().enumerate() {
+            if hits.len() > 1 { body.push_str(&format!("\n--- candidate {} ---\n", i + 1)); }
+            body.push_str(&format!("Blueprint ({:.2}) {}  shape={}\n## Sections\n{}\n",
+                hit.score, hit.doc_id, hit.shape, hit.sections_json));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+    }
+
+    fn handle_learn_blueprint(&self, t: LearnBlueprintTool) -> Result<CallToolResult, CallToolError> {
+        let sections = t.sections.trim_start_matches('\u{feff}').trim();
+        let verified = t.verified.unwrap_or(false);
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        // The ONE shared writer: verified (build green) -> auto-update (supersede if changed); else
+        // keep-first (no-op if the shape exists). Byte-identical to `said learn-blueprint`.
+        let doc_id = sca_core::ask::learn_blueprint(
+            &mut brain, &t.shape, sections, t.lang.as_deref(), t.label.as_deref(), verified);
+        // keep-first feedback: an unverified learn is a no-op when the shape exists (stored body won't
+        // contain the just-passed sections).
+        let kept_first = !verified && brain.read(&doc_id)
+            .map(|b| !b.contains(sections)).unwrap_or(false);
+        brain.save().map_err(CallToolError::from_message)?;
+        let action = if verified { "auto-updated (verified build -> new standard)" } else if kept_first { "kept-first (no-op; original stands)" } else { "learned" };
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "Blueprint {} {}. Stored in the Procedural pillar; future recall_blueprint reuses it.",
+            doc_id, action,
+        ))]))
+    }
+
+    fn handle_harvest_blueprints(&self, t: HarvestBlueprintsTool) -> Result<CallToolResult, CallToolError> {
+        // Shell to `said harvest` (same pattern as init/ingest): the CLI owns the gitignore-aware walk +
+        // the harvest engine, and writing via a subprocess avoids holding our brain lock during the scan.
+        let dir = t.dir.unwrap_or_else(|| ".".to_string());
+        let said_path = self.current_path();
+        let abs_brain = std::fs::canonicalize(&said_path)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&said_path)).to_string_lossy().to_string();
+        let args = vec!["harvest".to_string(), dir, "--path".to_string(), abs_brain];
+        let brain_dir = self.brain_dir();
+        for exe in &resolve_said_cli() {
+            if let Ok(r) = std::process::Command::new(exe).args(&args).current_dir(&brain_dir).output() {
+                let out = String::from_utf8_lossy(&r.stdout).to_string();
+                let err = String::from_utf8_lossy(&r.stderr).to_string();
+                if r.status.success() {
+                    // reload mmap so subsequent recall_blueprint sees the harvested blueprints.
+                    if let Ok(mut brain) = self.brain.lock() {
+                        if let Ok(fresh) = sca_core::said_file::SaidFile::open(&said_path) { *brain = fresh; }
+                    }
+                    self.mark_populated();
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(
+                        if out.trim().is_empty() { "Harvest complete.".to_string() } else { out })]));
+                }
+                // non-zero exit: surface stderr and stop (don't try the next candidate on a real failure).
+                if !err.trim().is_empty() {
+                    return Err(CallToolError::from_message(format!("harvest failed: {}", err.trim())));
+                }
+            }
+        }
+        Err(CallToolError::from_message("harvest: could not run the said CLI (set SAID_CLI?)".to_string()))
+    }
+
+    fn handle_harvest_scan(&self, t: HarvestScanTool) -> Result<CallToolResult, CallToolError> {
+        // STEP 1 of agent-in-the-loop harvest: shell to `said harvest-scan --json` to get the clustered
+        // structures, then return them to the agent WITH the naming instruction. We do NOT learn anything
+        // here -- the agent names NL intent phases and calls learn_blueprint. (Read-only: no mmap reload.)
+        let dir = t.dir.unwrap_or_else(|| ".".to_string());
+        let said_path = self.current_path();
+        let abs_brain = std::fs::canonicalize(&said_path)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&said_path)).to_string_lossy().to_string();
+        let args = vec!["harvest-scan".to_string(), dir, "--path".to_string(), abs_brain, "--json".to_string()];
+        let brain_dir = self.brain_dir();
+        for exe in &resolve_said_cli() {
+            if let Ok(r) = std::process::Command::new(exe).args(&args).current_dir(&brain_dir).output() {
+                let out = String::from_utf8_lossy(&r.stdout).to_string();
+                let err = String::from_utf8_lossy(&r.stderr).to_string();
+                if r.status.success() {
+                    let guide = "Above are the repeated code structures (clusters) .said found. For EACH \
+                        cluster: read its calls + sample_code, then call learn_blueprint with shape = a \
+                        short intent name (e.g. \"Create<Entity> endpoint\") and sections = the ordered NL \
+                        INTENT phases of the FRAMEWORK only (e.g. [\"accept request + write audit row\", \
+                        \"idempotency check\", \"wrap + return\"]) -- NOT the raw call tokens, and NOT the \
+                        entity-specific slots (those stay YOURS/the 20%). NL phases are language-neutral \
+                        and recall by intent.";
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(format!("{}\n\n{}", out.trim(), guide))]));
+                }
+                if !err.trim().is_empty() {
+                    return Err(CallToolError::from_message(format!("harvest-scan failed: {}", err.trim())));
+                }
+            }
+        }
+        Err(CallToolError::from_message("harvest-scan: could not run the said CLI (set SAID_CLI?)".to_string()))
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1527,6 +1793,12 @@ impl SaidServerHandler {
                 }
                 Ok(CallToolResult::text_content(vec![TextContent::from(out)]))
             }
+            // ── Enterprise compliance actions (legal-hold, retention-sweep, audit) ──
+            // Gated behind `enterprise` (full bundle only). Basic recovery above
+            // (list-tombstones/restore/who-deleted) is ungated so a free user can always
+            // undo a delete. When the feature is off these names fall through to the
+            // default arm, which returns an honest "needs the Enterprise build" message.
+            #[cfg(feature = "enterprise")]
             "legal-hold-add" | "hold-add" => {
                 let doc_id = t.doc_id.as_deref().ok_or_else(||
                     CallToolError::from_message("legal-hold-add requires `doc_id`".to_string()))?;
@@ -1539,6 +1811,7 @@ impl SaidServerHandler {
                     case, n, doc_id,
                 ))]))
             }
+            #[cfg(feature = "enterprise")]
             "legal-hold-release" | "hold-release" => {
                 let doc_id = t.doc_id.as_deref().ok_or_else(||
                     CallToolError::from_message("legal-hold-release requires `doc_id`".to_string()))?;
@@ -1551,6 +1824,7 @@ impl SaidServerHandler {
                     case, n, doc_id,
                 ))]))
             }
+            #[cfg(feature = "enterprise")]
             "audit" | "audit-log" => {
                 let log = brain.audit();
                 match log.verify() {
@@ -1577,6 +1851,7 @@ impl SaidServerHandler {
                 }
                 return Ok(CallToolResult::text_content(vec![TextContent::from(out)]));
             }
+            #[cfg(feature = "enterprise")]
             "retention-sweep" | "sweep" => {
                 let older_than_days = t.older_than_days.unwrap_or(365);
                 let keep_per_doc = t.keep_per_doc.unwrap_or(1) as usize;
@@ -1610,10 +1885,24 @@ impl SaidServerHandler {
                     dropped, older_than_days, keep_per_doc,
                 ))]))
             }
+            // A compliance action requested on a non-enterprise build lands here — say so
+            // honestly rather than "unknown action", so the caller knows it exists but needs
+            // the Enterprise (full) build, not that they mistyped.
+            "legal-hold-add" | "hold-add" | "legal-hold-release" | "hold-release"
+            | "retention-sweep" | "sweep" | "audit" | "audit-log" => {
+                Err(CallToolError::from_message(format!(
+                    "admin action '{}' is an Enterprise compliance feature (legal holds, retention \
+                     sweeps, tamper-evident audit) and is not included in this build. It ships in the \
+                     `full`/Enterprise bundle. Available here: list-tombstones, restore, who-deleted.",
+                    action,
+                )))
+            }
             other => Err(CallToolError::from_message(format!(
-                "Unknown admin action '{}'. Valid: list-tombstones, restore, \
-                 who-deleted, legal-hold-add, legal-hold-release, retention-sweep.",
+                "Unknown admin action '{}'. Available: list-tombstones, restore, who-deleted{}.",
                 other,
+                if cfg!(feature = "enterprise") {
+                    ", legal-hold-add, legal-hold-release, retention-sweep, audit"
+                } else { "" },
             ))),
         }
     }
@@ -1873,14 +2162,30 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                     .to_string()
             }
         } else {
-            "Brain is POPULATED and ready to query.\n\
-             \n\
-             Next steps:\n\
-             â€¢ overview                    â€” list detected modules/products\n\
-             â€¢ search \"<query>\"            â€” semantic search\n\
-             â€¢ sym <name>                  â€” exact symbol lookup\n\
-             â€¢ snapshot <module>           â€” extract a module workspace\n"
-                .to_string()
+            // Suggest only commands THIS build actually ships. The brain bundle has no
+            // overview/search/sym/snapshot (those are code-tier) — telling a memory user to
+            // run them is a dead end. Gate the code-tier next-steps behind the code feature.
+            #[cfg(feature = "code")]
+            {
+                "Brain is POPULATED and ready to query.\n\
+                 \n\
+                 Next steps:\n\
+                 â€¢ overview                    â€” list detected modules/products\n\
+                 â€¢ search \"<query>\"            â€” semantic search\n\
+                 â€¢ sym <name>                  â€” exact symbol lookup\n\
+                 â€¢ snapshot <module>           â€” extract a module workspace\n"
+                    .to_string()
+            }
+            #[cfg(not(feature = "code"))]
+            {
+                "Brain is POPULATED and ready to query.\n\
+                 \n\
+                 Next steps:\n\
+                 â€¢ ask \"<question>\"            â€” find memories by meaning (the main command)\n\
+                 â€¢ remember content=\"â€¦\"        â€” store a new note/fact/decision\n\
+                 â€¢ get id=\"<id>\"               â€” read one memory's exact text\n"
+                    .to_string()
+            }
         };
 
         let mode_line = match brain.mode() {
@@ -1888,6 +2193,24 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 "Mode:          portable (embeds full content; USB-offline friendly)",
             sca_core::said_file::BrainMode::Enterprise =>
                 "Mode:          ENTERPRISE (pointer-only; content-embedding ingests REFUSED)",
+        };
+
+        // "Learning" line — explain in plain English what the brain has learned from use,
+        // instead of the engineer-facing "Queries run: N / Dream cycles: M". A normal user
+        // has no idea what a "dream cycle" is; tell them what it DOES: the brain quietly
+        // learns from how you search and reorganizes so the right memory surfaces faster.
+        let learning_line = if s.brain_queries == 0 {
+            "Learning:      not yet — ask it a few questions and it starts learning from how you \
+             search".to_string()
+        } else {
+            let dreamed = if s.brain_cycles > 0 {
+                format!(", and has reorganized itself {} time{} to surface the right memory faster",
+                    s.brain_cycles, if s.brain_cycles == 1 { "" } else { "s" })
+            } else {
+                String::new()
+            };
+            format!("Learning:      active — has learned from {} search{}{}",
+                s.brain_queries, if s.brain_queries == 1 { "" } else { "es" }, dreamed)
         };
 
         let output = format!(
@@ -1898,9 +2221,8 @@ permanently, run `said compact --drop-history --all` from a terminal.",
              {}Memories:      {}  (everything stored in this brain)\n\
              Size on disk:  {} bytes ({:.1} MB)\n\
              Search index:  {}\n\
-             Symbols:       {} named functions/classes/tables\n\
-             Queries run:   {} (brain learns from usage)\n\
-             Dream cycles:  {}   (memory consolidation events){}",
+             {}\
+             {}{}",
             headline,
             said_path,
             mode_line,
@@ -1908,10 +2230,28 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             s.active_frames,
             s.file_size,
             s.file_size as f64 / 1_048_576.0,
-            if s.trigram_present { "present (fast grep available)" } else { "absent (grep will be slower)" },
-            s.symbol_count,
-            s.brain_queries,
-            s.brain_cycles,
+            // The semantic index is what `ask` uses — report IT, honestly, not the trigram
+            // (grep) index. A healthy text brain has 0 trigrams but a full semantic index, so
+            // keying "Search index" off trigram_present made every working brain read "absent".
+            if s.index_docs > 0 {
+                format!("present ({} of {} memories indexed for meaning-based recall)",
+                    s.index_docs, s.active_frames)
+            } else if s.active_frames > 0 {
+                "building… (memories stored but not yet indexed — run a query to trigger it)".to_string()
+            } else {
+                "empty (no memories yet)".to_string()
+            },
+            // Symbols + fast-grep are code-tier concerns; only surface them when this brain
+            // actually has code indexed, so a plain memory brain isn't shown scary "0 / absent".
+            if s.symbol_count > 0 || s.trigram_present {
+                format!("Symbols:       {} named functions/classes/tables\n             \
+                         Fast grep:     {}\n",
+                    s.symbol_count,
+                    if s.trigram_present { "present" } else { "absent" })
+            } else {
+                String::new()
+            },
+            learning_line,
             reload_note,
         );
 
@@ -2340,6 +2680,31 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             )]));
         }
 
+        // Mode 2b: TAG-ONLY deletion (no time criterion) — the "remove a project" path.
+        // `delete(tag_filter: "project:xyz")` tombstones every frame carrying that tag. This is the
+        // portable-brain project-wipe (matches the CLI `wipe --project`), exposed on the MCP surface.
+        if let Some(ref tag) = t.tag_filter {
+            let all_frames = brain.frames.get_all_frames();
+            let to_delete: Vec<String> = all_frames.iter()
+                .filter(|m| m.status == sca_core::frames::FrameStatus::Active
+                    && m.tags.iter().any(|x| x == tag))
+                .map(|m| m.doc_id.clone())
+                .collect();
+
+            if t.dry_run.unwrap_or(false) {
+                let mut output = format!("[DRY RUN] Would delete {} frames tagged `{}`:\n", to_delete.len(), tag);
+                for did in to_delete.iter().take(20) { output.push_str(&format!("  {}\n", did)); }
+                if to_delete.len() > 20 { output.push_str(&format!("  ... and {} more\n", to_delete.len() - 20)); }
+                return Ok(CallToolResult::text_content(vec![TextContent::from(output)]));
+            }
+            let mut deleted = 0;
+            for did in &to_delete { if brain.tombstone_frame(did) { deleted += 1; } }
+            if deleted > 0 { brain.save().map_err(|e| CallToolError::from_message(e))?; }
+            return Ok(CallToolResult::text_content(vec![TextContent::from(
+                format!("Deleted {} frames tagged `{}` (tombstoned — preserved in history)", deleted, tag),
+            )]));
+        }
+
         Ok(CallToolResult::text_content(vec![TextContent::from(
             "No deletion criteria specified. Use doc_id, older_than_days, or before_date.".to_string(),
         )]))
@@ -2703,6 +3068,30 @@ field above shows 0, that is the truth â€” say 0, not a past value.
         }
     }
 
+    /// Read the PC's registered default brain path — the same file the CLI's
+    /// `said use` writes (`%APPDATA%\said\default` on Windows, `~/.config/said/default`
+    /// elsewhere). Used only by the single-brain free-tier guard so the MCP sees the
+    /// same "one brain per PC" anchor the CLI does. Returns None if unset/unreadable.
+    fn registered_default_brain() -> Option<String> {
+        // Mirror the CLI's config_dir() without pulling in a new dependency:
+        //   Windows → %APPDATA%\said ; else → $XDG_CONFIG_HOME/said or ~/.config/said
+        let dir = {
+            #[cfg(target_os = "windows")]
+            { std::env::var("APPDATA").ok().map(|d| std::path::PathBuf::from(d).join("said")) }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::var("XDG_CONFIG_HOME").ok()
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| std::env::var("HOME").ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".config")))
+                    .map(|d| d.join("said"))
+            }
+        }?;
+        std::fs::read_to_string(dir.join("default")).ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     fn handle_create(&self, t: CreateTool) -> Result<CallToolResult, CallToolError> {
         // Safety: determine whether the target path refers to the SAME file
         // the MCP server is already attached to. Compare canonical forms so
@@ -2747,6 +3136,32 @@ field above shows 0, that is the truth â€” say 0, not a past value.
                         String::new()
                     }
                 ))]));
+            }
+        }
+
+        // SINGLE-BRAIN FREE TIER: multi-brain on one machine is an Enterprise
+        // (`full` build) capability. On the free/dev tiers, refuse to create a
+        // SECOND, different brain — point the agent at the existing one. This is
+        // not an overwrite guard (that's above); it stops a proliferation of
+        // brains a free user isn't entitled to. Creating/re-attaching the SAME
+        // file is always fine. See docs/said-structure/40-build-tier-capability-matrix.md.
+        #[cfg(not(feature = "enterprise"))]
+        {
+            if !same_file && !target_raw.exists() {
+                if let Some(existing) = Self::registered_default_brain() {
+                    let existing_p = std::path::PathBuf::from(&existing);
+                    let existing_canon = std::fs::canonicalize(&existing_p).unwrap_or(existing_p.clone());
+                    if existing_p.exists() && existing_canon != target_canon {
+                        return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                            "This free build keeps ONE brain per machine, and one already exists:\n  {}\n\
+                             \n\
+                             Grow that brain instead of making a second — `open path='{}'` then \
+                             `remember`/`ingest`. Multiple brains on one machine is an Enterprise \
+                             (`full` build) feature.",
+                            existing, existing,
+                        ))]));
+                    }
+                }
             }
         }
 
@@ -2813,12 +3228,7 @@ field above shows 0, that is the truth â€” say 0, not a past value.
             args.push("--incremental".into());
         }
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
 
         // Run subprocess in the brain's directory â€” snapshot/.said-code output
         // lands there instead of inheriting Cursor's CWD.
@@ -2920,12 +3330,7 @@ Common fixes:
             args.push(check.clone());
         }
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
         let brain_dir = self.brain_dir();
 
         for exe in &cli_paths {
@@ -2998,12 +3403,7 @@ Common fixes:
             .to_string_lossy().to_string();
         args.push(abs_brain);
 
-        let own_exe = std::env::current_exe().ok();
-        let sibling = own_exe.as_ref().and_then(|p| p.parent())
-            .map(|d| d.join(if cfg!(windows) { "said.exe" } else { "said" }));
-        let cli_paths: Vec<std::ffi::OsString> = std::iter::once(std::ffi::OsString::from("said"))
-            .chain(sibling.map(|p| p.into_os_string()))
-            .collect();
+        let cli_paths = resolve_said_cli();
         let brain_dir = self.brain_dir();
 
         let mut response: Option<String> = None;
@@ -4796,9 +5196,9 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
         let all_frames = brain.frames.get_all_frames();
         let mut chain: Vec<(u64, String, Option<f32>)> = Vec::new(); // (frame_id, status, delta)
 
-        // Find all frames matching this name (active + tombstoned)
+        // Find all frames matching this doc_id (active + tombstoned)
         for meta in &all_frames {
-            if meta.doc_id.contains(&t.name) || meta.doc_id.ends_with(&format!("::{}", t.name)) {
+            if meta.doc_id.contains(&t.doc_id) || meta.doc_id.ends_with(&format!("::{}", t.doc_id)) {
                 let status = match meta.status {
                     sca_core::frames::FrameStatus::Active => "active",
                     sca_core::frames::FrameStatus::Deleted => "deleted",
@@ -4810,11 +5210,11 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
 
         if chain.is_empty() {
             return Ok(CallToolResult::text_content(vec![TextContent::from(
-                format!("No history found for: {}", t.name),
+                format!("No history found for: {}", t.doc_id),
             )]));
         }
 
-        let mut output = format!("History for '{}': {} version(s)\n\n", t.name, chain.len());
+        let mut output = format!("History for '{}': {} version(s)\n\n", t.doc_id, chain.len());
         for (i, (fid, status, delta)) in chain.iter().enumerate() {
             output.push_str(&format!(
                 "v{}: frame_id={} [{}] delta={:.4}\n",
@@ -4833,7 +5233,7 @@ echo \"Connection: Server=localhost,{port};User=sa;Password=Said_Test_2026!\"
         // Find the frame_id for the requested version
         let all_frames = brain.frames.get_all_frames();
         let matching: Vec<&&sca_core::frames::FrameMeta> = all_frames.iter()
-            .filter(|m| m.doc_id.contains(&t.name) || m.doc_id.ends_with(&format!("::{}", t.name)))
+            .filter(|m| m.doc_id.contains(&t.doc_id) || m.doc_id.ends_with(&format!("::{}", t.doc_id)))
             .collect();
 
         if (t.version as usize) >= matching.len() {

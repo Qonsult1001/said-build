@@ -71,6 +71,21 @@ Frames + brain state are preserved. New files get new frames; files with identic
 
 This makes `said init .` idempotent + cheap after the first run — only new / changed files get re-processed.
 
+### ALWAYS init the whole tree in ONE pass (symbol-index rule)
+
+For a FULL build/test of a brain, run **one `said init <repo-root>`** over the entire tree — code, docs,
+and everything — NOT a sequence of per-subdir inits. The symbol index (`SYMS`) and trigram index are rebuilt
+**from the frames present at that init's compact**, so a later `init <docs-only-subdir>` rebuilds SYMS seeing
+**no code symbols** and the code symbol table is lost (measured: a piecemeal git→crates→docs sequence left
+**7 symbols** instead of the full **3,391**; `said sym <fn>` then returns 0). The full code intelligence
+(AST chunks + `sym` exact lookup + tree-sitter symbols) only persists when the code dirs are init'd together
+in the run whose compact writes the final SYMS.
+
+**Rule (governs every test/benchmark brain build):** a "full test" means the entire `init` process over the
+whole project in one pass — sym, AST, trigram, everything for coding included — not subsections. If you must
+ingest extra non-code material (e.g. imported memories) afterward, add it via `save-memory`/`remember`
+(which append frames without rebuilding SYMS), never via a second `init` of a non-code subdir.
+
 ## Performance
 
 Real-world observations:

@@ -21,6 +21,16 @@ It's split into twelve sections so pages stay focused and cross-linkable.
 13. [Integrations architecture](13-integrations.md) — the two rules (offline-first; LLM in a separate process), crate inventory, `said-think`, and the LEANN-inspired Q2/Q3/Q4 plan
 14. [Novel mechanisms](14-novel-mechanisms/) — 8 shipped + 5 horizon, with math, formulas, proof-sketches, and literature positioning
 15. [Coding orchestration](15-orchestration.md) — the model-agnostic Claude-Code loop (plan→design→code→test→repair→learn): Claude-faithful apply, semantic coding-fix recall, and the learning-transfer moat (weak model RED→GREEN), with measured results
+16. [Agent steering](16-agent-steering.md) — when/what makes the agent USE .said (UserPromptSubmit channel + factual framing), the write-back model, SessionEnd backstop
+17. [Build & compile](21-build-and-compile.md) — **READ BEFORE BUILDING.** Feature bundles for CLI + MCP, the embed-model rule (a bare `cargo build -p said-mcp` ships an encoder-less server), post-build verification, the drift checklist
+18. [Memory injection — the nudge pattern](22-memory-injection-nudge-pattern.md) — **READ BEFORE TOUCHING INJECTION.** Inject recall as PLAIN FACTS, never an authority/imperative claim (verbatim from the cloned nudge source); the exact mistake + the measured 17→1 turn fix
+19. [Benchmark methodology](23-benchmark-methodology.md) — **READ BEFORE BENCHMARKING MEMORY.** Single-run pass@1 is WRONG; use pass@k + turns-to-converge on co-solved tasks + abstention-as-correct, partitioned into memory-only-solves / co-solved / neither. Research-cited.
+20. [Memory-benchmark session record](24-memory-benchmark-session-record.md) — the overview of the methodology-hardening + verify-docs fixes + save-template alignment (all 3 surfaces) + GATE 3 + the proven SAVE axis. Start here to recover the thread.
+21. [Agent-driven turns-to-fix method](25-agent-driven-turns-to-fix-method.md) — how to measure the moat end-to-end (the agent drives the loop; no flaky headless subprocess).
+22. [Project-scale savings](26-project-scale-savings.md) — build an HTML site cold vs with save-while-coding memory; the single-build mechanism + why the fair test is vs Claude-native + cross-session.
+23. [Lifecycle re-encounter](27-lifecycle-reencounter.md) — where the moat actually lives: `.said` durable recall beats Claude-native memory when a past-solved bug class recurs in a new file weeks later.
+24. [Token value, scoping, delete](28-token-value-and-scoping.md) — measured token savings (~16×/100×/930× fewer context tokens), per-project scoping (now first-class via `project:` tag), delete-by-project, sqlite size.
+25. [Learning from Claude/Kimi memory](29-learning-from-claude-kimi-memory.md) — what `.said` should adopt (per-project scoping, distilled facts) + the confirmed chat-history safety gap (111 MB plaintext transcripts) `.said` avoids.
 
 ## Maintenance rules
 

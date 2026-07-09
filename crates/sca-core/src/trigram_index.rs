@@ -152,6 +152,13 @@ impl TrigramIndex {
         }
     }
 
+    /// Approximate heap bytes held (postings × 4 bytes/u32 + per-trigram overhead).
+    /// Diagnostic for the #4 memory picture.
+    pub fn approx_bytes(&self) -> usize {
+        let n_keys = if self.is_finalized { self.finalized_postings.len() } else { self.postings.len() };
+        self.total_postings() * 4 + n_keys * 48
+    }
+
     /// Look up a single trigram's posting list. Returns empty if unknown.
     pub fn lookup(&self, tg: &Trigram) -> &[u32] {
         debug_assert!(self.is_finalized, "lookup called before finalize");

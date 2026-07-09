@@ -38,6 +38,8 @@ pub mod plugin;
 pub mod code_search;
 #[cfg(feature = "code")]
 pub mod grammars;
+#[cfg(feature = "code")]
+pub mod harvest;
 pub mod crystalline;
 pub mod edit;
 pub mod frames;
@@ -46,6 +48,10 @@ pub mod lsp_client;
 pub mod said_file;
 pub mod engine;
 pub mod latent_cluster;
+// Hand-written WordPiece tokenizer for static-embed inference (issue #4):
+// avoids HF `tokenizers`' ~250MB first-encode transient.
+#[cfg(feature = "static-embed")]
+pub mod wordpiece_tok;
 pub mod dream;
 pub mod recall;
 pub mod salience;
@@ -53,6 +59,7 @@ pub mod state;
 pub mod storage;
 pub mod trigram_index;
 pub mod symbol_index;
+pub mod word_index;
 pub mod lens;
 pub mod time_compat;
 #[cfg(feature = "gpu")]
@@ -61,6 +68,12 @@ pub mod gpu_search;
 pub mod whisper_ingest;
 #[cfg(feature = "docx")]
 pub mod document_ingest;
+#[cfg(feature = "browser")]
+pub mod browser_ingest;
+pub mod steering;
+pub mod workstate;
+pub mod project;
+pub mod memory;
 pub mod vault_tombstone;
 #[cfg(feature = "ocr")]
 pub mod ocr_ingest;

@@ -1,0 +1,12 @@
+CANON  shape=Create<Entity>   (language-neutral; the LLM renders it in the active stack)
+
+SECTIONS (run order). Each becomes [Sn]..[/Sn] in the rendered file. Class = can the user edit it?
+  S1 accept-and-audit   GENERATED  -- take request, write audit row (.said rewrites it)
+  S2 idempotency        GENERATED  -- reject duplicate requests
+  S3 guards             YOURS      -- validate the required fields (entity-specific)
+  S4 save               YOURS      -- insert the row (entity-specific)
+  S5 response           YOURS      -- shape the response object (entity-specific)
+  S6 wrap+return        GENERATED  -- wrap in the response envelope + audit + return
+
+GUIDE: render in the active language/architecture; keep the section order; the YOURS sections are
+filled from the entity schema; the GENERATED sections come from the canon and are regenerated.

@@ -1,3 +1,26 @@
 [workspace]
 members = ["crates/sca-core", "crates/said-cli", "crates/said-mcp", "crates/said-forge", "crates/said-prompts", "crates/said-vault", "crates/said-llm", "crates/said-orchestration"]
 resolver = "2"
+
+# #4 throughput: the release default (lto=off, codegen-units=16) leaves the encode hot path
+# un-inlined across crate boundaries. The encoder is a tight scalar loop (mean-pool token
+# rows) — LTO + a single codegen unit let the optimizer inline + vectorize it. Pair with
+# `.cargo/config.toml` target-cpu=native for AVX. Zero behaviour change (fingerprints are
+# bit-identical — same float ops, just better-compiled).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# PRODUCTION profile — the "compile it to run natively very fast" target (docs/said-structure/35).
+# Inherits release + fat LTO (whole-program inlining across ALL crates) + abort-on-panic (no unwind
+# tables, smaller + faster). Pair with `RUSTFLAGS="-C target-cpu=native"` (the build script does this)
+# so the SCA fingerprint Hamming + the encoder mean-pool compile to the host's exact AVX2/AVX-512.
+# Fingerprints stay bit-identical (same float ops, just better-compiled). Build:
+#   bash scripts/build-production.sh   (or: RUSTFLAGS="-C target-cpu=native" cargo build --profile production
+#                                       -p said-cli -p said-mcp --no-default-features --features coding)
+[profile.production]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

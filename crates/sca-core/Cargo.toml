@@ -29,8 +29,11 @@ default = []
 bert = ["dep:tokenizers"]
 # SIMD-accelerated Hamming distance (simsimd)
 simd = ["dep:simsimd"]
-# Model2Vec static embeddings for fast latent space encoding (500x faster than transformer)
-static-embed = ["dep:model2vec-rs"]
+# Model2Vec static embeddings for fast latent space encoding (500x faster than transformer).
+# Pulls in the hand-written WordPiece tokenizer + pooling (issue #4): the default
+# encode path is pure-Rust and never triggers HF `tokenizers`' ~250MB first-encode
+# transient. model2vec-rs stays available as a reference/fallback.
+static-embed = ["dep:model2vec-rs", "dep:unicode_categories", "dep:unicode-normalization-alignments"]
 # Embed said-lam-static model weights into binary (zero external files, +4.8MB binary size)
 embed-model = ["static-embed"]
 # GPU-accelerated Hamming search via wgpu compute shader
@@ -63,6 +66,10 @@ docs = ["docx", "dep:pdf-extract", "dep:pdfium"]
 # OCR for scanned/image-only PDFs. PaddleOCR v5 via MNN inference.
 # Models bundled at compile time (~6 MB). Requires pdfium for page rendering.
 ocr = ["dep:ocr-rs", "dep:image", "docs"]
+# Browser-history ingest (Chrome/Edge `History` SQLite → external pointers). NATIVE-ONLY (rusqlite is
+# a C lib); feature-gated OFF the WASM path like `whisper`. Stores a searchable summary + external:uri
+# per visited page — the live source (the browser DB) stays the source of truth, re-synced on demand.
+browser = ["dep:rusqlite"]
 
 [dependencies.pyo3]
 version = "0.22"
@@ -79,6 +86,19 @@ optional = true
 
 [dependencies.simsimd]
 version = "6"
+optional = true
+
+# Hand-written WordPiece tokenizer (issue #4): use the SAME unicode crates that HF
+# `tokenizers` 0.21 uses internally, so normalization is byte-identical.
+#   unicode_categories               → BertNormalizer / BertPreTokenizer (is_other,
+#                                       is_mark_nonspacing, is_punctuation).
+#   unicode-normalization-alignments → NFD for strip_accents (matches tokenizers).
+[dependencies.unicode_categories]
+version = "0.1"
+optional = true
+
+[dependencies.unicode-normalization-alignments]
+version = "0.1"
 optional = true
 
 # model2vec-rs backend is selected per-target (see below):
@@ -187,6 +207,13 @@ version = "0.6"
 optional = true
 default-features = false
 features = ["deflate"]
+
+# Browser-history ingest: read Chrome/Edge `History` SQLite. `bundled` compiles SQLite from source so
+# there's no system-lib dependency. NATIVE-ONLY (the `browser` feature is off the WASM build).
+[dependencies.rusqlite]
+version = "0.31"
+optional = true
+features = ["bundled"]
 
 # Tree-sitter: proper AST parsing for ALL languages (no regex hacks)
 [dependencies.tree-sitter]

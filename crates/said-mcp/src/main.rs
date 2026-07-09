@@ -39,10 +39,40 @@ use handler::SaidServerHandler;
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
+    // Human-facing --help / --version. Without this, running the binary by hand just blocks on stdin
+    // (it's an MCP stdio server), so a person had no way to see what it is or what tools it exposes.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return Ok(());
+    }
+    if argv.iter().any(|a| a == "--version" || a == "-V") {
+        println!("said-mcp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Parse --path flag (same as said-cli)
     let said_path = std::env::args()
         .skip_while(|a| a != "--path")
         .nth(1);
+
+    // PROJECT SCOPE (auto): the engine reads SAID_PROJECT to fold the owning project into fix/blueprint
+    // identity + tags (per-project isolation, opt-in cross-project reuse). The MCP server is the natural
+    // place to set it from the brain filename, so an agent gets project scoping with zero extra config.
+    // Caller-set SAID_PROJECT always wins. Derive from the brain stem: "vivere.said" -> "vivere",
+    // "card.vivere.said" (module) -> "vivere" (last dotted segment before .said). Empty/unknown -> unset.
+    if std::env::var("SAID_PROJECT").ok().filter(|s| !s.trim().is_empty()).is_none() {
+        if let Some(ref p) = said_path {
+            if let Some(stem) = std::path::Path::new(p).file_name().and_then(|n| n.to_str()) {
+                let stem = stem.strip_suffix(".said").unwrap_or(stem);
+                // module brains are "<module>.<project>.said" -> take the project (last segment).
+                let project = stem.rsplit('.').next().unwrap_or(stem).trim();
+                if !project.is_empty() && project != "said" {
+                    std::env::set_var("SAID_PROJECT", project);
+                }
+            }
+        }
+    }
 
     // If this is a module brain (e.g., card.vivere.said), load BOUNDARY.md
     // from the same directory as the architectural constitution.
@@ -78,7 +108,61 @@ async fn main() -> SdkResult<()> {
             boundary_content
         )
     } else {
+        // BRAIN (free, memory-only) INSTRUCTIONS — this bundle exposes ONLY the memory tools
+        // (remember/ask/get/create/open/delete/history/checkout/status/list_concepts/admin), so the
+        // nudge must reference ONLY those. It must NOT mention code/SQL/modules/search/snapshot/ingest
+        // — those are paid tiers (Pro/Developer) not present here, and advertising them in the free
+        // product both confuses the user and leaks the paywall.
+        #[cfg(not(feature = "code"))]
+        let caps = String::from(
+            "This server provides access to a .said portable brain file — your personal, \
+             single-file memory. It stores notes, facts, decisions, and preferences, and finds \
+             them back by meaning when you ask in plain English.\n\n\
+             ## HOW TO TALK TO USERS\n\n\
+             Users are often non-technical. NEVER dump raw tool output. Every response must:\n\
+             1. State what happened in plain English first (e.g. \"✓ Saved that to your brain.\").\n\
+             2. Suggest the next 1-2 likely actions with copy-paste-ready phrasing.\n\
+             3. If the user asks 'how do I…', give the exact tool call, not an abstract description.\n\n\
+             ## ANTI-HALLUCINATION\n\n\
+             Report the EXACT values the tool returned this turn. Never invent counts or status. \
+             If a tool errors, say so — don't fabricate a next step.\n\n\
+             ## MEMORY CONSULTATION (the brain is PRIMARY)\n\n\
+             The brain is the user's persistent memory. **ALWAYS call `ask` first** when the question \
+             contains any of: \"you/we/our/my\", memory cues (\"remember\", \"earlier\", \"last time\", \
+             \"we decided\", \"told you\", \"saved\"), or \"what do I have on X / is there anything about X\". \
+             If `ask` returns a relevant result, quote it and cite the id — never override a stored \
+             memory with training knowledge. For purely general knowledge (\"how does async work?\"), \
+             answer from training and skip the brain. If the brain is empty, say so; don't pretend to recall.\n\n\
+             ## AUTO-MEMORY (act as the user's note-taker)\n\n\
+             Chat turns are ephemeral — the brain only remembers what you save with `remember`. \
+             Call `remember` whenever the user: makes a decision, states a preference/constraint, \
+             shares a fact worth keeping, or asks you to remember (always confirm you did).\n\
+             How: `remember content=\"<self-contained sentence>\" id=\"<short-slug>\"`. \
+             Write content that will still make sense in 6 months without the surrounding chat. \
+             After saving, tell the user briefly (\"✓ saved that\") and move on.\n\n\
+             ## TOOLS (this is a memory brain)\n\
+             - `remember` — save a note/fact/decision as a memory.\n\
+             - `ask` — find memories by meaning, in plain English. The main command.\n\
+             - `get` — read one memory's exact text by its id.\n\
+             - `delete` — remove a memory (recoverable via `admin`).\n\
+             - `history` / `checkout` — see or restore earlier versions of a memory.\n\
+             - `status` — how many memories the brain holds.\n\
+             - `list_concepts` — the [[wikilink]] topics your memories connect to.\n\
+             - `list_tags` — the `tags` metadata vocabulary your memories carry.\n\
+             - `create` / `open` — make or switch to a brain file.\n\
+             - `admin` — recover deleted memories, manage retention.\n\n\
+             ## TAG EVERY MEMORY\n\
+             When you `remember`, attach `tags` describing what the memory is about (subject, \
+             project, status, kind, time) so it's browsable/filterable later. Pick them yourself \
+             from the content — there is NO fixed list. Use `namespace:value` (e.g. `project:said`, \
+             `topic:launch`, `status:planned`). Call `list_tags` FIRST and REUSE an existing tag \
+             instead of coining a synonym — a converged vocabulary keeps browse/filter accurate.\n\n\
+             ## FIRST CONTACT\n\
+             If the brain is empty, call `prompts/get name=\"onboard\"` and paste the welcome. \
+             Otherwise greet briefly and offer `ask`. Check `status` if unsure — never overwrite blindly.\n");
+
         // Build dynamic instructions based on compiled features
+        #[cfg(feature = "code")]
         let mut caps = String::from(
             "This server provides access to a .said portable brain file — a single-file \
              searchable brain containing code, SQL schemas, and memories.\n\n\
@@ -193,6 +277,7 @@ async fn main() -> SdkResult<()> {
         #[cfg(feature = "whisper")]
         caps.push_str("- Audio/video transcripts (MP4, MP3, WAV — speech-to-text)\n");
 
+        #[cfg(feature = "code")]
         caps.push_str("\n## TOOLS\n\n\
              - 'open': Attach this MCP server to a different .said brain (creates it empty if missing). \
                Use this to pick your brain name without restarting Cursor.\n\
@@ -224,13 +309,38 @@ async fn main() -> SdkResult<()> {
         #[cfg(feature = "docs")]
         caps.push_str("- 'ingest': Add files (PDF, DOCX, TXT, MD). Auto-detects format.\n");
 
-        #[cfg(not(feature = "docs"))]
+        #[cfg(all(feature = "code", not(feature = "docs")))]
         caps.push_str("- 'ingest': Add text/code files. Document support (PDF, DOCX) not compiled in.\n");
 
         #[cfg(feature = "whisper")]
         caps.push_str("- 'ingest': Also supports video/audio transcription (MP4, MP3, WAV).\n");
 
-        caps.push_str("\n## CROSS-LANGUAGE BRIDGING\n\n\
+        // Code-locate steering: tell the agent to reach for `.said` BEFORE grepping the codebase.
+        // This is the TRUSTED channel — the model CALLS `ask` (vs distrusting injected hook context).
+        #[cfg(feature = "code")]
+        caps.push_str("\n## LOCATING CODE (use `.said` BEFORE grep)\n\n\
+             When you need to LOCATE something in this project's code — a function by what it DOES \
+             (not its exact name), the source of a bug from a symptom, or a past fix — call `ask` \
+             FIRST, before grepping or reading files. `.said` finds it by MEANING (semantic + symbol \
+             + call-graph) and points at the precise file + symbol far cheaper than reading the \
+             codebase; grep can't match a symptom that shares no identifier with the buggy line. \
+             Act on what `ask` returns (hand symbols to your LSP for type-precise references). If \
+             `ask` returns nothing relevant, then grep normally — it never invents results.\n\n\
+             ## CODING MEMORY (learn_fix — store a verified fix the way the orchestrator does)\n\n\
+             When you SOLVE a coding problem and a real build/test gate is GREEN, store it with \
+             `learn_fix` so a future session (you, the CLI, or the orchestrator) reloads it instead \
+             of re-deriving. Write the SAME structured iteration note the orchestrator stores — NOT a \
+             one-line label (a thin note gets out-ranked by the source it summarizes). Capture:\n\
+             - the PROBLEM solved (plain words — this is the recall key);\n\
+             - the FILES/functions touched and why;\n\
+             - ERRORS + corrections — approaches that FAILED, so they are never retried;\n\
+             - the non-obvious INVARIANT a textbook version gets wrong (the highest-value field);\n\
+             - the KEY RESULT — plus the verified change-set (the `edits` that built+passed).\n\
+             ONLY after the gate is green — `success` is the sole recorded outcome. This writes the \
+             SAME store as `said learn-fix` and the orchestrator (one shared learning store). To get the \
+             exact 10-section note template, call `prompts/get name=\"fix-template\"` (or `said \
+             fix-template` on the CLI) and fill it in.\n\n\
+             ## CROSS-LANGUAGE BRIDGING\n\n\
              The brain links SQL and application code semantically. A search for 'card validation' \
              returns BOTH the SQL stored procedure AND the C# service that calls it.\n\n\
              ## DATA RETENTION\n\n\
@@ -290,4 +400,63 @@ async fn main() -> SdkResult<()> {
         eprintln!("said-mcp error: {}", e);
     }
     Ok(())
+}
+
+/// Human-facing help for `said-mcp --help`. This is an MCP stdio server (an AI agent normally spawns
+/// it and reads its tools over the protocol), but a person running it by hand deserves to see what it
+/// is and what it offers — mirroring the `said` CLI's command menu.
+fn print_help() {
+    #[cfg(not(feature = "code"))]
+    let body = "\
+said-mcp — portable brain MCP server (Personal / Free tier)
+
+A single-file personal memory, served over MCP so an AI agent (Claude, Cursor, …) can read and write
+it for you. Offline, no cloud, no LLM inside — the agent is the LLM.
+
+USAGE:
+    said-mcp --path <brain.said>     Start the server on a brain file (an agent connects over stdio)
+    said-mcp --help                  Show this help
+    said-mcp --version               Show the version
+
+    The agent steering is built in: on connect the server tells the agent to recall with `ask`
+    before answering and save with `remember`. Nothing to paste or configure.
+
+TOOLS THE AGENT CAN CALL (memory-only — this is the free tier):
+    ask             Find memories by meaning (the main recall command)
+    remember        Save a note / fact / decision / preference as a memory
+    get             Read one memory's exact text by its id
+    delete          Remove a memory (recoverable from the recycle bin)
+    list_concepts   List the [[wikilink]] concepts your memories are linked to
+    history         Show the version history of a memory
+    checkout        Restore an earlier version of a memory
+    status          How many memories the brain holds + its health
+    open            Attach the server to a different .said brain file
+    create          Create a new, empty brain file
+    admin           Recover deleted memories and manage retention
+
+CONNECT (example MCP client config):
+    {
+      \"mcpServers\": {
+        \"said-brain\": {
+          \"command\": \"said-mcp\",
+          \"args\": [\"--path\", \"my-brain.said\"]
+        }
+      }
+    }
+
+For the terminal equivalent, use the `said` CLI (`said --help`). Same brain file, either way.";
+
+    #[cfg(feature = "code")]
+    let body = "\
+said-mcp — .said MCP server
+
+USAGE:
+    said-mcp --path <brain.said>     Start the server on a brain file (an agent connects over stdio)
+    said-mcp --help                  Show this help
+    said-mcp --version               Show the version
+
+An AI agent connects over MCP stdio and calls the tools this build advertises (see the agent's
+tools/list). For the terminal equivalent use the `said` CLI (`said --help`).";
+
+    println!("{body}");
 }

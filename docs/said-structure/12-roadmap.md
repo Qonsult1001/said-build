@@ -95,6 +95,19 @@ Four mechanisms promoted from the novel-mechanisms chapter as concrete work item
 
 ## Ingestion
 
+- [ ] **🟡 large-repo ingest: crash + Phase-3 hangs FIXED, ingests end-to-end — 580 MB peak open on low-RAM**
+  (known-limitation [1.6](11-known-limitations.md)). **DONE:** (a) CSV data-dump exclusion (`should_enroll`
+  5 MB cap) — the real crash cause; (b) OKF title-scan O(N²)→linear + harvest clustering O(N²)→blocked (both
+  record-linkage blocking, deterministic) — the two Phase-3 hangs; (c) per-system spill budget
+  (`clamp(RAM×12%, 16 MB, 512 MB)`, sysinfo); (d) WIDX disk-backed word index. **Proven:** full-defaults
+  Wonga (OKF + harvest + auto-spill) ingests END-TO-END — 82.3 MB brain, 37,790 memories, 14,560 symbols,
+  recall verified. Phase-1 read 200–370 s → 14 s. **Still open:** peak on a high-RAM machine is ~2 GB, from
+  the **compact transient** (`frames.rs::compact_block_dict`: `raw_frames` all-frames-decompressed + a
+  second `flat` copy for zstd dict training + all compressed blocks collected before merge) — NOT the word
+  index (459 MB) or frames (285 MB). **Remaining actions:** (1) window the block compression + drop the
+  `flat` full-copy (the last item to hit 580 MB on low-RAM devices); (2) parallelize Phase-1 read+chunk for
+  more speed; (3) incremental + resumable init (BLAKE3 fast path). **Target:** 37 k-frame code brain within
+  the 580 MB ceiling on low-RAM devices, re-init in seconds.
 - [ ] **pdfium fallback** — bundled slow rasterizer when `pdfium.dll` not found at runtime.
 - [ ] **Whisper GPU cross-platform** — Metal (macOS) + CUDA/ROCm (Linux) via sherpa-rs features.
 - [ ] **More tree-sitter languages** — Kotlin, Swift, Scala, Ruby, PHP.

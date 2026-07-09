@@ -1,0 +1,4 @@
+scenario|normal_tokens|said_tokens|fewer|usd_saved_sonnet|usd_saved_opus
+small-locate-3-files|1715|106|16x|0.0048|0.0241
+documented-bug-location-e2e|8587|86|100x|0.0255|0.1275
+broad-symptom-sweep-8-files|125204|134|934x|0.3752|1.8760

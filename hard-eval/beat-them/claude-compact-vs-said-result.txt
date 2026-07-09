@@ -1,0 +1,20 @@
+Claude /compact (modeled) vs .said (real) -- working-set SYMBOL recall after 5 compactions
+CODE RECALL = exact symbol lookup (doc 3.1 PureLexical / doc 3.6 sym), NOT a fuzzy vector test.
+
+  HIT  .said(sym) | /compact(5x) LOST | current_project
+  HIT  .said(sym) | /compact(5x) LOST | passes_scope
+  HIT  .said(sym) | /compact(5x) LOST | ingest_project_memory
+  HIT  .said(sym) | /compact(5x) LOST | save_memory
+  HIT  .said(sym) | /compact(5x) LOST | manifest
+  HIT  .said(sym) | /compact(5x) LOST | recall_memory
+  HIT  .said(sym) | /compact(5x) LOST | evidence_neighbors
+  HIT  .said(sym) | /compact(5x) LOST | append_work_state
+  HIT  .said(sym) | /compact(5x) LOST | work_state_history
+  HIT  .said(sym) | /compact(5x) kept | build_concept_links
+  HIT  .said(sym) | /compact(5x) kept | recall_coding_fixes
+  HIT  .said(sym) | /compact(5x) LOST | recall_blueprints
+
+.said 12/12 (100%)   /compact 2/12 (17%)
+
+.said = measured exact symbol recall (said sym, out-of-band SYMS index -> perfect, no decay).
+/compact = documented model (LLM summary paraphrases symbols, compounds loss over rounds).

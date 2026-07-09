@@ -230,14 +230,13 @@ impl ScaEngine {
         };
         let gamma = (avg_idf / 5.0).min(1.0).min(0.3);
 
-        // 4. Add to CrystallineCore quantized index
-        let doc_words: Vec<Vec<String>> = vec![words];
+        // 4. Add to CrystallineCore quantized index (tokenizes from the text internally)
         self.core.add_docs_quantized(
             vec![doc_id.to_string()],
             flat_embs,
             vec![passage_texts.len()],
             vec![gamma],
-            doc_words,
+            std::slice::from_ref(&text.to_string()),
         );
 
         Ok(())
@@ -315,9 +314,14 @@ impl ScaEngine {
             encoder.encode_one("test").len()
         };
 
-        // A. Build normalized texts + word IDF + doc words
+        let _dbg_t = std::env::var("SAID_PHASE_DBG").is_ok();
+        macro_rules! phase_t { ($label:expr, $t:expr) => { if _dbg_t { eprintln!("    [phase] {}: {:.2}s", $label, $t.elapsed().as_secs_f64()); } }; }
+        let _t = std::time::Instant::now();
+        // A. Build word document-frequency (for IDF). We tokenize each doc transiently and
+        // accumulate only the doc_freq map — NOT a per-doc word list. The old all_doc_words
+        // Vec<Vec<String>> (every word of every doc, ~237MB on a text-heavy chunk) is gone;
+        // gammas (E) and the word index (H) now tokenize per-doc from `texts` on demand (#4).
         let mut doc_freq: HashMap<String, f32> = HashMap::new();
-        let mut all_doc_words: Vec<Vec<String>> = Vec::with_capacity(n_docs);
 
         for text in texts {
             let words = Self::simple_tokenize(text);
@@ -325,14 +329,18 @@ impl ScaEngine {
             for w in &unique {
                 *doc_freq.entry(w.to_string()).or_insert(0.0) += 1.0;
             }
-            self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
-            // NOTE: do NOT cache doc_texts_original here. It is a full second copy of the
-            // entire corpus, and on the CLI/index path nothing reads it after indexing
-            // (the recall_fused fallback is gated on doc_texts_normalized being empty,
-            // which we just populated). At 64K frames this duplicate copy was a primary
-            // driver of the index-stage OOM (#4). Deserialize paths that genuinely need it
-            // populate it separately.
-            all_doc_words.push(words);
+            // #4 memory: do NOT cache doc_texts_normalized here — it is a full normalized
+            // copy of the entire corpus (measured 159MB on Amortization, scales to GBs on
+            // big repos). entity_match_score now reads CrystallineCore's per-doc normalized
+            // text (doc_texts_fast) instead, so this dedicated cache is redundant on the
+            // CLI/index path. Measured: Amortization peak 1083MB → 920MB, recall unchanged
+            // (15/15 regression green). doc_texts_original is also not cached (same reason);
+            // both empty → recall.rs ensure_ready rebuild is a no-op, entity scoring uses
+            // doc_texts_fast. (SAID_KEEP_NORMALIZED forces the old cache back for diagnostics.)
+            if std::env::var("SAID_KEEP_NORMALIZED").is_ok() {
+                self.doc_texts_normalized.push(Self::normalize_unicode(text).to_lowercase());
+            }
+            // words is dropped here — not accumulated (#4).
         }
 
         // Compute IDF: ln((N+1)/(freq+1)) + 1.0 — matches Python exactly.
@@ -349,6 +357,13 @@ impl ScaEngine {
             self.word_idf = new_idf.collect();
         }
 
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let dtn: usize = self.doc_texts_normalized.iter().map(|s| s.len()).sum();
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            eprintln!("  [mem] index_batch phase A: doc_texts_normalized={:.0}MB  all_doc_words=0MB (removed #4)", mb(dtn));
+        }
+
+        phase_t!("A doc_freq", _t); let _t = std::time::Instant::now();
         // B. Stream per-doc: chunk → encode → doc mean → write to mmap temp
         //    RAM stays flat — each doc's passages and embeddings freed immediately.
         let bytes_per_mean = embed_dim * 4; // f32
@@ -359,44 +374,112 @@ impl ScaEngine {
         let mut corpus_sum = vec![0.0f64; embed_dim];
         let mut total_passages: usize = 0;
 
-        for (doc_idx, text) in texts.iter().enumerate() {
-            // NOTE: identical chunking to non-streaming path — full passages, no cap.
-            // This is the HEAD-proven path that preserves quality.
-            let passages = Self::chunk_text(text, 512, 256);
-            let passage_embs = encoder.encode_batch(&passages);
-            drop(passages);
+        // Per-passage encode (#4). We own the tokenizer + pooling
+        // (crate::latent_cluster::OwnStaticEncoder, no HF `tokenizers`), so we encode passages
+        // in BOUNDED PARALLEL chunks: par_iter encodes + L2-normalizes each passage across all
+        // cores (recovering the throughput the one-at-a-time stream gave up), but we hold at
+        // most ONE chunk of embeddings at a time so peak memory stays bounded. The fold into
+        // doc_sum/corpus_sum is sequential IN PASSAGE ORDER, so the f64 accumulation is
+        // bit-identical to the original sequential path (rayon collect preserves order).
+        // Cross-DOCUMENT parallel encode (#4 throughput). Each doc is independent — its
+        // passages encode to ONE doc-mean — so we par_iter ACROSS docs to saturate all cores
+        // (the within-doc parallelism alone under-fed the pool for low-passage docs: measured
+        // 2.7/12 cores). Per doc we return (doc_mean, doc_passage_sum, n_passages); the doc's
+        // passages are still encoded one-at-a-time + folded, so per-thread memory = one passage
+        // embedding. corpus_sum is then folded sequentially IN DOC ORDER for bit-identity, and
+        // scratch is written at each doc's disjoint offset. Same float ops as the serial path.
+        // Each doc encodes in parallel and returns its per-doc mean PLUS the list of its
+        // normalized passage embeddings (each a Vec<f32>). The doc_mean is computed exactly as
+        // the serial path (sum passages → /n → L2). corpus_sum is then accumulated in the
+        // SERIAL fold by re-adding each passage value in the SAME doc-then-passage order as the
+        // original serial loop — so corpus_sum is BIT-IDENTICAL (f64 addition is not
+        // associative, so order matters: pre-summing per-doc shifted the corpus mean's low bits
+        // and flipped a few fingerprints → measured recall@10 0.95→0.90; this restores it).
+        use rayon::prelude::*;
+        struct DocEnc { doc_mean: Vec<f32>, passage_sum: Vec<f64>, n_passages: usize }
 
-            // Normalize per passage + accumulate corpus sum + doc sum
-            let mut doc_sum = vec![0.0f64; embed_dim];
-            let n_passages = passage_embs.len();
-            for mut emb in passage_embs {
-                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-                for v in &mut emb { *v /= norm; }
-                for (i, &v) in emb.iter().enumerate() {
-                    corpus_sum[i] += v as f64;
-                    doc_sum[i] += v as f64;
+        // 580MB CONSTANT-MEMORY CEILING (#4 / owner contract): the old code encoded ALL docs with
+        // one `texts.par_iter().collect()`, holding EVERY passage embedding of the WHOLE corpus in
+        // RAM at once — on the Wonga bank corpus (38k frames, 7.4k SQL files) that was a single
+        // ~2.2GB allocation that OOM-crashed index_batch. We now process docs in BOUNDED WINDOWS:
+        // each window is encoded in parallel (full throughput) then folded serially IN DOC ORDER
+        // and written to the mmap scratch, then DROPPED before the next window. Peak heap for this
+        // phase = one window's passage embeddings, not the corpus. The serial fold order across
+        // windows is identical to the old single-pass fold, so corpus_sum stays BIT-IDENTICAL
+        // (f64 add is order-sensitive; we never reorder). Window size is derived from a memory
+        // budget (SAID_INDEX_BUDGET bytes, default 580MB) ÷ an estimated per-doc embedding cost —
+        // no magic constant; a tiny corpus uses one window, a huge one streams.
+        let budget_bytes: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&b: &usize| b > 0)
+            .unwrap_or(580 * 1024 * 1024);
+        // Estimated bytes one doc's embeddings occupy while in flight: avg passages/doc × one
+        // embedding (embed_dim f32) × a slack factor for the par_iter result Vec + doc_sum. We
+        // bound by a sampled avg passage count so a corpus of huge SQL files windows tighter.
+        let sample_n = n_docs.min(64);
+        let avg_passages: usize = if sample_n == 0 { 1 } else {
+            let s: usize = texts[..sample_n].iter()
+                .map(|t| Self::chunk_text(t, 512, 256).len().max(1))
+                .sum();
+            (s / sample_n).max(1)
+        };
+        let per_doc_bytes = avg_passages * embed_dim * 4 * 3; // ×3 slack (emb + doc_sum + result)
+        let window = (budget_bytes / per_doc_bytes.max(1)).clamp(1, n_docs.max(1));
+
+        let mut doc_idx = 0usize;
+        for chunk in texts.chunks(window) {
+            // Encode this window in parallel — peak memory bounded to `window` docs.
+            let per_doc: Vec<DocEnc> = chunk
+                .par_iter()
+                .map(|text| {
+                    let passages_text = Self::chunk_text(text, 512, 256);
+                    let n_passages = passages_text.len();
+                    let mut doc_sum = vec![0.0f64; embed_dim];
+                    // Accumulate the per-doc PASSAGE SUM (for corpus_sum) here instead of storing every
+                    // passage embedding in a `Vec<Vec<f32>>`. That stored-all-passages Vec was the
+                    // ~650MB encode transient on passage-dense SQL (a whole window of 4096 docs ×
+                    // many passages × 128 f32). corpus_sum is folded in doc-then-passage order below;
+                    // f64 addition is order-sensitive, and passage_sum sums each doc's passages in the
+                    // SAME order, so the result is BIT-IDENTICAL to the old store-then-fold path.
+                    let mut passage_sum = vec![0.0f64; embed_dim];
+                    for passage in &passages_text {
+                        let mut emb = encoder.encode_one(passage);
+                        let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                        for v in &mut emb { *v /= norm; }
+                        for (i, &v) in emb.iter().enumerate() {
+                            doc_sum[i] += v as f64;
+                            passage_sum[i] += v as f64;
+                        }
+                        // emb dropped here — one passage embedding in flight per thread, not the window.
+                    }
+                    let mut doc_mean: Vec<f32> = doc_sum.iter()
+                        .map(|&s| (s / n_passages.max(1) as f64) as f32)
+                        .collect();
+                    let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+                    for v in &mut doc_mean { *v /= norm; }
+                    DocEnc { doc_mean, passage_sum, n_passages }
+                })
+                .collect();
+
+            // Serial fold IN DOC ORDER → corpus_sum bit-identical (each doc's passage_sum was summed
+            // in passage order inside the map, so total order = doc-then-passage as before).
+            for d in &per_doc {
+                for (i, &s) in d.passage_sum.iter().enumerate() { corpus_sum[i] += s; }
+                total_passages += d.n_passages;
+                let offset = doc_idx * bytes_per_mean;
+                let bytes: &[u8] = bytemuck::cast_slice(&d.doc_mean);
+                scratch.as_mut_slice()[offset..offset + bytes_per_mean].copy_from_slice(bytes);
+                doc_idx += 1;
+                if doc_idx % 50 == 0 || doc_idx == n_docs {
+                    progress(doc_idx, n_docs, total_passages);
                 }
             }
-            total_passages += n_passages;
-
-            // Doc mean: mean(axis=0), re-normalize
-            let mut doc_mean: Vec<f32> = doc_sum.iter()
-                .map(|&s| (s / n_passages.max(1) as f64) as f32)
-                .collect();
-            let norm: f32 = doc_mean.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
-            for v in &mut doc_mean { *v /= norm; }
-
-            // Write to scratch (disk-backed mmap on native, RAM on wasm)
-            let offset = doc_idx * bytes_per_mean;
-            let bytes: &[u8] = bytemuck::cast_slice(&doc_mean);
-            scratch.as_mut_slice()[offset..offset + bytes_per_mean].copy_from_slice(bytes);
-
-            if (doc_idx + 1) % 50 == 0 || doc_idx + 1 == n_docs {
-                progress(doc_idx + 1, n_docs, total_passages);
-            }
+            drop(per_doc); // free this window before encoding the next — the memory bound.
         }
         scratch.flush()?;
 
+        phase_t!("B encode", _t); let _t = std::time::Instant::now();
         // C. Corpus mean. Full build: compute from this batch's passage sums and set
         //    it. Incremental: REUSE the persisted mean so the new docs quantize into
         //    the SAME space as the existing corpus (comparable fingerprints). If a
@@ -431,8 +514,10 @@ impl ScaEngine {
             self.core.set_corpus_std(corpus_std);
         }
 
-        // E. Gammas
-        let gammas: Vec<f32> = all_doc_words.iter().map(|words| {
+        // E. Gammas — tokenize each doc's text on demand (transient, one doc at a time)
+        // instead of reading a resident all_doc_words Vec (#4).
+        let gammas: Vec<f32> = texts.iter().map(|text| {
+            let words = Self::simple_tokenize(text);
             let avg_idf = if !words.is_empty() {
                 words.iter()
                     .map(|w| self.word_idf.get(w).copied().unwrap_or(0.5))
@@ -443,6 +528,7 @@ impl ScaEngine {
             (avg_idf / 5.0).min(1.0).min(0.3)
         }).collect();
 
+        phase_t!("C-E mean/std/gammas", _t); let _t = std::time::Instant::now();
         // F. Load IDF into CrystallineCore
         let idf_keys: Vec<String> = self.word_idf.keys().cloned().collect();
         let idf_values: Vec<f32> = idf_keys.iter()
@@ -461,14 +547,23 @@ impl ScaEngine {
         }
         let passage_counts: Vec<usize> = vec![1; n_docs];
 
-        // H. Add all docs to CrystallineCore
+        phase_t!("F-G idf/read-means", _t); let _t = std::time::Instant::now();
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            let texts_b: usize = texts.iter().map(|s| s.len()).sum();
+            eprintln!("  [mem] pre-add_docs_quantized: all_embs={:.0}MB  texts={:.0}MB  gammas={:.0}MB  n_docs={}",
+                mb(all_embs.len() * 4), mb(texts_b), mb(gammas.len() * 4), n_docs);
+        }
+        // H. Add all docs to CrystallineCore (tokenizes per-doc from texts internally)
+        let _h = &_t;
         self.core.add_docs_quantized(
             doc_ids.to_vec(),
             all_embs,
             passage_counts,
             gammas,
-            all_doc_words,
+            texts,
         );
+        phase_t!("H add_docs_quantized (word index)", *_h);
 
         // I. Upload quantized fingerprints to GPU (if available)
         #[cfg(feature = "gpu")]
@@ -865,9 +960,47 @@ impl ScaEngine {
     /// split_whitespace + lowercase + len>=3. NO punctuation stripping.
     fn simple_tokenize(text: &str) -> Vec<String> {
         text.split_whitespace()
-            .map(|w| w.to_lowercase())
+            .flat_map(Self::split_identifier)
             .filter(|w| w.len() >= 3)
             .collect()
+    }
+
+    /// Split a whitespace-token into sub-tokens the way GitHub Blackbird / Elasticsearch's code
+    /// analyzers do: on `_`/`-`/punctuation AND camelCase AND letter↔digit boundaries, lowercasing
+    /// each part. This bounds the BM25 vocabulary to real WORD PARTS instead of whole identifiers —
+    /// code has a near-infinite identifier vocabulary ("Big Code != Big Vocabulary", Karampatsis
+    /// ICSE'20; identifier splitting cuts vocab ~90%), which on SQL DDL exploded the vocab to 177 MB
+    /// (every `nbd_New_Business_Application_Detail` column a unique term). e.g.
+    ///   `nbd_New_Business_Application_Detail` → [nbd, new, business, application, detail]
+    ///   `getUserName2` → [get, user, name] (the trailing digit is a boundary; "2" is < len 3)
+    /// A plain English word (no separators / case runs) returns itself lowercased, so natural-language
+    /// recall is unchanged. Deterministic; callers still apply the len>=3 filter.
+    pub fn split_identifier(tok: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut prev: Option<char> = None;
+        let flush = |cur: &mut String, out: &mut Vec<String>| {
+            if !cur.is_empty() { out.push(std::mem::take(cur).to_lowercase()); }
+        };
+        for c in tok.chars() {
+            if !c.is_alphanumeric() {
+                // separator (_, -, ., etc.) → boundary
+                flush(&mut cur, &mut out);
+                prev = None;
+                continue;
+            }
+            if let Some(p) = prev {
+                let camel = p.is_lowercase() && c.is_uppercase();          // fooBar
+                let digit_edge = p.is_alphabetic() != c.is_alphabetic();   // abc123 / 123abc
+                if camel || digit_edge {
+                    flush(&mut cur, &mut out);
+                }
+            }
+            cur.push(c);
+            prev = Some(c);
+        }
+        flush(&mut cur, &mut out);
+        out
     }
 
     /// Extract entities and filter by IDF — only keep high-IDF (rare) entities.
@@ -1025,10 +1158,22 @@ impl ScaEngine {
             Some(idx) => idx,
             None => return 0.0,
         };
-        if doc_idx >= self.doc_texts_normalized.len() {
-            return 0.0;
-        }
-        let doc_text = &self.doc_texts_normalized[doc_idx];
+        // Prefer the dedicated normalized cache when present (PyO3/deserialize path); on the
+        // CLI/init path it is now left empty to save ~corpus-sized RAM (#4), and we fall back
+        // to CrystallineCore's per-doc normalized text (doc_texts_fast). Both are lowercase
+        // normalized; entity tokens are proper nouns (len>=3) so the >=3-word filter in
+        // doc_texts_fast doesn't drop them.
+        let owned;
+        let doc_text: &str = if doc_idx < self.doc_texts_normalized.len()
+            && !self.doc_texts_normalized[doc_idx].is_empty()
+        {
+            &self.doc_texts_normalized[doc_idx]
+        } else {
+            // doc_texts_fast is no longer built at index time (#4); reconstruct the per-doc
+            // normalized text from the interned word set on demand.
+            owned = self.core.doc_normalized_text(doc_idx).unwrap_or_default();
+            &owned
+        };
         let mut hits = 0;
         for ent in entities {
             let ent_lower = Self::normalize_unicode(ent).to_lowercase();
@@ -1049,6 +1194,31 @@ impl Default for ScaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_identifier_bounds_the_code_vocab() {
+        // snake_case + the leading short part
+        assert_eq!(ScaEngine::split_identifier("nbd_New_Business_Application_Detail"),
+                   vec!["nbd","new","business","application","detail"]);
+        // camelCase
+        assert_eq!(ScaEngine::split_identifier("getUserName"), vec!["get","user","name"]);
+        // digit boundary
+        assert_eq!(ScaEngine::split_identifier("Fact20230601"), vec!["fact","20230601"]);
+        // a plain English word is unchanged (lowercased) -> natural-language recall preserved
+        assert_eq!(ScaEngine::split_identifier("amortization"), vec!["amortization"]);
+        // mixed separators
+        assert_eq!(ScaEngine::split_identifier("usp-Generate.WeeklyReport"),
+                   vec!["usp","generate","weekly","report"]);
+    }
+
+    #[test]
+    fn simple_tokenize_splits_and_filters() {
+        // whole doc: identifiers split, len>=3 filter applied (so "get" kept, single/2-char dropped)
+        let t = ScaEngine::simple_tokenize("CREATE TABLE nbd_New_Business x_y");
+        assert!(t.contains(&"create".to_string()) && t.contains(&"table".to_string()));
+        assert!(t.contains(&"business".to_string()) && t.contains(&"new".to_string()));
+        assert!(!t.iter().any(|w| w == "x" || w == "y"), "single chars filtered by len>=3");
+    }
 
     #[test]
     fn test_extract_entities() {
@@ -1157,12 +1327,14 @@ mod tests {
 
     #[test]
     fn test_simple_tokenize() {
-        // Matches Python: split_whitespace + lowercase + len>=3, NO punctuation strip
+        // Now: split_whitespace + IDENTIFIER SPLIT (on punctuation/camelCase/digit) + lowercase +
+        // len>=3. Punctuation is a boundary (was previously preserved) — this bounds the code vocab
+        // (see split_identifier_bounds_the_code_vocab) and matches how code analyzers tokenize.
         let tokens = ScaEngine::simple_tokenize("The quick brown Fox! jumps...");
         assert!(tokens.contains(&"quick".to_string()));
         assert!(tokens.contains(&"brown".to_string()));
-        assert!(tokens.contains(&"fox!".to_string())); // punctuation preserved
+        assert!(tokens.contains(&"fox".to_string()));   // trailing '!' stripped as a boundary
         assert!(tokens.contains(&"the".to_string()));
-        assert!(tokens.contains(&"jumps...".to_string())); // punctuation preserved
+        assert!(tokens.contains(&"jumps".to_string())); // trailing '...' stripped as a boundary
     }
 }

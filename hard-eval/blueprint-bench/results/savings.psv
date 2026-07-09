@@ -1,0 +1,4 @@
+shape|pct_80|without_chars|with_chars|saved_chars|pct_saved|warm_recall_ms
+01-rest-crud|49|6196|907|5289|85|38.47
+02-http-client|54|5635|936|4699|83|17.76
+03-cli-command|36|4188|833|3355|80|14.94

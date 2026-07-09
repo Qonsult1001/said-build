@@ -1,0 +1,14 @@
+project,frames_total,added,brain_MB,ingest_s,peak_MB,recall_ok
+Vivere Onboarding,32,32,0,2,22,yes
+dt-strorefront,557,525,1,10,31,yes
+Agents,3551,2994,5,19,71,yes
+Advisory,4783,1232,8,11,139,yes
+MCP,10541,5758,15,47,195,yes
+SDK-DT,682,-9859,80,49,398,yes
+said-build,5538,4856,75,31,239,yes
+dt-gateway,5687,149,76,12,256,yes
+Law,6655,968,77,24,256,yes
+Wonga,43040,36385,122,423,684,yes
+AlphaGo,45331,2291,137,212,955,yes
+NeoroCore,46656,1325,138,247,1016,yes
+SAID-ECHO,46656,0,132,1201,2696,yes

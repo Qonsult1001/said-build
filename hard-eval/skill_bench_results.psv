@@ -1,0 +1,9 @@
+arm|task|turns|pass
+cold|h1_lru|4|1
+cold|h2_intervals|1|1
+cold|h3_store|1|1
+cold|h4_ratelimiter|1|1
+memory|h1_lru|1|1
+memory|h2_intervals|1|1
+memory|h3_store|1|1
+memory|h4_ratelimiter|1|1

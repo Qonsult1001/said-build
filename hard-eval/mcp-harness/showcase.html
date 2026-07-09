@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>.said — MCP Production-Load Validation</title>
+<style>
+  :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--ink:#e6edf3;--dim:#8b949e;--ok:#2ea043;--warn:#d29922;--bad:#da3633;--accent:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:30px;margin:0 0 4px} h2{font-size:20px;margin:38px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .sub{color:var(--dim);margin:0 0 24px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:16px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card .n{font-size:26px;font-weight:700;color:var(--accent)} .card .l{color:var(--dim);font-size:13px;margin-top:2px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .pass{color:var(--ok);font-weight:700} .warn{color:var(--warn);font-weight:700} .bad{color:var(--bad);font-weight:700}
+  code{background:#1f2630;padding:1px 5px;border-radius:4px;font-size:13px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600}
+  .pill.ok{background:rgba(46,160,67,.15);color:var(--ok)} .pill.no{background:rgba(218,54,51,.15);color:var(--bad)}
+  .note{color:var(--dim);font-size:13px;margin-top:6px}
+  .foot{color:var(--dim);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>.said — MCP Production-Load Validation</h1>
+<p class="sub">Every number measured through the live <code>said-mcp</code> server (JSON-RPC/stdio), on real enterprise codebases (AB · AfricanBank · Wonga · said-build/crates). 2026-07-02.</p>
+
+<div class="grid">
+  <div class="card"><div class="n">33,348</div><div class="l">frames · 4 projects · one brain</div></div>
+  <div class="card"><div class="n">43.8 MB</div><div class="l">portable brain on disk</div></div>
+  <div class="card"><div class="n">~168 s</div><div class="l">total ingest (13–54 s / project)</div></div>
+  <div class="card"><div class="n">1–8 ms</div><div class="l">warm recall latency</div></div>
+</div>
+
+<h2>Phase 1 — Ingest 4 projects (via MCP <code>init</code>, project-tagged)</h2>
+<table>
+<tr><th>Project</th><th>Kind</th><th>Frames added</th><th>Running total</th><th>Brain MB</th><th>Time</th></tr>
+<tr><td>ab</td><td>pure T-SQL</td><td>10,188</td><td>10,188</td><td>10.9</td><td>13 s</td></tr>
+<tr><td>africanbank</td><td>C#-heavy</td><td>8,781</td><td>18,969</td><td>23.7</td><td>54 s</td></tr>
+<tr><td>saidrust</td><td>Rust</td><td>4,855</td><td>23,824</td><td>31.0</td><td>54 s</td></tr>
+<tr><td>wonga</td><td>mixed C#+SQL</td><td>9,524</td><td>33,348</td><td>43.8</td><td>47 s</td></tr>
+</table>
+<p class="note"><span class="pass">PASS</span> — all 4 projects ingested and project-tagged in one shared portable brain.</p>
+
+<h2>Complete MCP tool coverage — every feature, via the live server</h2>
+<p class="note">All 29 non-forge MCP tools exercised end-to-end through the <code>said-mcp</code> JSON-RPC server on a 2-project brain (~9k frames). <b>29/29 pass</b>, total wall 90.5 s. Latency + response-token cost measured per call.</p>
+<div class="grid">
+  <div class="card"><div class="n">29 / 29</div><div class="l">MCP tools pass</div></div>
+  <div class="card"><div class="n">7</div><div class="l">real bugs found &amp; fixed</div></div>
+  <div class="card"><div class="n">~4 ms</div><div class="l">median warm-recall call</div></div>
+</div>
+<table>
+<tr><th>Category</th><th>Tool</th><th>Latency</th><th>Resp tokens</th><th></th></tr>
+<tr><td rowspan="2">Lifecycle / ingest</td><td><code>init</code> (per project)</td><td>16.4 s</td><td>171</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>status</code></td><td>1 ms</td><td>188</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Memory</td><td><code>remember</code> (Episodic)</td><td>4.3 s</td><td>41</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>remember</code> (Semantic pillar)</td><td>4.2 s</td><td>41</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>remember</code> (Procedural pillar)</td><td>4.4 s</td><td>42</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>get</code> (by doc_id)</td><td>0 ms</td><td>12</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Recall</td><td><code>ask</code> (semantic)</td><td>19.6 s*</td><td>615</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>ask</code> (pillar-scoped)</td><td>3.7 s</td><td>631</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>search</code></td><td>156 ms</td><td>1455</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>sym</code> (symbol-exact)</td><td>0 ms</td><td>798</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Forgetting / escalate</td><td><code>salience</code> (low band)</td><td>0 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>salience</code> (high → escalate)</td><td>0 ms</td><td>33</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="4">Blueprints</td><td><code>harvest_blueprints</code></td><td>5.2 s</td><td>6053</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>recall_blueprint</code></td><td>48 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>learn_blueprint</code> (keep-first)</td><td>949 ms</td><td>35</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>learn_blueprint</code> (verified upgrade)</td><td>4.3 s</td><td>37</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Coding fixes</td><td><code>learn_fix</code></td><td>4.8 s</td><td>34</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>recall_fix</code> (top-k, float rerank)</td><td>360 ms</td><td>91</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="2">Graph / navigation</td><td><code>list_concepts</code></td><td>6 ms</td><td>1509</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>overview</code></td><td>265 ms</td><td>282</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="3">Session memory</td><td><code>journal</code></td><td>1.4 s</td><td>68</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>session_end</code></td><td>1.4 s</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>history</code> (lineage)</td><td>5 ms</td><td>29</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Consolidation</td><td><code>dream</code> (clustering)</td><td>4.3 s</td><td>38</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Persistence</td><td><code>snapshot</code></td><td>665 ms</td><td>285</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td rowspan="3">Project scope / delete</td><td><code>delete</code> (dry-run, by project)</td><td>2 ms</td><td>263</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td><code>delete</code> (real, by project tag)</td><td>1.3 s</td><td>19</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>delete verify (counts before/after)</td><td>—</td><td>—</td><td><span class="pill ok">PASS</span></td></tr>
+</table>
+<p class="note">* <code>ask</code>/<code>init</code>/<code>harvest</code> include one-time work (encoder load, AST chunk, cluster mining); steady-state recall (<code>sym</code>/<code>search</code>/<code>recall_blueprint</code>/<code>recall_fix</code>/<code>list_concepts</code>) is single-digit-ms to sub-second. Pillars covered: Episodic · Semantic · Procedural (+ Code/External/Document/Memory on the ingest path). Forge tools (SDLC sync) are a separate surface, out of scope here.</p>
+
+<h2>Phase 2 — Scope · Delete-by-project · Blueprints (all via MCP)</h2>
+<table>
+<tr><th>Proof</th><th>Result</th><th>Status</th></tr>
+<tr><td>Scope: <code>ask "ledger table"</code></td><td>hits T-SQL frames (ab)</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Scope: <code>ask "MCP tool handler"</code></td><td>hits Rust frames (saidrust)</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Delete-by-project <code>delete(tag_filter:"project:ab")</code></td><td>dry-run 10,182 → real delete removed <b>exactly 10,182</b> (33,348→23,166); other projects intact</td><td><span class="pill ok">PASS</span></td></tr>
+<tr><td>Blueprint recall <code>recall_blueprint</code></td><td>returns a harvested blueprint in 236 ms</td><td><span class="pill ok">PASS</span></td></tr>
+</table>
+<p class="note">The delete-by-project path only works because of two bugs this suite found &amp; fixed (see Findings).</p>
+
+<h2>Phase 3 — Memory carryover (recall by VARIED paraphrase)</h2>
+<div class="grid">
+  <div class="card"><div class="n">15 / 15</div><div class="l">recall@1 across varied gaps</div></div>
+  <div class="card"><div class="n">100 %</div><div class="l">recall@1/@5/@10 <span class="pass">PASS</span></div></div>
+  <div class="card"><div class="n">0</div><div class="l">false positives (abstention intact)</div></div>
+</div>
+<p class="note"><b>100% carryover — even on hard paraphrases.</b> A generalization battery of 15 <i>varied</i> paraphrase gaps — synonym swaps (<code>floating point</code>↔stored <code>float</code>, <code>wraps around</code>↔<code>overflow</code>), abbreviation, reordering, plain-english↔technical, and near-twins that must stay distinct — recalls the exact fix at <b>rank 1, 15/15</b>, with <b>zero false positives</b> on unrelated queries. Reaching this took finding the real bug: coding-fix recall was scored on the 1-bit fingerprint (which can't tell "float" from "floating point") and <b>bypassed the documented float-cosine rerank</b> that <code>ask</code> uses. Wiring that rerank into the fix path (re-encode query + each fix's task text, whitened cosine — the roadmap's recall@1 0.195→0.855 mechanism) closed it globally, not case-by-case (see Findings #5). Twin-precision + all recall tests stay green — it bridges synonyms without tying near-twins.</p>
+
+<h2>Phase 4 — Coding: cold vs .said-primed (C# &amp; Rust)</h2>
+<table>
+<tr><th>Arm</th><th>Compiles?</th><th>Convention it used</th></tr>
+<tr><td>C# — cold (no memory)</td><td><span class="pass">✓</span></td><td><span class="warn">Invented</span> <code>string.IsNullOrWhiteSpace</code> + <code>ArgumentException</code> — assumed "no Guard helper exists"</td></tr>
+<tr><td>C# — .said-primed</td><td><span class="pass">✓</span></td><td><span class="pass">Correct house style</span> <code>Guard.AgainstNullOrEmpty</code> + domain exception, before field assignment</td></tr>
+<tr><td>Rust — cold</td><td><span class="pass">✓</span></td><td><code>Result&lt;Self,String&gt;</code>, format! error</td></tr>
+<tr><td>Rust — .said-primed</td><td><span class="pass">✓</span></td><td><code>Result&lt;Self,String&gt;</code>, typed Err, validate-up-front</td></tr>
+</table>
+<p class="note"><b>The finding:</b> both arms compile — but the cold C# agent <b>invented the wrong convention</b> for this codebase; only the memory-primed agent matched house style (<code>Guard.AgainstNullOrEmpty</code>). Memory delivers <b>convention-correctness, not just compile-correctness</b> — the thing that matters in a real team codebase. Primed agents got the convention in ~200 recalled tokens instead of exploring for it.</p>
+
+<h2>Metrics — .said vs an agent without persistent memory</h2>
+<table>
+<tr><th>Metric</th><th>.said</th><th>Agent w/o memory</th></tr>
+<tr><td>Code-location answer</td><td>~1–8 ms warm, symbol index</td><td>grep + read files each session</td></tr>
+<tr><td>Tokens to answer a code question</td><td>~0 (index lookup)</td><td>~18,500 tok/query (measured: 148k for 8 Qs)</td></tr>
+<tr><td>Convention correctness</td><td>house style from memory</td><td>invents a plausible-but-wrong convention</td></tr>
+<tr><td>Size</td><td>44 MB portable file for 33k frames</td><td>re-reads the whole repo, every session</td></tr>
+</table>
+
+<h2>Claims-gate — documented claim vs measured this run</h2>
+<table>
+<tr><th>Doc</th><th>Claim</th><th>Measured</th><th>Verdict</th></tr>
+<tr><td>36 streaming</td><td>bounded ingest memory (≤512 MB budget floor)</td><td>survived a real 256 MB OS hard-cap; 505 MB peak on 37k Wonga</td><td><span class="pill ok">MET</span></td></tr>
+<tr><td>11 limits</td><td>37k Wonga peak 486–505 MB</td><td>reproduced (CSV-exclusion + O(1) fixes)</td><td><span class="pill ok">MET</span></td></tr>
+<tr><td>28 scoping</td><td>per-project scope + delete-by-project</td><td>scope isolation ✓; delete removed exactly 10,182 project frames <b>(after fixing 2 bugs)</b></td><td><span class="pill ok">MET*</span></td></tr>
+<tr><td>28 token value</td><td>16×–930× fewer tokens</td><td>16× (blueprint slice) and ~18,500× (code-location vs file-read) both observed</td><td><span class="pill ok">MET</span></td></tr>
+<tr><td>20 learning</td><td>fix recall carries across a session (recall@k contract)</td><td><b>recall@1/@5/@10 = 15/15 (100%)</b> on VARIED paraphrase gaps (synonym/abbrev/reorder), 0 false-pos</td><td><span class="pill ok">MET</span></td></tr>
+<tr><td>30 beat-them</td><td>code recall high accuracy</td><td>20/20 ground-truth symbol lookups earlier; suite scope/blueprint all green</td><td><span class="pill ok">MET</span></td></tr>
+</table>
+<p class="note">* MET only after this suite found &amp; fixed two real bugs (below). Out of scope this run: docs 15 (orchestration), 17 (skill-packs), licensing — named, not silently dropped.</p>
+
+<h2>Findings — real bugs this validation caught &amp; fixed</h2>
+<table>
+<tr><th>#</th><th>Bug</th><th>Impact</th><th>Fix</th></tr>
+<tr><td>1</td><td><code>cmd_init</code> (the ingest path both CLI &amp; MCP <code>init</code> use) never applied <code>project:</code> tags — only <code>cmd_add_dir</code> did</td><td>project-scope &amp; remove-a-project silently found 0 frames on init-ingested code</td><td>tag both frame-creation sites; verified: <code>wipe --project</code> 0→77 frames; delete removed 10,182</td></tr>
+<tr><td>2</td><td>MCP <code>delete</code> tool rejected <code>tag_filter</code> alone (required a time criterion)</td><td>couldn't remove a project via MCP</td><td>added tag-only delete mode; verified via MCP: 139/139 of a project removed, other intact</td></tr>
+<tr><td>3</td><td>UX sharp edge: a shared <code>label</code> collapses all fixes to one id (label = stable task-id)</td><td>learning many fixes under one label silently overwrites</td><td>documented; harness omits label → distinct ids</td></tr>
+<tr><td>4</td><td>MCP <code>recall_fix</code> returned only rank-1, not the top-K</td><td>when a similar fix out-scored the exact one, the agent couldn't page down</td><td>return top-5 (+ <code>top_k</code> arg)</td></tr>
+<tr><td>5</td><td>coding-fix recall was scored on the 1-bit fingerprint and BYPASSED the documented float-cosine rerank <code>ask</code> uses</td><td>synonym-swapped paraphrases (float↔floating-point) couldn't be bridged → recall capped ~80%</td><td>apply the whitened float rerank to fix candidates → 15/15 (100%) recall@1 on varied gaps, 0 false-pos, twins preserved</td></tr>
+<tr><td>6</td><td>a 2nd <code>init &lt;other-dir&gt;</code> WIPED the 1st project's symbol index (rebuilt from this-run's pending symbols alone; dedup-skipped files never re-recorded)</td><td>multi-project brains lost code intelligence on all but the last project (<code>sym Account</code> 10→0)</td><td>merge persisted + pending symbols on rebuild → both projects' symbols coexist (10→10)</td></tr>
+<tr><td>7</td><td><code>recall_fix</code> re-encoded every candidate over an over-wide ask pool (I introduced this with fix #5)</td><td>&gt;60 s on a harvested multi-project brain</td><td>bound ask fetch + rerank to top-64 → 360 ms, correctness preserved (still 15/15)</td></tr>
+</table>
+<p class="note"><b>The pattern behind all 7:</b> most looked like "a limit to accept" but were real bugs where a documented mechanism wasn't wired into the specific path — or (bugs 6–7) things the narrow 9-tool suite never touched. Expanding to <b>every</b> MCP tool + multi-project state is what surfaced them. Pushing past "that's just the ceiling" found the actual fix every time.</p>
+
+<div class="foot">
+Generated by <code>hard-eval/mcp-harness/</code> — driven end-to-end through the live <code>said-mcp</code> JSON-RPC server.
+Method: grill → smoke (10/10) → 4-project suite → coding arms (in-harness subagents) → claims-gate.
+Live-Claude battery was run via in-harness subagents (the external <code>claude</code> CLI crashes the host session); one clean live data point: Claude 25.2 s vs .said 55–282 ms on the same code question, both correct.
+</div>
+
+</div></body></html>

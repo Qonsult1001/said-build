@@ -1,0 +1,18 @@
+COMPACTION SURVIVAL e2e (real said.exe)
+
+WITHOUT .said: exact detail lost on compaction (agent goes stupid).
+WITH .said: re-grounded verbatim.
+
+<work_state source=".said" kind="resume-after-compaction">
+Resume EXACTLY here (the host compacted; this is your own saved work-state, verbatim):
+Building compaction-survival as a CORE memory function in sca-core (NOT vault -- vault is enterprise-only).
+Next: wire SessionStart re-ground so it fires automatically on the host hook.
+Decided: OWN not pointer; work-state is free-form NL (the agent's words), not a rigid field schema;
+  idempotency threshold = size > 1, NOT >= 1.
+Exact values (a summary would drop these): MIN_COMMON_STEPS = 3; recall score = rel_conf*(0.3 + 0.4*sem + 0.3*intent) @ ask.rs:1542; last good commit = fd2bf9e.
+Ruled out (DON'T retry): Soft-ZCA whitening -- tested negative, recall@3 stayed 1/3.
+Plan: step 2 of 3 (work-state continuity).
+</work_state>
+
+
+PASS -- .said re-grounds the EXACT work-state after compaction; the host loses it, .said does not.

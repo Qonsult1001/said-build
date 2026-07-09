@@ -13,10 +13,22 @@ If you change a limitation here, update the matching roadmap entry in the same c
 
 ## 1. Retrieval
 
-### 1.1 LoCoMo temporal category sits at 0.391 R@10
-- **Limitation** — no time-aware scoring. Queries like "what did Alice say last Thursday" don't prefer frames whose timestamp falls in the relevant range.
-- **Impact** — weakest LoCoMo category by a wide margin. Most real-world chat recall is temporal.
-- **Enhancement** — parse temporal phrases from the query ("yesterday", "last week", "on March 5") via a tiny NLU, then boost frames whose `created_at` overlaps the range. No LLM needed; a 200-line grammar covers 90% of phrasings.
+### 1.1 Temporal — PARTIALLY SHIPPED (write-time grounding); relative-word query resolution still open
+- **Limitation** — no age-filtered retrieval: `created_at` is stamped once at ingest and is not a query
+  filter, so the engine cannot compute "last quarter/year" relative to *today* at query time.
+- **SHIPPED (commit `bd3503b`, FIXES-LOG #11)** — WRITE-TIME date grounding (the research-proven Mem0
+  Layer-1 approach, verified in the local Mem0 source): when a personal memory is saved, relative phrases
+  are resolved to absolute dates IN the stored text ("Last year I…" → "…(around 2025)") deterministically
+  (no LLM), so plain semantic recall finds them. `time_compat::ground_relative_dates`; handles last
+  year / this year / last quarter / last month with year-boundary wrapping. Result: "last year/month"
+  recall moved to @1 (was @3), and absolute queries ("in 2025", "Q2 2026") hit the grounded token. The
+  answering LLM does the remaining date-math over the top-K for free (Claude reads them).
+- **Still open** — (a) query-side resolution of relative words NOT present in the stored text (a query
+  "last year" against a memory that only says "in 2025" relies on the LLM, not the engine); (b) phrases
+  beyond year/quarter/month ("N days ago", "last Tuesday"); (c) **FIXES-LOG #12** — MCP grounding is not
+  persisted in a large single-session save-per-write batch (block-compaction save path; CLI is immune).
+- **Impact** — the common "what did I do last year/quarter" case now works for interactive use; the
+  LoCoMo relative-word category and the MCP-batch persistence bug remain.
 - **Roadmap §** — [Retrieval / Temporal scoring](12-roadmap.md#retrieval)
 
 ### 1.2 NarrativeQA at 0.721 — below the MTEB class average
@@ -42,6 +54,129 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Impact** — slower + less precise retrieval for non-Latin-script brains.
 - **Enhancement** — UTF-8-aware trigram with Unicode normalization (NFKC) before windowing.
 - **Roadmap §** — [Retrieval / Unicode trigrams](12-roadmap.md#retrieval)
+
+### 1.6 Large-repo INGEST: RESOLVED — 37 k Wonga peaks 486 MB (under the 580 MB target), ingests in ~20 s, recalls correctly
+
+- **ROOT CAUSE FOUND + FIXED (2026-07-02): CSV data dumps. Not SQL, not the word index, not the allocator.**
+  A **per-directory peak test** (ingest each Wonga subdir alone, measure peak) isolated it in one shot:
+  `Wonga Compressed Project for Modernization` peaked **750 MB ALONE**, while every code/SQL-only dir —
+  including the heavy-SQL `AB` (2,969 `.sql` files) — peaked **≤202 MB**. So SQL was never the problem
+  (the owner said this from the start). That one dir carries **1,137 CSV transaction-dumps each UNDER the
+  5 MB per-file cap** (85 MB total) that char-chunked into **~346 k passages** — the spike. A per-file size
+  cap cannot catch a *swarm* of small-ish data dumps; the fix is excluding the **type**. `.csv` removed from
+  `PLAIN_TEXT_EXTENSIONS` (opt back in with `SAID_INGEST_CSV=1`, still size-capped). Commit `eef73c0`.
+- **MEASURED result:** culprit dir **750 → 223 MB**; **full 37 k Wonga 920 → 486 MB** (under the 580 MB
+  constant-memory target), ingest **~3 min → ~20 s** (9 s read + 11 s compact), clean 44 MB brain. Recall
+  unaffected — cold `ask "amortization schedule calculation"` still returns `AmortizationSchedule::Build`
+  at score 1.00; SQL tables still recalled. This is the "runs within phone memory" contract met.
+- **The measurement-method lesson (why this took so long).** Earlier runs reported a "~1.4 GB
+  budget-invariant floor." That number was **inflated by a stray `said` process** (a leftover MCP/prior run
+  holding ~528 MB) that the external `Get-Process said | Measure-Object -Sum` poller summed into every
+  reading. An **in-process** probe (`K32GetProcessMemoryInfo`, reads *this* PID) gave the true single-process
+  peak (~920 MB pre-fix) and the flat tail; the per-directory A/B then pinned the cause to one dir. Chasing
+  the phantom sent several fixes down the wrong path (word-index SPIMI spill — only ~136 MB; rayon
+  thread-count — 871 vs 920; passage-budget batching — *worse* at 954; mimalloc — worse). **Lesson: measure
+  the exact PID from inside the process, and isolate by input (per-dir) before touching code.**
+- One real transient fix did land on the way (kept): the encode window stored every passage embedding
+  (`DocEnc.passages: Vec<Vec<f32>>`) → replaced with an incremental `passage_sum` fold (bit-identical),
+  which cut the 13 k-SQL encode transient 786 → 233 MB (commit 812e178).
+
+<details><summary>Earlier (superseded) investigation notes</summary>
+
+- **Superseded 2026-07-01 note — the "~1.4 GB budget-invariant floor" was the stray-process artifact above.**
+- **Owner decision (2026-07-01): SHIP the working fix.** The crash-fix + correct recall is the real value;
+  driving the ~1.4 GB floor to ~500 MB requires restructuring `init` so frames-pending + mmap + index do
+  not all coexist (compact per-batch during read, drop the pending buffer, derive WIDX from spilled
+  segments — true single-pass SPIMI). That is real surgery with careful bit-identity verification, deferred.
+  Until then: a 37 k-doc monorepo ingests crash-free + recalls at ~1.4 GB, needs a box with >2 GB free.
+
+<details><summary>Earlier investigation notes (kept for history — the CSV/O(N²)/WIDX work still stands)</summary>
+
+- **STATUS (measured, honest, 2026-07-01).** The REAL headline cause was **CSV DATA DUMPS**, not the word
+  index. Wonga's actual code is only **82 MB** (.cs + .sql, 11,843 files); it also carried **3.8 GB of
+  `african_bank_data/source/*.csv`** (an 831 MB transaction export + 63 more >5 MB) that were ingested
+  because `.csv` was in `PLAIN_TEXT_EXTENSIONS` → char-chunked into a multi-GB passage explosion = the
+  3.3 GB OOM. **Fix:** `should_enroll()` caps NON-code text/data files at `SAID_TEXT_MAX_BYTES` (default
+  5 MB); code/SQL uncapped (both init filter sites). **Result:** Phase-1 read **200–370 s → 14.4 s**
+  (~20×), Phase-2 encode **100.6 s, no crash**, files 15,249 → 15,186 (63 dumps excluded).
+- **Measured memory breakdown @ 37,112 docs** (CSV excluded, skip-resident on), via `SAID_MEM_REPORT`:
+  lexical word index = **459 MB total** (`vocabulary_fast=400 MB` dominant, `word_inverted_fast=0 MB`
+  [skip-resident works], `doc_word_sets=20 MB`, `doc_word_tf=38 MB`) — **UNDER the 580 MB ceiling**; frame
+  store `pending=285 MB`. So the word index AND the frame buffer are both fine. (An earlier note here
+  guessed the per-doc structures were 800/900 MB — WRONG, they are 20/38 MB; corrected by the mem-report.)
+- **PHASE-3 HANGS FIXED — full-defaults Wonga now ingests END-TO-END (milestone).** Two O(N²) passes hung
+  Phase 3 on 37k frames; both fixed with record-linkage BLOCKING (Ravikumar VLDB'03 / Papadakis 2013),
+  deterministic + bit-identical:
+  - **OKF** (`build_concept_links`, said_file.rs) — the title-mention step was O(frames × titles) = 1.37 B
+    pairs + a body decompress per frame. Now a token index + O(1) set-membership (a title is a body word-
+    token). Same 6,274 edges. (36c7b84)
+  - **Harvest** (`harvest_scan`, harvest.rs) — skeleton clustering was all-pairs Jaccard = ~105 M comps on
+    ~14.5 k functions. Now blocked by shared call-token (Jaccard ≥ 0.70 ⇒ must share a call). Same
+    clusters. (b509fd1)
+  - **Proof:** full-defaults run (OKF on + harvest on + auto-spill) COMPLETED — `[okf] 6274 edges` +
+    `[harvest] 771 blueprints` + `Compacted + saved`, exit 0, a **82.3 MB brain, 37,790 memories, 14,560
+    symbols**. Recall verified (`amortization schedule` → the real `AmortizationSchedule.cs` constructor,
+    score 1.00). First true full-config 37 k-frame Wonga brain.
+- **Spill budget now PER-SYSTEM** (4e9b1f1): `clamp(available_RAM × 12%, 16 MB, 512 MB)` via `sysinfo`
+  (Elasticsearch/Lucene/DuckDB precedent). 580 MB is the low-RAM-device guarantee (auto-spill there);
+  capable machines stay at the ceiling and don't force-spill (spill costs ~14× read time — Spark/PostgreSQL
+  "budget high, avoid spilling").
+- **REMAINING for 580 MB on low-RAM devices:** peak on a high-RAM machine is still ~2 GB, from the
+  **compact transient** (`frames.rs::compact_block_dict`): `raw_frames` holds all frames' decompressed
+  bytes at once + a second full `flat` copy for zstd dictionary training + all compressed blocks collected
+  before merge. NOT the word index (459 MB) or frames (285 MB). Fix: window the block compression + drop
+  the redundant `flat` full-copy. (Recorded in memory `large-repo-ingest-too-slow`.) The sniper-shot A/B
+  that isolated this: `SAID_OKF_LINKS=0` + `SAID_INIT_HARVEST=0` — if peak drops to ~500 MB the culprit is
+  OKF/harvest (make it streaming); if still ~2 GB it is `compact_block_dict` (bound the repack).
+- **What SHIPPED + WORKS (real value):** the disk-backed WIDX word-index section
+  (`crates/sca-core/src/word_index.rs`) — serialize (varint-delta postings) + `WidxReader` in-place mmap
+  decode + save/open persistence + WIDX-aware query sites (`docs_for_wid`) + skip building the resident
+  inverted map during init. All **bit-identical recall** (tests `test_widx_from_core`,
+  `skip_resident_wordidx_recall_matches_normal`; lib 98/0; binary regression 15/15). A re-opened brain
+  reads postings from mmap and no longer rebuilds the 2.3 GB word index at query time. The crash that made
+  Wonga totally un-ingestable is gone.
+- **What's LEFT for 580 MB:** apply the SAME SPIMI/mmap pattern to the per-doc structures
+  (`doc_word_sets_fast`, `doc_word_tf_fast` → spill to disk during the merge, derive WIDX from the spilled
+  segments) and stream the Phase-1 frame buffer harder. Same technique, more surface. Until then, a 37k-doc
+  monorepo ingests (crash-free) but at ~3 GB, not 580 MB.
+- **Not duplicated by LAM (checked).** `SAID-ECHO/LAM/LAM`'s word index (`rust_candle/src/crystalline.rs`)
+  is the SAME in-RAM `HashMap` inverted index with the SAME OOM and NO persistence; LAM's
+  `MMAP_IMPLEMENTATION_*.md` are unbuilt PROPOSALS for dense embeddings, not the sparse word index. So the
+  new WIDX section (`crates/sca-core/src/word_index.rs`) is the first real disk-backed inverted-index IO —
+  legitimate, not a reinvention. **Read side DONE** (WIDX serialize + `WidxReader` in-place mmap decode +
+  save/open persistence + a re-opened brain skips the rebuild). **Remaining:** the first-time `init` still
+  builds the index in RAM inside `add_docs_quantized` (BEFORE save), so it needs a SEGMENTED build that
+  spills postings to disk in bounded chunks — true single-pass SPIMI — to hold 580 MB on the FIRST build.
+- **Memory progress so far (the transient half).** The encode + word-prep phases previously each did one
+  `par_iter().collect()` over the WHOLE corpus. Two fixes landed:
+  - **Build-artifact skip** — `is_junk_dir` now skips .NET/SQL build dirs (`bin`, `obj`, `Debug`,
+    `Release`, `packages`, …). A .NET repo with no root `.gitignore` was pulling in `obj/Debug/*.generated.sql`
+    (regenerated proc dumps) — a passage explosion. (Helps, but is not the main lever: a real bank keeps
+    ~7.4k legitimate `.sql` files; the corpus is genuinely large.)
+  - **Streaming `index_batch`** — the encode phase now processes docs in **bounded windows** sized from
+    `SAID_INDEX_BUDGET` bytes (**default 580 MB** — the owner's constant-memory contract). Each window is
+    encoded in parallel, folded serially in doc order (bit-identical corpus mean), written to the mmap
+    scratch, then dropped. Peak heap for the phase = one window, not the corpus. Proven result-invariant:
+    `test_index_budget_streaming::windowing_is_result_invariant` (1-byte budget == 4 GB budget recall).
+- **Speed: STILL OPEN.** Phase-1 (read → tree-sitter chunk → encode) is still slow at scale (~250 s just to
+  read+chunk 16k files; full build tens of minutes). This is the remaining blocker for onboarding a real
+  enterprise codebase fast.
+- **Impact** — RAM is now safe (a 13k-file repo stays within the 580 MB ceiling, no crash). Onboarding
+  SPEED is the open product issue. RECALL is fast (~100 ms warm, doc 35).
+- **Enhancement (speed — still REQUIRED)** —
+  1. **Parallelize Phase-1 read+chunk** (the encode is already parallel + now windowed; the per-file
+     read+tree-sitter loop is still serial — fan it out with a bounded channel into the streaming writer).
+  2. **Incremental + resumable ingest** — checkpoint so a 13k-file init can resume; re-init only touches
+     changed files (BLAKE3 dedup exists — make it the end-to-end fast path).
+  3. **Serialize the word index** (open INIT-ROUTE-TRACE item) so it is never rebuilt.
+  4. **Research the SOTA**: zoekt / Tantivy / ripgrep+tree-sitter / mem0/Zep bulk ingest — batching,
+     mmap-direct chunking, SIMD batch encode, sharded indices. Measure files/sec + frames/sec + peak RAM as
+     a first-class benchmark.
+- **Target** — a 13k-file repo should init in **single-digit minutes within the 580 MB ceiling**, and
+  re-init in seconds. Memory target met; speed target pending.
+- **Roadmap §** — [Retrieval / fast large-repo ingest](12-roadmap.md#retrieval) — **HIGH PRIORITY.**
+
+</details>
 
 ## 2. Pillars + memory model
 
@@ -302,6 +437,20 @@ If you change a limitation here, update the matching roadmap entry in the same c
 - **Impact** — AI editors see all 31 tools regardless of need. Client-side filtering by description prefix works.
 - **Enhancement** — wire a `--mcp-tags` flag through `said-mcp` that filters at `tools/list` time.
 - **Roadmap §** — [Forge / mcp tag filter](12-roadmap.md#forge)
+
+---
+
+## 14. Product surface & discoverability
+
+### 14.1 The agent is the UI — autonomous brain use depends on the host agent
+- **Limitation** — there's no standalone GUI or slash-command surface for a normal user; the brain is reached **through an AI agent** (Claude/Cursor/Copilot via MCP). The brain-MCP constitution instructs the agent to use the brain autonomously — "**ALWAYS call `ask` first**" for user-context questions, and act as a note-taker (`remember` on decisions/facts) — but whether that actually happens depends on the **host agent obeying its instructions**. A less-compliant agent may answer from its own training instead of consulting the brain, or forget to save.
+- **Impact** — the brain's value (recall + auto-memory) is only realized when the agent leans on it. Users can't discover `admin`, deep `ask`, or `list_tags` on their own; they rely on the agent to invoke them. This was learned the hard way in testing — the mechanism (the nudge) exists, but adoption is agent-dependent.
+- **Why it's here, not fixed** — the mechanism is already built (constitution nudges + hook injection, doc [22-memory-injection-nudge-pattern.md](22-memory-injection-nudge-pattern.md)); the residual gap is a *product-surface* decision (a standalone UI / slash-command layer), which is a larger scope than a code fix. Recorded as an explicit decision to keep the "agent is the UI" model for now.
+- **Mitigation today** — the constitution is as strong a nudge as prompt-level steering allows; users who want reliable autonomous use should prefer a capable agent and can always invoke tools explicitly ("use my brain — remember X", "check my brain for Y").
+- **Roadmap §** — a standalone discovery surface (UI / slash commands) is not yet scheduled; see [12-roadmap.md](12-roadmap.md).
+
+### 14.2 Status "dream cycles" — RESOLVED
+- Fixed: `status`/`stats` now render a plain-English "Learning:" line ("learned from N searches, reorganized itself M times to surface answers faster") instead of the engineer-facing "Dream cycles: N". Raw counters remain under `stats --verbose`. (Kept here only as a pointer; the entry is resolved — remove on next cleanup.)
 
 ---
 

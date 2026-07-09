@@ -1,0 +1,9 @@
+{
+  "cs_cold":   { "correct": true, "convention": "generic C#: string.IsNullOrWhiteSpace + ArgumentException; assumed NO Guard helper exists (wrong house style)" },
+  "cs_primed": { "correct": true, "convention": "Guard.AgainstNullOrEmpty + domain exception BEFORE field assignment (the codebase's real convention)" },
+  "rs_cold":   { "correct": true, "convention": "Result<Self,String> with format! error string" },
+  "rs_primed": { "correct": true, "convention": "Result<Self,String> with typed Err, validate-up-front" },
+  "finding": "Both compile. But cold C# INVENTED a convention (IsNullOrWhiteSpace/ArgumentException, 'no Guard helper') while primed used the codebase's REAL Guard.AgainstNullOrEmpty pattern. Memory delivered convention-correctness, not just compile-correctness.",
+  "tokens_4_agents": 131710,
+  "primed_convention_cost_tokens": 200
+}

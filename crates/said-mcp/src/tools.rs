@@ -42,13 +42,17 @@ pub struct SearchTool {
 
 #[mcp_tool(
     name = "ask",
-    description = "Ask the brain a natural-language question — runs the 3-engine smart \
-                   router: Sym (exact symbol lookup, confidence 1.00), Grep (literal \
-                   keyword match, 0.40-0.95), and SCA semantic (the recall pipeline with \
-                   BM25, entity boost, multi-hop bridge, confidence 0.30-0.80). Results \
-                   are merged by confidence with a self-calibrating relative cutoff. \
-                   Use deep=true to widen the candidate pool. Same behavior as `said ask` \
-                   on the CLI — identical fusion + identical result set.",
+    description = "Find memories in the brain by MEANING — the main way to recall. Ask in plain \
+                   English (\"what did I decide about X\", \"who is my landlord\", \"what do I use for \
+                   enterprise systems\") and it returns the most relevant memories, best first, even \
+                   when your words don't match the stored words. Call this FIRST whenever the question \
+                   is about the user or what they've saved. Returns ranked results \
+                   [confidence][kind] doc_id + snippet; read the top few and answer from them — the \
+                   right memory is essentially always in that set (the brain surfaces the top-K, you \
+                   pick). It does not invent results: if it has nothing relevant it returns nothing \
+                   (say so, don't fabricate). deep=true widens the pool for broad \"tell me everything \
+                   about X\" synthesis. Same recall as `said ask` on the CLI. EFFICIENCY: don't re-ask \
+                   the same question many ways — one good `ask` and reading the results is enough.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -61,6 +65,14 @@ pub struct AskTool {
     /// Deep mode: widen SCA fetch to 100, return all results above cutoff.
     #[serde(default)]
     pub deep: Option<bool>,
+    /// Optional tag filter — narrow recall to ONLY memories carrying ALL of these tags
+    /// (e.g. `["quarter:Q4"]` or `["project:said","status:planned"]`), applied BEFORE
+    /// scoring. Use this when a plain query bleeds across memories that share a `[[concept]]`
+    /// (many `[[integrations]]` memories tie on a vague "Q4 integration" query) — scoping to
+    /// the exact facet is what breaks the tie. Call `list_tags` first to see the real tags.
+    /// Omit for a normal unscoped search. Exact match, AND across tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -69,14 +81,13 @@ pub struct AskTool {
 
 #[mcp_tool(
     name = "get",
-    description = "Read the exact content of a specific frame by its doc_id. \
-                   Use after 'search' to get the full text of a result. \
-                   Returns the complete frame content word-for-word.",
+    description = "Read the exact, word-for-word text of a specific memory by its id (doc_id). \
+                   Use after 'ask' to pull the full content of a result you want to quote.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetTool {
-    /// The doc_id to retrieve (e.g. "NL.pdf::page_0005" or "main.rs::compact_block_dict")
+    /// The id (doc_id) of the memory to retrieve — the value shown in an `ask` result.
     pub doc_id: String,
 }
 
@@ -92,6 +103,23 @@ pub struct GetTool {
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListConceptsTool {
     /// Optional: only return concepts starting with this prefix (case-insensitive).
+    pub prefix: Option<String>,
+}
+
+#[mcp_tool(
+    name = "list_tags",
+    description = "List the tags memories carry (the `tags` metadata vocabulary), with how many \
+                   memories carry each. This is the FREE-FORM taxonomy you attach when remembering \
+                   (e.g. project:said, topic:launch, status:planned) — distinct from list_concepts, \
+                   which is the [[wikilink]] graph. ALWAYS call this BEFORE remembering so you REUSE \
+                   an existing tag instead of inventing a synonym (reuse 'status:planned', don't add \
+                   'status:todo'), keeping the vocabulary converged so a later browse/filter is \
+                   accurate. Returns [{tag, memories}] sorted by frequency.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ListTagsTool {
+    /// Optional: only return tags starting with this prefix (e.g. "project:").
     pub prefix: Option<String>,
 }
 
@@ -142,8 +170,18 @@ pub struct IngestTool {
                    \
                    Pillars drive retrieval weighting: Episodic decays by recency, \
                    Semantic is confidence-ranked. Choosing well now pays off once \
-                   Dream consolidation lands. Optional id, title, and tags for \
-                   organization. The brain learns from every query (S_slow) and \
+                   Dream consolidation lands. \
+                   \
+                   ALWAYS TAG. Attach `tags` describing what THIS memory is about — the \
+                   facets you'd later browse or filter by (subject, project, status, kind, \
+                   time). Choose them yourself from the content; there is NO fixed tag list. \
+                   Use `namespace:value` form (e.g. `project:said`, `topic:launch`, \
+                   `status:planned`, `quarter:Q4`). CRITICAL: call `list_tags` FIRST and REUSE \
+                   an existing tag rather than coining a synonym (reuse `status:planned`, don't \
+                   add `status:todo`; reuse `project:said`, don't add `project:said-build`) — a \
+                   converged vocabulary is what makes later browse/filter accurate. \
+                   \
+                   Optional id and title too. The brain learns from every query (S_slow) and \
                    dreams after 100 queries (reconsolidation).",
     destructive_hint = false
 )]
@@ -174,10 +212,9 @@ pub struct RememberTool {
 
 #[mcp_tool(
     name = "status",
-    description = "Returns brain health: active frames, file size, dream cycles, \
-                   S_slow magnitude, pending dream queries, tombstone count, \
-                   SCA index coverage, symbol count. \
-                   Use to understand what the brain knows and how active it is.",
+    description = "Show how many memories the brain holds and its health: active memory count, \
+                   file size, deleted (recoverable) count, and index coverage. \
+                   Use to see what the brain knows and how much is stored.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -208,7 +245,7 @@ pub struct SymTool {
 
 #[mcp_tool(
     name = "history",
-    description = "Show the version history of a symbol or document. Walks the \
+    description = "Show the version history of a memory (by its id). Walks the \
                    tombstone chain showing each version with its semantic delta \
                    (how much the content changed). Like 'git log' for knowledge. \
                    Use before 'checkout' to see available versions.",
@@ -216,8 +253,10 @@ pub struct SymTool {
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct HistoryTool {
-    /// Symbol name or doc_id to show history for
-    pub name: String,
+    /// The id of the memory to show history for. Same `doc_id` used by `get`/`delete`
+    /// (accepts the legacy `name` alias too).
+    #[serde(alias = "name")]
+    pub doc_id: String,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -226,15 +265,16 @@ pub struct HistoryTool {
 
 #[mcp_tool(
     name = "checkout",
-    description = "Restore a past version of a symbol or document as the new HEAD. \
+    description = "Restore a past version of a memory (by its id) as the new current version. \
                    The current version becomes a tombstone (preserved in history). \
                    Use 'history' first to see available versions.",
     destructive_hint = false
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct CheckoutTool {
-    /// Symbol name or doc_id
-    pub name: String,
+    /// The id of the memory. Same `doc_id` used by `get`/`delete` (accepts the legacy `name` alias too).
+    #[serde(alias = "name")]
+    pub doc_id: String,
     /// Version index from 'history' (0 = original, 1 = first edit, etc.)
     pub version: u32,
 }
@@ -337,7 +377,10 @@ pub struct EditBatchTool {
     description = "Delete memories by doc_id OR by age. Supports enterprise data retention \
                    policies (GDPR, SOX). Examples: delete a specific memory, delete everything \
                    older than 30 days, delete everything before a date. Frames are soft-deleted \
-                   (tombstoned) — preserved in history but removed from search results.",
+                   (tombstoned) — preserved in history but removed from search results, and \
+                   recoverable via `admin restore`. This ONLY removes memories INSIDE the brain; \
+                   it NEVER deletes the .said file itself — the file, and everything in it, is only \
+                   removed if the user deletes the file by hand. Prefer a dry-run first for bulk deletes.",
     destructive_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -351,8 +394,10 @@ pub struct DeleteTool {
     /// Delete all frames created before this date (YYYY-MM-DD format)
     #[serde(default)]
     pub before_date: Option<String>,
-    /// Only delete frames matching this tag (e.g., "ingest:code", "module:card")
-    /// If omitted, applies to all frames matching the time criteria
+    /// Only delete frames matching this tag (e.g. "project:wonga", "ingest:code", "module:card").
+    /// Can be used ALONE to remove an entire project — `delete(tag_filter: "project:xyz")` tombstones
+    /// every frame carrying that tag (the portable-brain project-wipe). Combined with a time criterion,
+    /// it narrows the time-based delete to that tag.
     #[serde(default)]
     pub tag_filter: Option<String>,
     /// Dry run — show what WOULD be deleted without actually deleting
@@ -781,10 +826,15 @@ pub struct DreamTool {
                    \n  - `list-tombstones`     list non-active frames (optional `like`) \
                    \n  - `restore`             re-promote `doc_id`'s newest tombstone \
                    \n  - `who-deleted`         lineage trail with tags for `doc_id` \
+                   \n\
+                   Enterprise compliance actions — available in the `full`/Enterprise build ONLY \
+                   (calling them on a lighter build returns a clear 'needs the Enterprise build' error): \
                    \n  - `legal-hold-add`      tag every frame with `legal_hold:<case>` \
                    \n  - `legal-hold-release`  strip the hold \
                    \n  - `retention-sweep`     reap tombstones older than `older_than_days` \
                                                keeping `keep_per_doc` most-recent per doc \
+                   \n  - `audit`               tamper-evident audit log of admin actions \
+                                               (remember, restore, legal-hold, …); chain-verified \
                    \
                    Legal holds block retention sweeps. Restores persist immediately. \
                    Every action saves the brain on success.",
@@ -793,7 +843,8 @@ pub struct DreamTool {
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct AdminTool {
     /// Which admin action to run — one of: `list-tombstones`, `restore`,
-    /// `who-deleted`, `legal-hold-add`, `legal-hold-release`, `retention-sweep`.
+    /// `who-deleted`, `legal-hold-add`, `legal-hold-release`, `retention-sweep`,
+    /// `audit`.
     pub action: String,
 
     /// Document id target (required by restore, who-deleted, legal-hold-*).
@@ -1105,6 +1156,11 @@ pub struct RecallFixTool {
     /// Minimum match confidence to return a fix (default 0.45). Below it: no match.
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// How many candidate fixes to return, highest-score first (default 5). Several are returned so
+    /// YOU pick the one whose TASK/change-set fits — when a similar problem out-scores the exact one,
+    /// the right fix is often rank 2-3 (the documented recall@5 = 100% contract).
+    #[serde(default)]
+    pub top_k: Option<u32>,
 }
 
 #[mcp_tool(
@@ -1140,23 +1196,133 @@ pub struct LearnFixTool {
     pub label: Option<String>,
 }
 
+#[mcp_tool(
+    name = "recall_blueprint",
+    description = "CODING MEMORY (blueprint) — recall the REUSABLE 80% structure for a SHAPE \
+                   WITHOUT calling an LLM. Describe the shape (e.g. 'Create<Entity> REST \
+                   endpoint'); .said returns the TOP candidate blueprints (default 3, most \
+                   relevant first) — YOU pick the one whose sections fit the task (the right \
+                   shape isn't always rank #1 on short skeletons), render it in the active \
+                   language, and write only the entity-specific 20%. No match → derive it, then \
+                   store with learn_blueprint. Pairs with recall_fix (the specific 20%).",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct RecallBlueprintTool {
+    /// The shape in plain words (the recall key).
+    pub shape: String,
+    /// Minimum match confidence (default 0.45). Below it: no match.
+    #[serde(default)]
+    pub min_score: Option<f32>,
+    /// How many candidate blueprints to return (default 3). Several are returned so YOU pick the one
+    /// whose sections fit the task — the right shape isn't always rank #1 on short skeletons.
+    #[serde(default)]
+    pub top_k: Option<u32>,
+}
+
+#[mcp_tool(
+    name = "learn_blueprint",
+    description = "CODING MEMORY (blueprint) — store the REUSABLE 80% structure for a SHAPE. \
+                   KEEP-FIRST by default: if a blueprint for this shape already exists this is a \
+                   no-op (the original stands). Set verified=true ONLY after the edited structure's \
+                   build/test gate is GREEN — then .said AUTO-UPDATES the blueprint (supersede if it \
+                   changed); the green gate is the whole 'is it better' check. Stored in the native \
+                   Procedural pillar, blake3-keyed on the shape. Pairs with learn_fix.",
+    destructive_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct LearnBlueprintTool {
+    /// The shape this blueprint covers, in plain words (the recall key).
+    pub shape: String,
+    /// The sections payload (JSON) — the language-neutral structure the LLM renders per language.
+    pub sections: String,
+    /// Optional language tag (e.g. "csharp"). Omit for a language-neutral blueprint.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Optional provenance breadcrumb. Never the lookup key.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The structure was edited and the build/test PASSED -> auto-update the blueprint (supersede if it
+    /// changed). Omit/false = keep-first (no-op if the shape already has a blueprint).
+    #[serde(default)]
+    pub verified: Option<bool>,
+}
+
+#[mcp_tool(
+    name = "harvest_scan",
+    description = "CODING MEMORY (blueprint) — STEP 1 of agent-in-the-loop harvest. Scans a repo and \
+                   returns the REPEATED code structures (clusters; support>=2) as JSON: each has the \
+                   common call-skeleton, sample code, and members. .said does NOT learn them — YOU (the \
+                   coding agent) read each cluster and name its ordered NL INTENT phases (the FRAMEWORK \
+                   80% only, e.g. 'accept request + write audit row', 'idempotency check', 'wrap + \
+                   return' — NOT the entity-specific slots), then call learn_blueprint with those NL \
+                   phases as sections. NL phases (not raw call tokens) are required: they are \
+                   language-neutral and recall by intent. Use ONCE when onboarding .said onto a repo.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct HarvestScanTool {
+    /// The repo directory to scan. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
+#[mcp_tool(
+    name = "harvest_blueprints",
+    description = "CODING MEMORY (blueprint) — scan an existing repo and AUTO-LEARN blueprints from \
+                   REPEATED structures. A function structure becomes a blueprint only if it repeats \
+                   (support>=2, clone-mining standard); one-offs are skipped. Keep-first, so re-running \
+                   never clobbers a hand-tuned blueprint. Use ONCE when onboarding .said onto an \
+                   existing codebase so future entities reuse what's already there.",
+    destructive_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct HarvestBlueprintsTool {
+    /// The repo directory to scan. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
 // Generate the tool enum that the handler dispatches on. Feature-gated
 // entries are doubled so the macro sees a fixed list in each cfg branch.
-#[cfg(not(feature = "forge"))]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
+//
+// BRAIN (free, memory-only) TOOL SURFACE — incremental hide-list.
+// The `brain` bundle is built WITHOUT `code` (and without `forge`). Coding tools that don't
+// belong in a pure-memory brain are hidden from its `tools/list` by omitting them from THIS
+// branch only — the `code` branches below keep every tool, so coding/coding-plus/full are
+// UNCHANGED (all 29+ tools intact).
+//
+// BRAIN = the PERSONAL (free) tier — memory only. Its MCP `tools/list` MIRRORS the brain CLI's
+// documented memory commands (create/add/get/delete/ask/stats/list-concepts/history/checkout/
+// admin/use), so CLI and MCP stay aligned. Everything else is a PAID tier and is hidden here:
+//   • ingest (PDF/DOCX)                                  → Pro tier
+//   • sym, init, discover, overview, snapshot, sandbox,
+//     clean, edit, edit_batch, harvest*, lsp_*, recall_fix,
+//     learn_fix, recall_blueprint, learn_blueprint        → Developer tier (code/coding-memory)
+//   • search (overlaps `ask`, handles code/SQL), salience,
+//     dream, sync, journal, session_end, tool_completion   → not user-facing memory verbs / not in
+//                                                            the brain CLI → hidden from the free surface
+// The code branches below keep every tool, so coding/coding-plus/full are UNCHANGED.
+#[cfg(all(not(feature = "forge"), not(feature = "code")))]
+tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, ListTagsTool, RememberTool, StatusTool,
+                      HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool]);
+
+// CODE builds (coding / coding-plus / full), no forge — FULL tool set, unchanged.
+#[cfg(all(not(feature = "forge"), feature = "code"))]
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool]);
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool]);
 
 #[cfg(feature = "forge")]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
-                      RecallFixTool, LearnFixTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,

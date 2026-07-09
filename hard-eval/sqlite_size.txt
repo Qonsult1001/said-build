@@ -1,0 +1,2 @@
+bundled libsqlite3.a (compiled from C source): 4.52 MB
+browser feature: sca-core only, off-by-default, native-only; no said-cli/said-mcp passthrough yet

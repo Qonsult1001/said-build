@@ -1,0 +1,62 @@
+[
+  {
+    "phase": "P1",
+    "name": "ingest+status",
+    "pass": true,
+    "detail": "8781 memories, 10.5MB, 50.2s"
+  },
+  {
+    "phase": "P2",
+    "name": "ask ledger entry",
+    "pass": true,
+    "detail": "133ms, resp≈611tok"
+  },
+  {
+    "phase": "P2",
+    "name": "sym Account",
+    "pass": true,
+    "detail": "1ms"
+  },
+  {
+    "phase": "P2b",
+    "name": "harvest_blueprints",
+    "pass": true,
+    "detail": "355 blueprints learned, 4253ms"
+  },
+  {
+    "phase": "P2b",
+    "name": "recall_blueprint",
+    "pass": true,
+    "detail": "13ms"
+  },
+  {
+    "phase": "P3",
+    "name": "memory-loop recall",
+    "pass": true,
+    "detail": "5/5 recalled"
+  },
+  {
+    "phase": "P3",
+    "name": "project-provenance preserved",
+    "pass": true,
+    "detail": "5/5 carry project: tag"
+  },
+  {
+    "phase": "P4",
+    "name": "token savings",
+    "pass": true,
+    "detail": ".said 611tok vs file-read 9693tok = 16x"
+  },
+  {
+    "phase": "P2c",
+    "name": "delete tag+time (supported)",
+    "pass": true,
+    "detail": "[DRY RUN] Would delete 8584 frames:   CONTEXT.md::file::file:1   demo/"
+  },
+  {
+    "phase": "P2c",
+    "name": "FINDING: tag-only delete blocked",
+    "pass": true,
+    "detail": "tag-only worked (gap resolved?)"
+  }
+]

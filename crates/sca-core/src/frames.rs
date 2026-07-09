@@ -168,6 +168,52 @@ impl Pillar {
             MemoryType::Meta => Self::Semantic,
         }
     }
+
+    /// Inverse of `from_memory_type`: the MemoryType a frame should carry when stored under
+    /// this pillar (so decay/lifecycle behave correctly + the pillar round-trips through the
+    /// legacy memory_type field). Consistent with the documented forward map
+    /// (docs/said-structure/04-four-pillars/memory.md):
+    ///   Episodic→Episodic, Semantic→Factual (decay 0.85), Procedural→Procedural,
+    ///   Memory→Relational (the doc's Relational/Meta→Memory safety net inverts to Relational).
+    /// External/Code/Document have no dedicated legacy MemoryType → Factual (distilled
+    /// knowledge, decay like facts). Used by `remember_with_pillar`.
+    pub fn to_memory_type(self) -> MemoryType {
+        match self {
+            Self::Episodic => MemoryType::Episodic,
+            Self::Semantic => MemoryType::Factual,
+            Self::Procedural => MemoryType::Procedural,
+            Self::Memory => MemoryType::Relational,
+            Self::External => MemoryType::Factual,
+            Self::Code => MemoryType::Factual,
+            Self::Document => MemoryType::Factual,
+        }
+    }
+
+    /// Lowercase pillar name (for the auto-added `pillar:<name>` tag).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Episodic => "episodic",
+            Self::Semantic => "semantic",
+            Self::Procedural => "procedural",
+            Self::External => "external",
+            Self::Code => "code",
+            Self::Memory => "memory",
+            Self::Document => "document",
+        }
+    }
+
+    /// Short prefix for auto-generated doc_ids under this pillar (e.g. `ep_`, `sem_`).
+    pub fn doc_id_prefix(self) -> &'static str {
+        match self {
+            Self::Episodic => "ep_",
+            Self::Semantic => "sem_",
+            Self::Procedural => "proc_",
+            Self::External => "ext_",
+            Self::Code => "code_",
+            Self::Memory => "mem_",
+            Self::Document => "doc_",
+        }
+    }
 }
 
 /// Options for putting a memory into the .said file.
@@ -395,6 +441,17 @@ impl FrameStore {
     #[cfg(feature = "encryption")]
     pub fn set_encryption_key(&mut self, key: [u8; 32]) {
         self.encryption_key = Some(key);
+    }
+
+    /// Bytes currently held in the in-RAM `pending` buffer (sum of each
+    /// pending frame's stored payload length). This is THE memory floor during
+    /// ingest: every not-yet-saved frame keeps its RAW content here until
+    /// save() compacts it. The streaming-spill path (#4) watches this against a
+    /// byte budget and flushes pending → disk (mmap) when it grows too large,
+    /// keeping `said init` at constant memory instead of holding the whole
+    /// corpus in RAM until save().
+    pub fn pending_bytes(&self) -> usize {
+        self.pending.iter().map(|p| p.compressed_data.len()).sum()
     }
 
     /// Number of active (non-deleted) frames.
@@ -646,16 +703,40 @@ impl FrameStore {
 
         // Collect indices of pending frames to re-pack into blocks.
         // Both Active and Tombstone participate so lineage is preserved.
-        for (i, pending) in self.pending.iter().enumerate() {
+        // MOVE the bytes out of self.pending (mem::take) instead of CLONING them — self.pending
+        // already holds every frame's decompressed bytes (the whole corpus), so cloning here made a
+        // SECOND full corpus copy (the ~550MB@13k / ~1.5GB@37k compact-phase transient — the blind
+        // spot in the earlier compress-only windowing). The moved-out slot is dead until the merge
+        // below rewrites pending[first].compressed_data, so this is safe + bit-identical.
+        // BUG FIX (BLAKE3 mismatch / recall-wipe): the earlier version mem::take'd the bytes out of
+        // EVERY eligible pending frame FIRST, then early-returned if fewer than 10 — leaving those
+        // frames with EMPTY compressed_data but still FrameEncoding::Plain and their original
+        // meta.checksum. On read, blake3::hash(empty) != checksum -> "[SAID] BLAKE3 mismatch" -> the
+        // frame returns None -> recall/sym silently return nothing (regression: a <10-frame brain, and
+        // any path leaving Plain frames un-blocked, read as empty). The moved-out bytes are only safe
+        // to drop AFTER the merge rewrites them into blocks — which the early-return skips.
+        // FIX: decide the <10 gate BEFORE taking any bytes, so a skipped compact leaves pending intact.
+        // BUG FIX (BLAKE3 mismatch / recall-wipe): the earlier version mem::take'd the bytes out of
+        // EVERY eligible pending frame FIRST, then early-returned if fewer than 10 — leaving those
+        // frames with EMPTY compressed_data but still FrameEncoding::Plain and their original
+        // meta.checksum. On reopen-from-disk read, blake3::hash(empty) != checksum -> "[SAID] BLAKE3
+        // mismatch" -> the frame returns None -> recall/sym silently return nothing (regression from
+        // 0620102: a <10-frame brain reads back empty). The moved-out bytes are only safe to drop
+        // AFTER the merge rewrites them into blocks — which the early-return skips.
+        // FIX: decide the <10 gate BEFORE taking any bytes, so a skipped compact leaves pending intact.
+        let eligible = self.pending.iter()
+            .filter(|p| p.meta.status != FrameStatus::Deleted
+                     && p.meta.encoding == FrameEncoding::Plain)
+            .count();
+        if eligible < 10 {
+            return (0, 0, 0);
+        }
+        for (i, pending) in self.pending.iter_mut().enumerate() {
             if pending.meta.status != FrameStatus::Deleted
                 && pending.meta.encoding == FrameEncoding::Plain
             {
-                raw_frames.push((i, pending.compressed_data.clone()));
+                raw_frames.push((i, std::mem::take(&mut pending.compressed_data)));
             }
-        }
-
-        if raw_frames.len() < 10 {
-            return (0, 0, 0);
         }
 
         // Step 2: Train dictionary from sampled frames.
@@ -688,70 +769,102 @@ impl FrameStore {
         let dict_size = dict.len();
         drop(flat_samples);
 
-        // Step 3: Group frames into blocks and compress each block
-        let mut blocks_created = 0usize;
-        let mut total_compressed: u64 = 0;
+        // Step 3: Group frames into blocks and compress each block.
+        //
+        // #4 throughput: block compression (zstd level-15) was ~99% of the save phase and fully
+        // SERIAL (measured 18.6s on Amortization). Each block compresses INDEPENDENTLY with the
+        // same shared dictionary, so we compress all blocks in PARALLEL (par_iter; each task
+        // builds its own Compressor with the shared dict — Compressor isn't Sync), collecting
+        // results IN BLOCK ORDER, then do the cheap serial merge into self.blocks/block_map/
+        // pending. The output bytes are byte-identical to the serial version (same dict, same
+        // level, same block grouping) — only the wall-clock changes. zstd is deterministic.
+        use rayon::prelude::*;
         self.blocks.clear();
         self.block_map.clear();
 
-        let mut compressor = match zstd::bulk::Compressor::with_dictionary(level, &dict) {
-            Ok(c) => c,
-            Err(_) => return (0, 0, 0),
-        };
+        // Per-block compression (parallel). Each entry: (frame_offsets, uncompressed_len,
+        // compressed_bytes) or None if this block's compressor failed (skipped, as before).
+        struct BlockOut {
+            frame_offsets: Vec<(u32, u32)>,
+            uncompressed_len: u32,
+            compressed: Vec<u8>,
+        }
+        let chunks: Vec<&[(usize, Vec<u8>)]> = raw_frames.chunks(block_size).collect();
+        let dict_ref: &[u8] = &dict;
+        // STREAMING compact (bounded memory): the old code par-compressed ALL blocks and collected
+        // every block's compressed output at once (compressed_blocks: Vec<Option<BlockOut>>), holding
+        // the whole corpus's compressed bytes in RAM before the serial merge — on a 37k-frame corpus
+        // that was the ~700MB-1GB save-phase transient. We now process blocks in BOUNDED BATCHES: par-
+        // compress a batch, serially merge it (which moves each block's bytes into `pending` + clears
+        // the raw frame bytes), then DROP the batch before the next. Peak = one batch of compressed
+        // output, not the corpus. Block order + block_id sequence + frame clearing are UNCHANGED, and
+        // zstd is deterministic, so the output .said is byte-identical to the un-batched version.
+        // Batch size derives from SAID_INDEX_BUDGET (bytes) / an estimated per-block cost — no magic.
+        let compress_budget: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok().and_then(|s| s.parse().ok()).filter(|&b: &usize| b > 0)
+            .unwrap_or(200 * 1024 * 1024);
+        let avg_block_bytes = (total_bytes / chunks.len().max(1)).max(1);
+        let block_batch = (compress_budget / avg_block_bytes.max(1)).clamp(1, chunks.len().max(1));
 
-        for chunk in raw_frames.chunks(block_size) {
-            // Build uncompressed block: concat all frame payloads
-            let mut block_raw = Vec::new();
-            let mut frame_offsets: Vec<(u32, u32)> = Vec::new();
+        let mut blocks_created = 0usize;
+        let mut total_compressed: u64 = 0;
+        let mut batch_start = 0usize;
+        while batch_start < chunks.len() {
+            let batch_end = (batch_start + block_batch).min(chunks.len());
+            let batch = &chunks[batch_start..batch_end];
+        let compressed_blocks: Vec<Option<BlockOut>> = batch
+            .par_iter()
+            .map(|chunk| {
+                // One compressor per task (with the shared dictionary).
+                let mut compressor = zstd::bulk::Compressor::with_dictionary(level, dict_ref).ok()?;
+                let mut block_raw = Vec::new();
+                let mut frame_offsets: Vec<(u32, u32)> = Vec::new();
+                for (_, data) in chunk.iter() {
+                    let offset = block_raw.len() as u32;
+                    let len = data.len() as u32;
+                    frame_offsets.push((offset, len));
+                    block_raw.extend_from_slice(data);
+                }
+                let uncompressed_len = block_raw.len() as u32;
+                let compressed = compressor.compress(&block_raw).ok()?;
+                Some(BlockOut { frame_offsets, uncompressed_len, compressed })
+            })
+            .collect();
 
-            for (_, data) in chunk {
-                let offset = block_raw.len() as u32;
-                let len = data.len() as u32;
-                frame_offsets.push((offset, len));
-                block_raw.extend_from_slice(data);
+            // Serial merge THIS BATCH (in block order) — identical state to the old serial loop.
+            for (chunk, out) in batch.iter().zip(compressed_blocks.into_iter()) {
+                let Some(out) = out else { continue }; // compressor failed → skip (as before)
+
+                let block_id = blocks_created as u32;
+                let block_idx = self.blocks.len();
+
+                self.blocks.push(CompressedBlock {
+                    id: block_id,
+                    offset: 0, // set during flush
+                    compressed_len: out.compressed.len() as u32,
+                    uncompressed_len: out.uncompressed_len,
+                    frame_count: chunk.len() as u16,
+                    frame_offsets: out.frame_offsets,
+                });
+
+                // Update each frame's metadata to point to this block
+                for (intra_idx, (pending_idx, _)) in chunk.iter().enumerate() {
+                    let pending = &mut self.pending[*pending_idx];
+                    pending.meta.encoding = FrameEncoding::ZstdDictBlock;
+                    self.block_map.insert(pending.meta.id, (block_idx, intra_idx));
+                }
+
+                // First frame in the chunk carries the compressed block bytes; the rest are
+                // cleared (skipped during flush).
+                let first_pending_idx = chunk[0].0;
+                total_compressed += out.compressed.len() as u64;
+                self.pending[first_pending_idx].compressed_data = out.compressed;
+                for (pending_idx, _) in chunk.iter().skip(1) {
+                    self.pending[*pending_idx].compressed_data = Vec::new();
+                }
+                blocks_created += 1;
             }
-
-            let uncompressed_len = block_raw.len() as u32;
-
-            // Compress the whole block with dictionary
-            let compressed = match compressor.compress(&block_raw) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let block_id = blocks_created as u32;
-            let block_idx = self.blocks.len();
-
-            let block = CompressedBlock {
-                id: block_id,
-                offset: 0, // set during flush
-                compressed_len: compressed.len() as u32,
-                uncompressed_len,
-                frame_count: chunk.len() as u16,
-                frame_offsets: frame_offsets.clone(),
-            };
-            self.blocks.push(block);
-
-            // Update each frame's metadata to point to this block
-            for (intra_idx, (pending_idx, _)) in chunk.iter().enumerate() {
-                let pending = &mut self.pending[*pending_idx];
-                pending.meta.encoding = FrameEncoding::ZstdDictBlock;
-                // Store block_id in a way we can recover: use offset field for block offset (set later)
-                // and compressed_len for block compressed_len (set later)
-                // The actual intra-block mapping is in self.block_map
-                self.block_map.insert(pending.meta.id, (block_idx, intra_idx));
-            }
-
-            // Replace the first frame in the chunk with the compressed block data,
-            // clear the rest (they'll be skipped during flush)
-            let first_pending_idx = chunk[0].0;
-            self.pending[first_pending_idx].compressed_data = compressed.clone();
-            for (pending_idx, _) in chunk.iter().skip(1) {
-                self.pending[*pending_idx].compressed_data = Vec::new(); // will be skipped
-            }
-
-            total_compressed += compressed.len() as u64;
-            blocks_created += 1;
+            batch_start = batch_end;
         }
 
         // Store dictionary
@@ -859,6 +972,25 @@ impl FrameStore {
                 current_offset += bytes.len() as u64;
                 pending.meta.offset = off;
                 pending.meta.compressed_len = bytes.len() as u32;
+            }
+        }
+
+        // FIXES-LOG #8: copy forward COMMITTED non-block frames (Plain/Zstd frames added by a PRIOR
+        // learn-fix / remember AFTER the brain was block-compacted — they were saved once, so they're in
+        // self.frames as committed, but they are NEITHER in a block NOR pending). The block-save path
+        // wrote only blocks + pending, so these committed inline frames were never re-written and their
+        // bodies were lost on the next save (the bug: a 2nd learn-fix blanked the 1st's body). Re-emit
+        // them from source_data at their current offset, then update the offset to the new location.
+        for frame in self.frames.iter_mut() {
+            if frame.status == FrameStatus::Deleted { continue; }
+            if frame.encoding == FrameEncoding::ZstdDictBlock { continue; } // handled via blocks above
+            let old_off = frame.offset as usize;
+            let comp_len = frame.compressed_len as usize;
+            if !source_data.is_empty() && old_off > 0 && old_off + comp_len <= source_data.len() && comp_len > 0 {
+                let new_off = current_offset;
+                data.extend_from_slice(&source_data[old_off..old_off + comp_len]);
+                current_offset += comp_len as u64;
+                frame.offset = new_off;
             }
         }
 
@@ -1357,6 +1489,35 @@ impl FrameStore {
         result
     }
 
+    /// Aggregate the tag vocabulary across all ACTIVE frames: every distinct tag
+    /// and how many active memories carry it, sorted by count desc then name asc.
+    /// Taxonomy-agnostic — it reports whatever tags were stored (the LLM chooses
+    /// them at save time), with NO hard-coded namespaces. This is the read side
+    /// that makes tags a browsable, self-describing vocabulary (surfaces the
+    /// `list_tags` / `list-tags` command) so an agent can see the conventions
+    /// already in use and converge on them instead of inventing synonyms.
+    /// `prefix`, if set, keeps only tags starting with it (e.g. "project:").
+    pub fn tag_counts(&self, prefix: Option<&str>) -> Vec<(String, usize)> {
+        use std::collections::HashMap;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let keep = |t: &str| prefix.map_or(true, |p| t.starts_with(p));
+        for frame in &self.frames {
+            if frame.status != FrameStatus::Active { continue; }
+            for t in frame.tags.iter().filter(|t| keep(t)) {
+                *counts.entry(t.clone()).or_insert(0) += 1;
+            }
+        }
+        for pending in &self.pending {
+            if pending.meta.status != FrameStatus::Active { continue; }
+            for t in pending.meta.tags.iter().filter(|t| keep(t)) {
+                *counts.entry(t.clone()).or_insert(0) += 1;
+            }
+        }
+        let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v
+    }
+
     /// Read and decompress a frame's content from the raw file data.
     /// `file_data` is the entire .said file (or mmap'd region).
     /// Read the raw decompressed payload of a frame by its frame_id.
@@ -1408,11 +1569,20 @@ impl FrameStore {
     }
 
     pub fn read_frame(&mut self, doc_id: &str, file_data: &[u8]) -> Option<Vec<u8>> {
-        // Check pending frames first (not yet flushed to file)
-        // Clone data out to avoid borrow conflict with &mut self for block cache
-        let pending_match = self.pending.iter().find(|p| {
-            p.meta.doc_id == doc_id && p.meta.status == FrameStatus::Active
-        }).map(|p| (p.meta.clone(), p.compressed_data.clone()));
+        // Check pending frames first (not yet flushed to file).
+        // O(1) lookup via doc_id_map, NOT a linear `pending.iter().find()`. The linear scan was an
+        // O(N²) trap during build_index: reading all N pending frames' text (one read_frame each) ×
+        // scanning up to N pending per read = ~N² comparisons. Measured on Wonga: each dir alone
+        // ingested in ~13 s (≤12k frames) but the full 37k took 458 s — 10× the sum of the parts,
+        // the O(N²) signature. doc_id_map stores `frames.len() + pending_idx` (see push at the
+        // supersede/insert site), so a pending frame is at `map[doc_id] - frames.len()`. Same lookup
+        // supersede() already uses. Falls through to the committed-frame path if not pending.
+        let frame_count = self.frames.len();
+        let pending_match = self.doc_id_map.get(doc_id)
+            .and_then(|&global_idx| global_idx.checked_sub(frame_count))
+            .and_then(|pending_idx| self.pending.get(pending_idx))
+            .filter(|p| p.meta.doc_id == doc_id && p.meta.status == FrameStatus::Active)
+            .map(|p| (p.meta.clone(), p.compressed_data.clone()));
 
         if let Some((meta, on_disk)) = pending_match {
             if meta.encoding == FrameEncoding::ZstdDictBlock {
@@ -2058,6 +2228,24 @@ impl FrameStore {
             } else { 1.0 },
             pending_frames: self.pending.len(),
         }
+    }
+
+    /// Approximate resident heap bytes of the FrameStore's in-RAM holders (#4 scale).
+    /// `pending` holds every not-yet-flushed frame's COMPRESSED content until save() — on a
+    /// fresh full init that is the entire corpus, the dominant memory floor. Gated diagnostic.
+    pub fn frame_store_mem_report(&self) -> String {
+        let pending_bytes: usize = self.pending.iter()
+            .map(|p| p.compressed_data.len() + std::mem::size_of::<PendingFrame>()).sum();
+        let blocks_bytes: usize = self.blocks.iter().map(|b| b.compressed_len as usize).sum();
+        let cache_bytes: usize = self.block_cache.values().map(|v| v.len()).sum();
+        let frames_meta: usize = self.frames.len() * std::mem::size_of::<FrameMeta>();
+        let mb = |b: usize| (b as f64) / 1_048_576.0;
+        format!(
+            "frame_store_mem: pending={:.0}MB ({} frames) blocks={:.0}MB block_cache={:.0}MB \
+             frames_meta={:.0}MB",
+            mb(pending_bytes), self.pending.len(), mb(blocks_bytes),
+            mb(cache_bytes), mb(frames_meta),
+        )
     }
 }
 

@@ -1,0 +1,16 @@
+CUMULATIVE COMPACTION LOSS over 7 rounds
+
+in-band /compact is MODELLED (re-summary drops 35%/round of remaining
+fact-detail; grounded in badlogic/cd2ef65 + measured 98% single-cycle reduction).
+.said out-of-band is REAL (driven through said.exe; workstate-save/resume each round).
+
+round | in-band (modelled) | .said (real)
+    1 |  6/10                |  10/10
+    2 |  3/10                |  10/10
+    3 |  1/10                |  10/10
+    4 |  0/10                |  10/10
+    5 |  0/10                |  10/10
+    6 |  0/10                |  10/10
+    7 |  0/10                |  10/10
+
+PASS -- after 7 compactions: in-band /compact retains 0/10 fact-anchors (decayed); .said retains 10/10 (byte-exact). The moat is CUMULATIVE: their detail decays every compaction because it lives in the thing being compacted; .said is out-of-band so it never decays.

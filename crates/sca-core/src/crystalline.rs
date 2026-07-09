@@ -550,14 +550,31 @@ pub struct CrystallineCore {
     pub(crate) bytes_per_passage: usize,
     
     // Word-level lexical index (sca_dropin style: AHashMap for speed)
-    doc_word_sets_fast: Vec<AHashSet<String>>,
-    doc_word_tf_fast: Vec<AHashMap<String, u32>>,
+    // per-doc set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
+    doc_word_sets_fast: Vec<AHashSet<u32>>,
+    // per-doc {interned word-id → term frequency} (was {String→u32}; interned for #4).
+    doc_word_tf_fast: Vec<AHashMap<u32, u32>>,
     doc_texts_fast: Vec<String>,
     word_idf_fast: AHashMap<String, f32>,
-    phonetic_index_fast: AHashMap<String, AHashSet<String>>,
-    vocabulary_fast: AHashSet<String>,
-    word_inverted_fast: AHashMap<String, AHashSet<usize>>,
-    
+    // soundex → set of interned word-ids (was AHashSet<String>; interned for the #4 fix).
+    phonetic_index_fast: AHashMap<String, AHashSet<u32>>,
+    // word-id → set of doc indices (was AHashMap<String,_>; interned for the #4 fix).
+    word_inverted_fast: AHashMap<u32, AHashSet<usize>>,
+
+    // Word interning (#4 OOM fix): a single canonical store of each unique word, so the
+    // lexical `_fast` structures above can key on a compact `u32` id instead of duplicating
+    // the same `String` ~9× across them. `word_vocab[id] == word`; `word_to_id[word] == id`.
+    // Populated alongside the String structures during migration (one structure at a time),
+    // so each step is independently testable against the recall + memory gates.
+    word_vocab: Vec<String>,
+    word_to_id: AHashMap<String, u32>,
+
+    // Disk-backed word index (the 580MB fix): when a .said file carries a WIDX section, open()
+    // stores its decompressed bytes here. Queries read postings in place via WidxReader instead of
+    // the resident `_fast` HashMaps — so a large corpus never re-materializes the word index in RAM.
+    // None => no WIDX (old file / fresh brain) => the resident structures / rebuild path are used.
+    widx_bytes: Option<Vec<u8>>,
+
     // Hybrid search weights
     hybrid_alpha_semantic: f32,
     hybrid_alpha_lexical: f32,
@@ -625,8 +642,10 @@ impl Clone for CrystallineCore {
             doc_texts_fast: self.doc_texts_fast.clone(),
             word_idf_fast: self.word_idf_fast.clone(),
             phonetic_index_fast: self.phonetic_index_fast.clone(),
-            vocabulary_fast: self.vocabulary_fast.clone(),
             word_inverted_fast: self.word_inverted_fast.clone(),
+            word_vocab: self.word_vocab.clone(),
+            word_to_id: self.word_to_id.clone(),
+            widx_bytes: self.widx_bytes.clone(),
             hybrid_alpha_semantic: self.hybrid_alpha_semantic,
             hybrid_alpha_lexical: self.hybrid_alpha_lexical,
             rerank_depth: self.rerank_depth,
@@ -709,8 +728,10 @@ impl CrystallineCore {
             doc_texts_fast: Vec::new(),
             word_idf_fast: AHashMap::new(),
             phonetic_index_fast: AHashMap::new(),
-            vocabulary_fast: AHashSet::new(),
             word_inverted_fast: AHashMap::new(),
+            word_vocab: Vec::new(),
+            word_to_id: AHashMap::new(),
+            widx_bytes: None,
             hybrid_alpha_semantic: 0.60,
             hybrid_alpha_lexical: 0.40,
             rerank_depth: 100,
@@ -965,6 +986,11 @@ impl CrystallineCore {
     /// Maps similar-sounding words to same code (e.g., "anderton" → "A536", "anderson" → "A536").
     /// Empty word returns "0000" to match sca_dropin; first letter's code used as prev to collapse duplicates.
     fn get_soundex(&self, word: &str) -> String {
+        Self::get_soundex_static(word)
+    }
+
+    /// Soundex (no `&self` — usable from parallel doc preprocessing, #4).
+    fn get_soundex_static(word: &str) -> String {
         if word.is_empty() {
             return "0000".to_string();
         }
@@ -1802,7 +1828,7 @@ impl CrystallineCore {
                     .map(|m| m.keys().cloned().collect())
                     .unwrap_or_default();
                 let hit_idf: f32 = q_expanded.iter()
-                    .filter(|w| doc_words.contains(*w))
+                    .filter(|w| doc_words.contains(w.as_str()))
                     .map(|w| *self.word_idf.get(w).unwrap_or(&1.0))
                     .sum();
                 if hit_idf > 0.0 {
@@ -2218,8 +2244,9 @@ impl CrystallineCore {
         self.doc_texts_fast.clear();
         self.word_idf_fast.clear();
         self.phonetic_index_fast.clear();
-        self.vocabulary_fast.clear();
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.quantized_mode = false;
         self.force_route = None;  // Reset so non-needle tasks use default routing
     }
@@ -2317,37 +2344,125 @@ impl CrystallineCore {
         self.doc_texts_fast.get(idx).map(|s| s.as_str())
     }
 
-    /// Diagnostic: approximate heap bytes held by each lexical `_fast` structure.
-    /// Used to find the dominant allocation behind the index-stage OOM (#4).
-    /// Counts String/key bytes + container slot overhead (rough but comparable).
-    pub fn lexical_mem_report(&self) -> String {
+    /// Per-doc normalized text (lowercase, word-level), owned. Falls back to reconstructing
+    /// from the interned word set when doc_texts_fast is not cached (#4: it's no longer built
+    /// at index time — the words live once in doc_word_sets_fast as u32 ids).
+    pub fn doc_normalized_text(&self, idx: usize) -> Option<String> {
+        if let Some(t) = self.doc_texts_fast.get(idx) {
+            if !t.is_empty() { return Some(t.clone()); }
+        }
+        if idx < self.doc_word_sets_fast.len() {
+            return Some(self.doc_words_joined(idx));
+        }
+        None
+    }
+
+    /// Per-structure approximate heap bytes of the lexical `_fast` index.
+    /// Returns (doc_texts, doc_word_sets, doc_word_tf, word_inverted, phonetic, vocab).
+    /// Counts String/key bytes + container slot overhead (rough but comparable + stable,
+    /// so a memory-bound test can assert on it). This is the #4-OOM measurement surface.
+    fn lexical_mem_parts(&self) -> (usize, usize, usize, usize, usize, usize) {
         fn s_bytes(s: &str) -> usize { s.len() + 24 } // String header ~24B + bytes
         let doc_texts: usize = self.doc_texts_fast.iter().map(|s| s_bytes(s)).sum();
+        // doc_word_sets_fast now holds interned u32 ids (4 bytes each), not Strings.
         let doc_word_sets: usize = self.doc_word_sets_fast.iter()
-            .map(|set| set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
+            .map(|set| set.len() * 4 + 48).sum();
+        // doc_word_tf_fast keys are interned u32 ids (4 bytes) + u32 count = 8 bytes/entry.
         let doc_word_tf: usize = self.doc_word_tf_fast.iter()
-            .map(|m| m.iter().map(|(w, _)| s_bytes(w) + 12).sum::<usize>() + 48).sum();
+            .map(|m| m.len() * 8 + 48).sum();
+        // word_inverted_fast keys are now interned u32 ids (4 bytes), not Strings.
         let word_inv: usize = self.word_inverted_fast.iter()
-            .map(|(w, set)| s_bytes(w) + set.len() * 8 + 48).sum();
+            .map(|(_id, set)| 4 + set.len() * 8 + 48).sum();
+        // phonetic values are now interned u32 ids (4 bytes), not Strings.
         let phonetic: usize = self.phonetic_index_fast.iter()
-            .map(|(k, set)| s_bytes(k) + set.iter().map(|w| s_bytes(w) + 8).sum::<usize>() + 48).sum();
-        let vocab: usize = self.vocabulary_fast.iter().map(|w| s_bytes(w) + 8).sum();
+            .map(|(k, set)| s_bytes(k) + set.len() * 4 + 48).sum();
+        // the single interned vocab (word_vocab + word_to_id) — each unique word stored
+        // ONCE in word_vocab + once as a word_to_id key (replaces the former ~9× String dup).
+        let vocab: usize = self.word_vocab.iter().map(|w| s_bytes(w)).sum::<usize>()
+            + self.word_to_id.iter().map(|(w, _)| s_bytes(w) + 4 + 8).sum::<usize>();
+        (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab)
+    }
+
+    /// Total approximate heap bytes held by the lexical `_fast` index (the #4 OOM driver).
+    pub fn lexical_mem_bytes(&self) -> usize {
+        let (a, b, c, d, e, f) = self.lexical_mem_parts();
+        a + b + c + d + e + f
+    }
+
+    /// Heap bytes of the WORD-keyed lexical structures only — the part word-interning
+    /// targets: doc_word_sets + doc_word_tf + word_inverted + phonetic + the single shared
+    /// vocab. EXCLUDES doc_texts_fast (the raw per-doc text, which interning does not touch
+    /// and which scales with content, not vocabulary). This is the honest #4 metric: the
+    /// former String-keyed index stored each word ~9× here; interning collapses it to ~1×.
+    pub fn lexical_word_index_bytes(&self) -> usize {
+        let (_doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
+        doc_word_sets + doc_word_tf + word_inv + phonetic + vocab
+    }
+
+    /// Intern a word → compact u32 id, storing the canonical String exactly ONCE in
+    /// `word_vocab`. Subsequent lookups of the same word return the existing id (no new
+    /// allocation). This is the foundation for keying the lexical `_fast` structures on
+    /// u32 instead of duplicating each word's String across all of them (#4 OOM fix).
+    fn intern_word(&mut self, word: &str) -> u32 {
+        if let Some(&id) = self.word_to_id.get(word) {
+            return id;
+        }
+        let id = self.word_vocab.len() as u32;
+        self.word_vocab.push(word.to_string());
+        self.word_to_id.insert(word.to_string(), id);
+        id
+    }
+
+    /// Resolve an interned id back to its word (None if out of range).
+    #[allow(dead_code)]
+    fn word_of(&self, id: u32) -> Option<&str> {
+        self.word_vocab.get(id as usize).map(|s| s.as_str())
+    }
+
+    /// Convert a String-keyed term-frequency map into an interned-id-keyed one.
+    fn intern_tf(&mut self, tf: ahash::AHashMap<String, u32>) -> ahash::AHashMap<u32, u32> {
+        tf.into_iter().map(|(w, c)| (self.intern_word(&w), c)).collect()
+    }
+
+    /// Space-join a doc's interned word-id set back into a text string (phrase-match
+    /// fallback used when doc_texts_fast is empty). Order is set-iteration order — same
+    /// as the previous String-set behavior.
+    fn doc_words_joined(&self, doc_idx: usize) -> String {
+        match self.doc_word_sets_fast.get(doc_idx) {
+            Some(set) => set.iter()
+                .filter_map(|&id| self.word_of(id))
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => String::new(),
+        }
+    }
+
+    /// Diagnostic: per-structure breakdown of `lexical_mem_bytes`. SAID_MEM_REPORT=1.
+    /// Resident bytes of the quantized fingerprint matrix (grows per doc). #4 encode scale.
+    pub fn matrix_quantized_bytes(&self) -> usize {
+        self.matrix_quantized.len()
+    }
+
+    pub fn lexical_mem_report(&self) -> String {
+        let (doc_texts, doc_word_sets, doc_word_tf, word_inv, phonetic, vocab) = self.lexical_mem_parts();
         let mb = |b: usize| (b as f64) / 1_048_576.0;
+        let text_store = self.text_store.total_bytes() as usize; // the InMemoryTextStore raw-text copy
         format!(
-            "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  | TOTAL={:.0}MB",
+            "lexical_mem (docs={}): doc_texts_fast={:.0}MB  doc_word_sets_fast={:.0}MB  doc_word_tf_fast={:.0}MB  word_inverted_fast={:.0}MB  phonetic_index_fast={:.0}MB  vocabulary_fast={:.0}MB  text_store={:.0}MB  | TOTAL={:.0}MB",
             self.doc_ids.len(),
-            mb(doc_texts), mb(doc_word_sets), mb(doc_word_tf), mb(word_inv), mb(phonetic), mb(vocab),
-            mb(doc_texts + doc_word_sets + doc_word_tf + word_inv + phonetic + vocab),
+            mb(doc_texts), mb(doc_word_sets), mb(doc_word_tf), mb(word_inv), mb(phonetic), mb(vocab), mb(text_store),
+            mb(doc_texts + doc_word_sets + doc_word_tf + word_inv + phonetic + vocab + text_store),
         )
     }
 
     /// Clear only the word index structures (not quantized matrix or doc IDs).
     pub fn clear_word_index(&mut self) {
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
-        self.vocabulary_fast.clear();
     }
 
     /// Add a single document's words to the word index.
@@ -2362,13 +2477,13 @@ impl CrystallineCore {
         for w in words {
             if !doc_text.is_empty() { doc_text.push(' '); }
             doc_text.push_str(w);
-            word_set.insert(w.clone());
+            let wid = self.intern_word(w);
+            word_set.insert(wid);
             *word_tf.entry(w.clone()).or_insert(0) += 1;
             self.word_inverted_fast
-                .entry(w.clone())
+                .entry(wid)
                 .or_insert_with(AHashSet::new)
                 .insert(doc_idx);
-            self.vocabulary_fast.insert(w.clone());
         }
 
         // Ensure doc_word_sets_fast is large enough
@@ -2383,7 +2498,7 @@ impl CrystallineCore {
         }
 
         self.doc_word_sets_fast[doc_idx] = word_set;
-        self.doc_word_tf_fast[doc_idx] = word_tf;
+        self.doc_word_tf_fast[doc_idx] = self.intern_tf(word_tf);
         self.doc_texts_fast[doc_idx] = doc_text;
     }
 
@@ -2401,11 +2516,12 @@ impl CrystallineCore {
         use rayon::prelude::*;
 
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
         self.phonetic_index_fast.clear();
-        self.vocabulary_fast.clear();
 
         // Phase 1: Parallel per-doc tokenization (no shared state)
         struct DocResult {
@@ -2445,23 +2561,27 @@ impl CrystallineCore {
         // Phase 2: Sequential merge (builds shared inverted index + phonetic + vocabulary)
         for (doc_idx, result) in results.into_iter().enumerate() {
             for word in &result.unique_words {
+                let wid = self.intern_word(word);
                 self.word_inverted_fast
-                    .entry(word.clone())
+                    .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
 
-                self.vocabulary_fast.insert(word.clone());
 
                 let sx = self.get_soundex(word);
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
-                    .insert(word.clone());
+                    .insert(wid);
             }
 
-            self.doc_word_sets_fast.push(result.word_set);
-            self.doc_word_tf_fast.push(result.word_tf);
-            self.doc_texts_fast.push(result.doc_text);
+            // Convert this doc's word-set (Strings) to interned ids (all already interned
+            // in the loop above, so this just resolves them).
+            let id_set: ahash::AHashSet<u32> = result.word_set.iter()
+                .map(|w| self.intern_word(w)).collect();
+            self.doc_word_sets_fast.push(id_set);
+            let tf_ids = self.intern_tf(result.word_tf); self.doc_word_tf_fast.push(tf_ids);
+            self.doc_texts_fast.push(String::new()); // #4: not cached
         }
     }
 
@@ -2470,15 +2590,213 @@ impl CrystallineCore {
         self.art_prefilter(q_expanded, query_text)
     }
 
-    /// Get doc word set by index (for lexical scoring in engine.rs).
-    pub fn get_doc_word_set(&self, doc_idx: usize) -> Option<&ahash::AHashSet<String>> {
+    /// True if doc `doc_idx` contains `word` (resolves the word to its interned id).
+    /// Replaces the former `get_doc_word_set(...).contains(word)` pattern now that the
+    /// per-doc sets key on u32 ids (#4 interning).
+    pub fn doc_has_word(&self, doc_idx: usize, word: &str) -> bool {
+        // Disk-backed path (WIDX present): resolve the word to its id + decode the doc's word-set in
+        // place from the mmap. Bit-identical to the resident path (same ids, same membership).
+        if let Some(reader) = self.widx_reader() {
+            return match (reader.word_id_of(word), reader.doc_word_set(doc_idx)) {
+                (Some(id), Some(set)) => set.binary_search(&id).is_ok(),
+                _ => false,
+            };
+        }
+        match (self.word_to_id.get(word), self.doc_word_sets_fast.get(doc_idx)) {
+            (Some(id), Some(set)) => set.contains(id),
+            _ => false,
+        }
+    }
+
+    /// Get doc word-id set by index (internal lexical scoring).
+    pub fn get_doc_word_set(&self, doc_idx: usize) -> Option<&ahash::AHashSet<u32>> {
         self.doc_word_sets_fast.get(doc_idx)
     }
 
     /// Get per-doc word→TF map (for TF-IDF scoring in FullHybrid route).
     /// Matches SAID-LAM-private's `doc_word_tf[doc_idx]` access pattern.
-    pub fn get_doc_word_tf(&self, doc_idx: usize) -> Option<&ahash::AHashMap<String, u32>> {
+    pub fn get_doc_word_tf(&self, doc_idx: usize) -> Option<&ahash::AHashMap<u32, u32>> {
         self.doc_word_tf_fast.get(doc_idx)
+    }
+
+    /// True when there is no resident word index to serialize (nothing indexed yet).
+    pub fn word_index_is_empty(&self) -> bool {
+        self.word_inverted_fast.is_empty() && self.doc_word_sets_fast.is_empty()
+    }
+
+    /// True if the per-doc word structures exist (the always-built basis for a derived WIDX). Unlike
+    /// `word_index_is_empty`, this does NOT depend on word_inverted_fast — so it is correct even when
+    /// a bulk init skipped building the resident inverted map (the 580MB fix).
+    pub fn has_per_doc_index(&self) -> bool {
+        !self.doc_word_sets_fast.is_empty()
+    }
+
+    /// Attach decompressed WIDX bytes loaded from a `.said` file's WIDX section (open() calls this).
+    pub fn set_widx_bytes(&mut self, bytes: Option<Vec<u8>>) {
+        self.widx_bytes = bytes;
+    }
+
+    /// True if a disk-backed word index is attached (queries can read postings in place).
+    pub fn has_widx(&self) -> bool {
+        self.widx_bytes.is_some()
+    }
+
+    /// Build a borrowing reader over the attached WIDX bytes (cheap — just an offset scan). None if
+    /// no WIDX is attached or the bytes are malformed.
+    pub fn widx_reader(&self) -> Option<crate::word_index::WidxReader<'_>> {
+        let bytes = self.widx_bytes.as_deref()?;
+        crate::word_index::WidxReader::new(bytes).ok()
+    }
+
+    /// Doc indices containing `wid`, from the resident inverted map OR (when it was skipped at
+    /// ingest) the disk-backed WIDX. Returns owned indices so it works for both sources. Empty when
+    /// neither has it. This lets the query sites work whether or not the resident map was built.
+    fn docs_for_wid(&self, wid: u32) -> Vec<usize> {
+        if let Some(set) = self.word_inverted_fast.get(&wid) {
+            return set.iter().copied().collect();
+        }
+        if let Some(reader) = self.widx_reader() {
+            if let Some(docs) = reader.word_inverted(wid) {
+                return docs.into_iter().map(|d| d as usize).collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// True if the resident IDF map is empty (query hasn't hydrated it yet).
+    pub fn word_idf_is_empty(&self) -> bool { self.word_idf_fast.is_empty() }
+
+    /// Load `word_idf` VERBATIM from the attached WIDX (v2) bytes into the resident IDF maps, so a
+    /// cold `said ask` does NOT re-tokenise every doc via rebuild_entity_data (the ~3.7 s cold-CLI
+    /// cost). Returns true if WIDX carried IDF (present + v2). Cheap: a byte-scan, no re-tokenising.
+    pub fn hydrate_word_idf_from_widx(&mut self) -> bool {
+        let Some(bytes) = self.widx_bytes.as_deref() else { return false; };
+        let wi = match crate::word_index::WordIndex::deserialize_raw(bytes) {
+            Ok(w) => w,
+            Err(_) => return false,
+        };
+        if wi.word_idf.is_empty() { return false; } // v1 file → caller falls back to rebuild
+        self.word_idf.clear();
+        self.word_idf_fast.clear();
+        self.word_idf.reserve(wi.word_idf.len());
+        self.word_idf_fast.reserve(wi.word_idf.len());
+        for (w, idf) in wi.word_idf {
+            self.word_idf_fast.insert(w.clone(), idf);
+            self.word_idf.insert(w, idf);
+        }
+        true
+    }
+
+    /// Lazily build the resident word_inverted_fast + phonetic_index_fast if they were skipped at
+    /// ingest (SAID_SKIP_RESIDENT_WORDIDX) but a query needs them and no WIDX is attached (i.e. a
+    /// not-yet-saved in-process brain). Idempotent + cheap when already populated. After save+reopen
+    /// the WIDX path is used instead, so this only fires for the pre-save in-process query case.
+    pub fn ensure_resident_word_structures(&mut self) {
+        if self.word_inverted_fast.is_empty() && !self.doc_word_sets_fast.is_empty() {
+            self.rebuild_derived_word_structures();
+        }
+    }
+
+    /// (Re)build the resident word_inverted_fast + phonetic_index_fast from the per-doc word-sets +
+    /// vocab in ONE pass, each pre-sized to its final key count so there is NO incremental resize-
+    /// doubling (the spike that OOMed the first Wonga build). word_inverted is the transpose of
+    /// doc_word_sets; phonetic is soundex-per-vocab-word. Bit-identical to the old incremental build
+    /// (test derived_word_index_matches_resident). Idempotent: clears both first.
+    pub fn rebuild_derived_word_structures(&mut self) {
+        self.word_inverted_fast.clear();
+        self.phonetic_index_fast.clear();
+        // word_inverted: pre-size to vocab length (one entry per distinct word-id at most).
+        self.word_inverted_fast.reserve(self.word_vocab.len());
+        for (doc_idx, set) in self.doc_word_sets_fast.iter().enumerate() {
+            for &wid in set {
+                self.word_inverted_fast.entry(wid).or_insert_with(AHashSet::new).insert(doc_idx);
+            }
+        }
+        // phonetic: soundex of each vocab word -> its id.
+        for (wid, word) in self.word_vocab.iter().enumerate() {
+            let sx = Self::get_soundex_static(word);
+            self.phonetic_index_fast.entry(sx).or_insert_with(AHashSet::new).insert(wid as u32);
+        }
+    }
+
+    /// Build the WIDX by DERIVING word_inverted + phonetic from the per-doc word-sets + vocab,
+    /// instead of reading the resident `word_inverted_fast` / `phonetic_index_fast`. These two are
+    /// pure functions of the other data:
+    ///   * word_inverted[wid] = { doc_idx : wid ∈ doc_word_sets[doc_idx] }  (the transpose)
+    ///   * phonetic[soundex]  = { wid : soundex(vocab[wid]) == soundex }    (from vocab alone)
+    /// So they never need to be BUILT or held during ingest — the corpus-wide `word_inverted_fast`
+    /// accumulator (the ~1.6GB→3.3GB resize spike that OOMs the first build) can be dropped. This
+    /// method produces a WordIndex bit-identical to `to_word_index()` (proven by a test), and is the
+    /// basis for the segmented-build fix. `soundex` is the same fn the ingest path uses.
+    pub fn word_index_derived(&self) -> crate::word_index::WordIndex {
+        let doc_word_sets: Vec<Vec<u32>> = self.doc_word_sets_fast.iter()
+            .map(|set| { let mut v: Vec<u32> = set.iter().copied().collect(); v.sort_unstable(); v })
+            .collect();
+        let doc_word_tf: Vec<Vec<(u32, u32)>> = self.doc_word_tf_fast.iter()
+            .map(|m| { let mut v: Vec<(u32, u32)> = m.iter().map(|(&k, &c)| (k, c)).collect(); v.sort_unstable_by_key(|&(k, _)| k); v })
+            .collect();
+        // Derive word_inverted by transposing the per-doc sets.
+        let mut inv: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+        for (doc_idx, set) in doc_word_sets.iter().enumerate() {
+            for &wid in set {
+                inv.entry(wid).or_default().push(doc_idx as u32);
+            }
+        }
+        let word_inverted: Vec<(u32, Vec<u32>)> = inv.into_iter().collect(); // already sorted by wid + doc
+        // Derive phonetic from vocab (soundex of each word -> its id).
+        let mut ph: std::collections::BTreeMap<String, Vec<u32>> = std::collections::BTreeMap::new();
+        for (wid, word) in self.word_vocab.iter().enumerate() {
+            let sx = Self::get_soundex_static(word);
+            ph.entry(sx).or_default().push(wid as u32);
+        }
+        let phonetic: Vec<(String, Vec<u32>)> = ph.into_iter()
+            .map(|(sx, mut wids)| { wids.sort_unstable(); (sx, wids) })
+            .collect();
+        // word_idf VERBATIM (the IDF the ingest computed) so a cold query loads it instead of
+        // re-tokenising every doc. Sorted for a deterministic byte layout.
+        let mut word_idf: Vec<(String, f32)> = self.word_idf.iter().map(|(w, &v)| (w.clone(), v)).collect();
+        word_idf.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        crate::word_index::WordIndex {
+            vocab: self.word_vocab.clone(),
+            doc_word_sets,
+            doc_word_tf,
+            word_inverted,
+            phonetic,
+            word_idf,
+        }
+    }
+
+    /// Build a serialization-ready `WordIndex` (WIDX) from the resident BM25 structures. Every list
+    /// is SORTED so the byte format is deterministic + delta-encodable and the mmap reader can
+    /// binary-search. This is the write side of the disk-backed word index (the 580MB fix): save()
+    /// calls this, serializes it into the WIDX section, and the resident HashMaps can then be dropped.
+    pub fn to_word_index(&self) -> crate::word_index::WordIndex {
+        let doc_word_sets: Vec<Vec<u32>> = self.doc_word_sets_fast.iter()
+            .map(|set| { let mut v: Vec<u32> = set.iter().copied().collect(); v.sort_unstable(); v })
+            .collect();
+        let doc_word_tf: Vec<Vec<(u32, u32)>> = self.doc_word_tf_fast.iter()
+            .map(|m| { let mut v: Vec<(u32, u32)> = m.iter().map(|(&k, &c)| (k, c)).collect(); v.sort_unstable_by_key(|&(k, _)| k); v })
+            .collect();
+        let mut word_inverted: Vec<(u32, Vec<u32>)> = self.word_inverted_fast.iter()
+            .map(|(&wid, docs)| { let mut d: Vec<u32> = docs.iter().map(|&x| x as u32).collect(); d.sort_unstable(); (wid, d) })
+            .collect();
+        word_inverted.sort_unstable_by_key(|&(wid, _)| wid);
+        let mut phonetic: Vec<(String, Vec<u32>)> = self.phonetic_index_fast.iter()
+            .map(|(sx, wids)| { let mut w: Vec<u32> = wids.iter().copied().collect(); w.sort_unstable(); (sx.clone(), w) })
+            .collect();
+        phonetic.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        // word_idf VERBATIM (the IDF the ingest computed) so a cold query loads it instead of
+        // re-tokenising every doc. Sorted for a deterministic byte layout.
+        let mut word_idf: Vec<(String, f32)> = self.word_idf.iter().map(|(w, &v)| (w.clone(), v)).collect();
+        word_idf.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        crate::word_index::WordIndex {
+            vocab: self.word_vocab.clone(),
+            doc_word_sets,
+            doc_word_tf,
+            word_inverted,
+            phonetic,
+            word_idf,
+        }
     }
 
     /// Get IDF for a word (for lexical scoring in engine.rs).
@@ -2602,9 +2920,7 @@ impl CrystallineCore {
                 if !self.doc_texts_fast.is_empty() && i1 < self.doc_texts_fast.len() && i2 < self.doc_texts_fast.len() {
                     (self.doc_texts_fast[i1].clone(), self.doc_texts_fast[i2].clone())
                 } else if i1 < self.doc_word_sets_fast.len() && i2 < self.doc_word_sets_fast.len() {
-                    let t1: String = self.doc_word_sets_fast[i1].iter().cloned().collect::<Vec<_>>().join(" ");
-                    let t2: String = self.doc_word_sets_fast[i2].iter().cloned().collect::<Vec<_>>().join(" ");
-                    (t1, t2)
+                    (self.doc_words_joined(i1), self.doc_words_joined(i2))
                 } else {
                     return false;
                 }
@@ -2637,7 +2953,7 @@ impl CrystallineCore {
                 if !self.doc_texts_fast.is_empty() && i < self.doc_texts_fast.len() {
                     self.doc_texts_fast[i].clone() // already lowercase
                 } else if i < self.doc_word_sets_fast.len() {
-                    self.doc_word_sets_fast[i].iter().cloned().collect::<Vec<_>>().join(" ")
+                    self.doc_words_joined(i)
                 } else {
                     return 0;
                 }
@@ -2668,7 +2984,7 @@ impl CrystallineCore {
             let doc_text = if !self.doc_texts_fast.is_empty() && i < self.doc_texts_fast.len() {
                 self.doc_texts_fast[i].to_lowercase()
             } else if i < self.doc_word_sets_fast.len() {
-                self.doc_word_sets_fast[i].iter().cloned().collect::<Vec<_>>().join(" ")
+                self.doc_words_joined(i)
             } else {
                 continue;
             };
@@ -2769,7 +3085,11 @@ impl CrystallineCore {
         embeddings_flat: Vec<f32>,
         passage_counts: Vec<usize>,
         _gammas: Vec<f32>,
-        doc_words: Vec<Vec<String>>,
+        // #4 memory: take the per-doc TEXT (borrowed) and tokenize one doc at a time inside
+        // the word-index loop below, instead of receiving a pre-built Vec<Vec<String>> of
+        // EVERY word in EVERY doc (~237MB transient on a text-heavy chunk). The caller already
+        // holds these texts; we borrow them and never materialize the full word list.
+        doc_texts: &[String],
     ) {
         self.quantized_mode = true;
         let start_idx = self.doc_ids.len();
@@ -2790,54 +3110,118 @@ impl CrystallineCore {
             current_offset += passage_count;
         }
         
-        // Word-Level Indexing (sca_dropin style)
-        for (i, words) in doc_words.iter().enumerate() {
-            let doc_idx = start_idx + i;
-            let mut word_set = AHashSet::new();
-            let mut word_tf: AHashMap<String, u32> = AHashMap::new();
-            let mut doc_text = String::new();
-            
-            for w in words {
-                let w_lower = w.to_lowercase();
-
-                // Normalize: strip trailing punctuation
-                let w_normalized: String = w_lower
-                    .trim_end_matches(|c: char| c.is_ascii_punctuation())
-                    .to_string();
-
-                // Build doc_text from normalized words so phrase match
-                // is consistent with word_set (e.g. "munoz's" → "munoz")
-                if !doc_text.is_empty() {
-                    doc_text.push(' ');
-                }
-                doc_text.push_str(&w_normalized);
-                
-                if w_normalized.len() < 3 {
-                    continue;
-                }
-                
-                word_set.insert(w_normalized.clone());
-                *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
-                
-                self.word_inverted_fast
-                    .entry(w_normalized.clone())
-                    .or_insert_with(AHashSet::new)
-                    .insert(doc_idx);
-                
-                let sx = self.get_soundex(&w_normalized);
-                self.phonetic_index_fast
-                    .entry(sx)
-                    .or_insert_with(AHashSet::new)
-                    .insert(w_normalized.clone());
-                
-                self.vocabulary_fast.insert(w_normalized);
-            }
-            
-            self.doc_word_sets_fast.push(word_set);
-            self.doc_word_tf_fast.push(word_tf);
-            self.doc_texts_fast.push(doc_text);
+        // Word-Level Indexing (sca_dropin style). The pure per-doc work — tokenize, lowercase,
+        // punctuation-strip, soundex — is independent across docs and was ~60% of phase-2 time
+        // when serial (#4 throughput). We do it in PARALLEL (par_iter over docs, no shared
+        // state), producing for each doc the ordered list of (normalized_word, soundex) plus a
+        // tf map; then we MERGE into the shared interned structures SEQUENTIALLY in doc order,
+        // so the vocab ids and every index are bit-identical to the old serial build. The merge
+        // is cheap (HashMap inserts); the CPU-heavy tokenize/lowercase/soundex is parallel.
+        struct DocWords {
+            /// (normalized_word, soundex) in first-seen order; only words with len>=3.
+            indexed: Vec<(String, String)>,
+            tf: AHashMap<String, u32>,
         }
-        
+        // CRITICAL: the original add_docs_quantized received `doc_words` that were produced by
+        // ScaEngine::simple_tokenize (split_whitespace + lowercase + len>=3, NO regex, NO
+        // Porter2 stem). When #4 made this fn tokenize internally, an earlier revision wrongly
+        // used the STEMMED crystalline::simple_tokenize here — which silently rebuilt the whole
+        // BM25 word index from different tokens and dropped recall@10 0.95→0.90. We MUST match
+        // the engine's whitespace tokenizer exactly to keep the lexical index identical.
+        // 580MB CEILING (#4): the old code did one `doc_texts.par_iter().collect::<Vec<DocWords>>()`
+        // over the WHOLE corpus — every doc's word list + soundex + tf map held in RAM at once. On a
+        // 37k-frame SQL corpus that transient was multiple GB (a second whole-corpus materialization
+        // beyond the encode phase). We process doc_texts in BOUNDED WINDOWS: par-prepare a window,
+        // merge it sequentially, drop it, next window. Peak transient = one window, not the corpus.
+        // Windows are contiguous in doc order and merged in order, so vocab-id assignment + every
+        // index is BIT-IDENTICAL to the old single-collect build.
+        let word_budget: usize = std::env::var("SAID_INDEX_BUDGET")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&b: &usize| b > 0)
+            .unwrap_or(580 * 1024 * 1024);
+        // Rough transient cost per doc: avg text bytes × a factor for the (word String + soundex
+        // String + tf entry) expansion. Sample to keep huge-SQL-file corpora windowing tight.
+        let sample_n = doc_texts.len().min(64);
+        let avg_text: usize = if sample_n == 0 { 1 } else {
+            (doc_texts[..sample_n].iter().map(|t| t.len()).sum::<usize>() / sample_n).max(1)
+        };
+        let per_doc_cost = avg_text * 6; // ~6× text size for the DocWords expansion
+        let word_window = (word_budget / per_doc_cost.max(1)).clamp(1, doc_texts.len().max(1));
+
+        let mut merged = 0usize;
+        for chunk in doc_texts.chunks(word_window) {
+            let prepared: Vec<DocWords> = chunk
+                .par_iter()
+                .map(|text| {
+                    // MUST match ScaEngine::simple_tokenize EXACTLY (sub-token identifier splitting +
+                    // lowercase + len>=3) or the lexical index diverges from the engine's IDF/vocab
+                    // and recall drops. Uses the same shared splitter (bounds the code vocab — see
+                    // engine::split_identifier).
+                    let words: Vec<String> = text
+                        .split_whitespace()
+                        .flat_map(crate::engine::ScaEngine::split_identifier)
+                        .filter(|w| w.len() >= 3)
+                        .collect();
+                    let mut indexed: Vec<(String, String)> = Vec::with_capacity(words.len());
+                    let mut tf: AHashMap<String, u32> = AHashMap::new();
+                    for w in &words {
+                        let w_lower = w.to_lowercase();
+                        let w_normalized: String = w_lower
+                            .trim_end_matches(|c: char| c.is_ascii_punctuation())
+                            .to_string();
+                        if w_normalized.len() < 3 {
+                            continue;
+                        }
+                        *tf.entry(w_normalized.clone()).or_insert(0) += 1;
+                        let sx = Self::get_soundex_static(&w_normalized);
+                        indexed.push((w_normalized, sx));
+                    }
+                    DocWords { indexed, tf }
+                })
+                .collect();
+
+            // Sequential merge — build ONLY the per-doc structures + vocab interning here. The
+            // corpus-wide word_inverted_fast + phonetic_index_fast are NO LONGER built incrementally
+            // in this loop: that HashMap grew to ~1.6GB and its resize-doubling spiked to the 3.3GB
+            // that OOM-crashed the first Wonga build. They are derived ONCE, pre-sized, AFTER the loop
+            // (word_inverted = transpose of doc_word_sets; phonetic = soundex per vocab word) — proven
+            // bit-identical by test derived_word_index_matches_resident. Vocab-id assignment order is
+            // unchanged (intern_word still runs per word in doc-then-word order), so every id matches.
+            for dw in prepared.into_iter() {
+                let mut word_set = AHashSet::new();
+                for (w_normalized, _sx) in &dw.indexed {
+                    let wid = self.intern_word(w_normalized);
+                    word_set.insert(wid);
+                }
+                self.doc_word_sets_fast.push(word_set);
+                let tf_ids = self.intern_tf(dw.tf); self.doc_word_tf_fast.push(tf_ids);
+                self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
+                merged += 1;
+            }
+        }
+
+        if std::env::var("SAID_MEM_REPORT").is_ok() {
+            let mb = |b: usize| (b as f64) / 1_048_576.0;
+            let sets_b: usize = self.doc_word_sets_fast.iter()
+                .map(|s| s.capacity() * std::mem::size_of::<u32>() + 48).sum();
+            let tf_b: usize = self.doc_word_tf_fast.iter()
+                .map(|m| m.len() * (std::mem::size_of::<u32>() + std::mem::size_of::<u32>()) + 48).sum();
+            let vocab_b: usize = self.word_vocab.iter().map(|w| w.len() + 24).sum::<usize>()
+                + self.word_to_id.iter().map(|(w, _)| w.len() + 24 + 4 + 8).sum::<usize>();
+            eprintln!("  [mem] add_docs_quantized resident: doc_word_sets={:.0}MB  doc_word_tf={:.0}MB  vocab={:.0}MB  ndocs={}  vocab_words={}",
+                mb(sets_b), mb(tf_b), mb(vocab_b), self.doc_word_sets_fast.len(), self.word_to_id.len());
+        }
+        // Derive word_inverted_fast (transpose of the per-doc sets) + phonetic_index_fast (soundex per
+        // vocab word). SKIP it during bulk init (SAID_SKIP_RESIDENT_WORDIDX=1): the ~1.6GB resident
+        // inverted map is the last thing over the 580MB ceiling, and init saves immediately (WIDX is
+        // derived at save from the per-doc data), so the resident maps aren't needed pre-save. A
+        // long-lived process that queries pre-save falls back to a LAZY rebuild via
+        // ensure_resident_word_structures(). When NOT skipping, build once pre-sized (no resize spike).
+        if std::env::var("SAID_SKIP_RESIDENT_WORDIDX").as_deref() != Ok("1") {
+            self.rebuild_derived_word_structures();
+        }
+
         // Compute dynamic scale if holographic
         if self.holographic_16view {
             self.holographic_scale = self.compute_dynamic_scale(&embeddings_flat);
@@ -2964,11 +3348,12 @@ impl CrystallineCore {
                     continue;
                 }
 
-                word_set.insert(w_normalized.clone());
+                let wid = self.intern_word(&w_normalized);
+                word_set.insert(wid);
                 *word_tf.entry(w_normalized.clone()).or_insert(0) += 1;
 
                 self.word_inverted_fast
-                    .entry(w_normalized.clone())
+                    .entry(wid)
                     .or_insert_with(AHashSet::new)
                     .insert(doc_idx);
 
@@ -2976,14 +3361,13 @@ impl CrystallineCore {
                 self.phonetic_index_fast
                     .entry(sx)
                     .or_insert_with(AHashSet::new)
-                    .insert(w_normalized.clone());
+                    .insert(wid);
 
-                self.vocabulary_fast.insert(w_normalized);
             }
 
             self.doc_word_sets_fast.push(word_set);
-            self.doc_word_tf_fast.push(word_tf);
-            self.doc_texts_fast.push(doc_text);
+            let tf_ids = self.intern_tf(word_tf); self.doc_word_tf_fast.push(tf_ids);
+            self.doc_texts_fast.push(String::new()); // #4: not cached; readers fall back to doc_words_joined
         }
 
         self.rerank_depth = self.doc_ids.len();
@@ -3221,12 +3605,12 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
                     }
-                    
+
                     let score = if idf_total > 0.0 { idf_matched / idf_total } else { 0.0 };
                     (score, matched)
                 } else {
@@ -3382,7 +3766,7 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
@@ -3451,7 +3835,7 @@ impl CrystallineCore {
             let doc_words = &self.doc_word_sets_fast[doc_idx];
 
             let hit_idf: f32 = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .map(|w| *self.word_idf_fast.get(w).unwrap_or(&1.0))
                 .sum();
 
@@ -3596,7 +3980,7 @@ impl CrystallineCore {
             
             // 2. LEXICAL SCORE (Full TF-IDF)
             let overlap: AHashSet<String> = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .cloned()
                 .collect();
             
@@ -3615,7 +3999,9 @@ impl CrystallineCore {
             let mut entity_score = 0.0f32;
             let mut common_score = 0.0f32;
             for word in &overlap {
-                let tf = doc_tf.and_then(|m| m.get(word)).copied().unwrap_or(1) as f32;
+                let tf = self.word_to_id.get(word)
+                    .and_then(|id| doc_tf.and_then(|m| m.get(id)))
+                    .copied().unwrap_or(1) as f32;
                 let idf = *self.word_idf_fast.get(word).unwrap_or(&0.5);
                 // Dynamic TF: saturates for entity queries, stays linear for dialogue
                 let tf_component = (tf * tf_k1) / (tf + tf_k1);
@@ -3641,7 +4027,7 @@ impl CrystallineCore {
             let mut phrase_match_boost = 1.0f32;
             if !phrase_windows.is_empty() && !overlap.is_empty() {
                 'outer: for pw in &phrase_windows {
-                    if !pw.clean_words.iter().all(|w| doc_words.contains(w)) { continue; }
+                    if !pw.clean_words.iter().all(|w| self.doc_has_word(doc_idx, w)) { continue; }
                     if doc_text.contains(&pw.phrase) {
                         phrase_match_boost = if pw.w_size == 4 { 1.25 } else { 1.15 };
                         break 'outer;
@@ -3658,7 +4044,7 @@ impl CrystallineCore {
                 for word in &query_original_words {
                     if word.len() >= 3 && word.chars().next().unwrap().is_uppercase() {
                         let word_lower = word.to_lowercase();
-                        if doc_text.contains(*word) || doc_words.contains(&word_lower) {
+                        if doc_text.contains(*word) || self.doc_has_word(doc_idx, &word_lower) {
                             final_score *= 1.15;
                             break;
                         }
@@ -3884,10 +4270,10 @@ impl CrystallineCore {
         }
         let mut candidates: AHashSet<usize> = AHashSet::new();
 
-        // Word-level candidates (from word_inverted_fast)
+        // Word-level candidates (resident inverted map, or the disk-backed WIDX if it was skipped)
         for word in q_expanded.iter() {
-            if let Some(doc_indices) = self.word_inverted_fast.get(word) {
-                candidates.extend(doc_indices.iter());
+            if let Some(&wid) = self.word_to_id.get(word) {
+                candidates.extend(self.docs_for_wid(wid));
             }
         }
 
@@ -3937,7 +4323,7 @@ impl CrystallineCore {
             let doc_words = &self.doc_word_sets_fast[doc_idx];
 
             let hit_idf: f32 = q_expanded.iter()
-                .filter(|w| doc_words.contains(*w))
+                .filter(|w| self.word_to_id.get(*w).map_or(false, |id| doc_words.contains(id)))
                 .map(|w| *self.word_idf_fast.get(w).unwrap_or(&1.0))
                 .sum();
 
@@ -4078,7 +4464,7 @@ impl CrystallineCore {
                     for word in q_expanded.iter() {
                         let idf = *self.word_idf_fast.get(word).unwrap_or(&1.0) as f64;
                         idf_total += idf;
-                        if doc_words.contains(word) {
+                        if self.word_to_id.get(word).map_or(false, |id| doc_words.contains(id)) {
                             matched = true;
                             idf_matched += idf;
                         }
@@ -4205,7 +4591,7 @@ impl CrystallineCore {
 
         // If word index is empty (SCRM load without build_index), force PureSemantic.
         // The fingerprints are loaded — Hamming search works. No word index needed.
-        let route = if self.vocabulary_fast.is_empty() && route == QueryRoute::FullHybrid {
+        let route = if self.word_to_id.is_empty() && route == QueryRoute::FullHybrid {
             QueryRoute::PureSemantic
         } else {
             route
@@ -4335,7 +4721,7 @@ impl CrystallineCore {
             
             let in_idf = self.word_idf_fast.get(word);
             
-            if in_idf.is_some() || self.vocabulary_fast.contains(word) {
+            if in_idf.is_some() || self.word_to_id.contains_key(word) {
                 known_word_count += 1;
                 let idf = *in_idf.unwrap_or(&1.5);
                 total_idf += idf;
@@ -4361,7 +4747,7 @@ impl CrystallineCore {
                     // Try fuzzy expansion
                     let fuzzy_matches = self.fuzzy_expand_word_quantized(word, 5);
                     let valid_matches: Vec<String> = fuzzy_matches.iter()
-                        .filter(|m| *m != word && self.vocabulary_fast.contains(*m))
+                        .filter(|m| *m != word && self.word_to_id.contains_key(*m))
                         .cloned()
                         .collect();
 
@@ -4440,7 +4826,7 @@ impl CrystallineCore {
     fn fuzzy_expand_word_quantized(&self, word: &str, top_k: usize) -> Vec<String> {
         let word_lower = word.to_lowercase();
         
-        if self.vocabulary_fast.contains(&word_lower) {
+        if self.word_to_id.contains_key(&word_lower) {
             return vec![word_lower];
         }
         
@@ -4449,9 +4835,11 @@ impl CrystallineCore {
             Some(c) => c,
             None => return vec![word_lower],
         };
-        
+
+        // candidates are interned word-ids; resolve each back to its String for levenshtein.
         let mut ranked: Vec<(String, usize)> = candidates.iter()
-            .map(|c| (c.clone(), self.levenshtein(&word_lower, c)))
+            .filter_map(|&id| self.word_of(id).map(|w| w.to_string()))
+            .map(|c| { let d = self.levenshtein(&word_lower, &c); (c, d) })
             .filter(|(_, dist)| *dist <= 2)
             .collect();
         
@@ -4489,7 +4877,7 @@ impl CrystallineCore {
     /// Get quantized stats
     pub fn get_quantized_stats(&self) -> (usize, usize, usize) {
         let total_passages: usize = self.passage_counts.iter().sum();
-        (self.doc_ids.len(), total_passages, self.vocabulary_fast.len())
+        (self.doc_ids.len(), total_passages, self.word_to_id.len())
     }
 
     /// Serialize the index to bytes (.said format).
@@ -4543,8 +4931,10 @@ impl CrystallineCore {
             buf.extend_from_slice(&(wb.len() as u16).to_le_bytes());
             buf.extend_from_slice(wb);
             buf.extend_from_slice(&idf.to_le_bytes());
-            // Word inverted index entries
-            if let Some(doc_indices) = self.word_inverted_fast.get(word) {
+            // Word inverted index entries (look up via the interned word-id; WIDX-aware)
+            let doc_indices: Vec<usize> = self.word_to_id.get(word)
+                .map(|&wid| self.docs_for_wid(wid)).unwrap_or_default();
+            if !doc_indices.is_empty() {
                 let indices: Vec<u16> = doc_indices.iter().map(|&i| i as u16).collect();
                 buf.extend_from_slice(&(indices.len() as u16).to_le_bytes());
                 for idx in &indices {
@@ -4782,10 +5172,11 @@ impl CrystallineCore {
         self.inverted_index.clear();
         self.word_idf_fast.clear();
         self.word_inverted_fast.clear();
+        self.word_vocab.clear();
+        self.word_to_id.clear();
         self.doc_word_sets_fast.clear();
         self.doc_word_tf_fast.clear();
         self.doc_texts_fast.clear();
-        self.vocabulary_fast.clear();
         self.phonetic_index_fast.clear();
         self.matrix_quantized.clear();
         self.passage_counts.clear();
@@ -4848,32 +5239,33 @@ impl CrystallineCore {
             let idf = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
             pos += 4;
             self.word_idf_fast.insert(word.clone(), idf);
-            self.vocabulary_fast.insert(word.clone());
 
             if pos + 2 > data.len() { break; }
             let num_indices = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
             pos += 2;
+            let wid = self.intern_word(&word);
             let mut doc_indices = AHashSet::new();
             for _ in 0..num_indices {
                 if pos + 2 > data.len() { break; }
                 let doc_idx = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
                 pos += 2;
                 doc_indices.insert(doc_idx);
-                // Also populate doc_word_sets_fast
+                // Also populate doc_word_sets_fast (interned id)
                 if doc_idx < num_docs {
-                    self.doc_word_sets_fast[doc_idx].insert(word.clone());
+                    self.doc_word_sets_fast[doc_idx].insert(wid);
                 }
             }
             if !doc_indices.is_empty() {
-                self.word_inverted_fast.insert(word.clone(), doc_indices);
+                self.word_inverted_fast.insert(wid, doc_indices);
             }
 
             // Phonetic index
             let sx = self.get_soundex(&word);
+            let wid = self.intern_word(&word);
             self.phonetic_index_fast
                 .entry(sx)
                 .or_insert_with(AHashSet::new)
-                .insert(word);
+                .insert(wid);
         }
 
         // --- Section 4: matrix_quantized ---

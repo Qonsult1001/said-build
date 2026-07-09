@@ -101,6 +101,23 @@ pub fn parse(data: &[u8]) -> Result<DocxResult, String> {
             // customXml). Architectural inversion: extract what we know how to
             // (paragraphs/images/fonts above); preserve everything else verbatim
             // so rebuild can re-embed it.
+            //
+            // SEARCH gap fix: header/footer parts (word/headerN.xml, word/footerN.xml) share
+            // the body's <w:p>/<w:t> grammar and hold the most DISCRIMINATING text in legal/
+            // business docs — case numbers, dates, "RE:" / "OUR REF:" lines, registry refs.
+            // Restore was already 1:1 (bytes preserved below), but `said ask` on a vault never
+            // SAW that text because only document.xml fed the searchable view. Now we also
+            // extract header/footer paragraphs INTO the searchable view (bytes still preserved
+            // verbatim for 1:1 rebuild — this only ADDS to the search index, never changes
+            // restore). So a vaulted legal doc is both byte-exact recoverable AND findable by
+            // its header/footer reference.
+            let is_header_footer = (name.starts_with("word/header") || name.starts_with("word/footer"))
+                && name.ends_with(".xml");
+            if is_header_footer {
+                if let Ok(mut paras) = extract_paragraphs(&content) {
+                    result.paragraphs.append(&mut paras);
+                }
+            }
             let hash = hasher::blake3_hex(&content);
             result.structural_xml.push(StructuralXml {
                 name: name.clone(),

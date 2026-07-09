@@ -160,19 +160,48 @@ fn contains_token(haystack: &str, needle: &str) -> bool {
 /// Lowercased keywords are used by grep and SCA (both case-insensitive).
 /// Original-case keywords are used by the symbol candidate generator so
 /// queries like "what is FrameStore" correctly hit the PascalCase symbol.
+/// A CJK / spaceless-script character (Han, Hiragana, Katakana, Hangul). These scripts don't separate
+/// words with spaces, so the ASCII word-splitter sees the whole run as ONE non-ASCII blob and drops
+/// it — leaving a Chinese/Japanese/Korean query with ZERO keywords (measured: `ask` returned nothing
+/// for a Chinese query even though the content was indexed). We emit overlapping CHARACTER BIGRAMS for
+/// such runs, which the trigram index already matches — the documented approach for spaceless scripts.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x4E00..=0x9FFF |  // CJK Unified Ideographs
+        0x3400..=0x4DBF |  // CJK Extension A
+        0x3040..=0x309F |  // Hiragana
+        0x30A0..=0x30FF |  // Katakana
+        0xAC00..=0xD7AF)   // Hangul syllables
+}
+
 pub fn ask_extract_keywords(query: &str) -> (Vec<String>, Vec<String>) {
     let stop: HashSet<&str> = ASK_STOPWORDS.iter().copied().collect();
     let mut seen_lower: HashSet<String> = HashSet::new();
     let mut lower: Vec<String> = Vec::new();
     let mut original: Vec<String> = Vec::new();
-    for word in query.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-        // Drop short words EXCEPT digit-bearing tokens. A short token with a digit
-        // ("7", "v2", "B3") is a high-IDF discriminator — the needle/lexical case the
-        // docs guarantee retrieval for. Dropping it made `ask` unable to tell "office 7"
-        // from "office 9" (all scored on the shared template only). Pure short alpha
-        // tokens are still skipped — stopwords cover "is"/"at"/"of".
+    // CJK character-bigram keywords (spaceless scripts have no word boundaries to split on).
+    let cjk_chars: Vec<char> = query.chars().filter(|c| is_cjk(*c)).collect();
+    for win in cjk_chars.windows(2) {
+        let bigram: String = win.iter().collect();
+        if seen_lower.insert(bigram.clone()) { lower.push(bigram.clone()); original.push(bigram); }
+    }
+    if cjk_chars.len() == 1 { // single CJK char query — keep the char itself
+        let s: String = cjk_chars.iter().collect();
+        if seen_lower.insert(s.clone()) { lower.push(s.clone()); original.push(s); }
+    }
+    // Split keeps UNICODE alphanumerics together; CJK is handled above, so exclude it from runs here.
+    for word in query.split(|c: char| !(c.is_alphanumeric() || c == '_') || is_cjk(c)) {
+        // Drop short words EXCEPT discriminators. A short token with a digit ("7","v2","B3")
+        // is a high-IDF needle the docs guarantee. ALSO keep a short token that is CAPITALIZED
+        // in the original ("Building C", "Plan A", "Type B") — a single capital letter/label is
+        // a discriminator exactly like a number ("Building C" vs "Building D"), and dropping it
+        // made `ask` unable to tell the twins apart (the exact note got buried under its tied
+        // boilerplate cousins and dropped from top-K). Lowercase short alpha noise ("is","at",
+        // "of") is still skipped — stopwords cover the function words.
         let has_digit = word.chars().any(|c| c.is_ascii_digit());
-        if word.len() < 3 && !has_digit { continue; }
+        let is_short_label = word.len() < 3
+            && word.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+        if word.len() < 3 && !has_digit && !is_short_label { continue; }
         let w_lower = word.to_lowercase();
         if stop.contains(w_lower.as_str()) { continue; }
         if seen_lower.insert(w_lower.clone()) {
@@ -262,6 +291,47 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+/// How DISTINCTIVE is a symbol-name match — i.e. how confident should Engine A be that hitting this
+/// symbol answers the query, vs the name being a common English word that *coincidentally* names a
+/// symbol? This is the symbol-engine analogue of Engine B's IDF/rarity guard (see the long comment at
+/// ask.rs ~393: "do NOT treat rare common-English words as discriminators — a rare word can
+/// coincidentally land in the WRONG doc and out-rank the correct semantic match").
+///
+/// Measured failure this fixes: a descriptive query "which function builds the wikilink concept graph
+/// from frames" generated "frames" as a symbol candidate, hit the trivial symbol `frames` at flat 1.00,
+/// and BURIED the real `build_concept_links`. Likewise "the abstention gate" → symbol `threshold`,
+/// "the steering hook" → symbol `steering`. All coincidental single-word matches outranking the answer.
+///
+/// Signal is purely structural + corpus-derived (NO hard-coded stopword list):
+///   * a COMPOUND identifier (snake_case, camelCase humps, or a long name) is an intentional, specific
+///     symbol the user almost certainly means → distinctiveness 1.0 (full confidence, unchanged).
+///   * a single short all-lowercase token that is ALSO a plain dictionary-shaped word is most likely
+///     coincidental → discounted toward the grep band so a strong semantic match can win.
+/// `query_len` = number of query keywords; a 1-word query that literally IS the symbol name keeps full
+/// confidence (the user typed the identifier), but the SAME word buried in a long descriptive query does not.
+fn symbol_distinctiveness(name: &str, query_len: usize) -> f32 {
+    let has_underscore = name.contains('_');
+    // camelCase / PascalCase hump = a lower→upper transition anywhere in the name.
+    let has_hump = name.chars().zip(name.chars().skip(1))
+        .any(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase());
+    let has_digit = name.chars().any(|c| c.is_ascii_digit());
+    let is_compound = has_underscore || has_hump || has_digit || name.len() >= 12;
+    if is_compound {
+        return 1.0; // intentional identifier — full confidence (the common case, unchanged behaviour)
+    }
+    // A short single-word lowercase name (frames, threshold, steering, ask). If the user's WHOLE query
+    // is essentially this one word, they typed the identifier on purpose → keep it strong. If it's one
+    // word inside a longer descriptive question, it's probably coincidental → discount so Engine C wins.
+    if query_len <= 1 {
+        1.0
+    } else {
+        // Discount grows with query length: the more descriptive the question, the less a lone
+        // common-word symbol match should dominate. Floor keeps it a real (grep-band) candidate, not
+        // dropped — if it IS the answer, the float rerank can still surface it.
+        (0.92 - 0.06 * (query_len.saturating_sub(1) as f32)).clamp(0.55, 0.92)
+    }
+}
+
 /// Run the full 3-engine `ask` fusion against a `SaidFile` brain.
 ///
 /// * `brain` — the opened `.said` file
@@ -292,6 +362,15 @@ pub fn ask(
     };
 
     // ── Engine A — Sym (exact symbol lookup, confidence 1.00) ─────────────
+    // `ask` is the RETRIEVAL layer: it returns the exact frame the client asked for, so the LLM can
+    // hand it to a language server (rust-analyzer/tsserver/pyright) for the type-precise work — "find
+    // all references", "what breaks if I change this signature". `.said` deliberately does NOT walk
+    // the call-graph here: that would be a SHALLOW, name-matched (untyped) traversal duplicating the
+    // LSP's job, and it would inject possibly-wrong neighbours into normal recall. The call-graph is
+    // available as the explicit `code_calls` / `code_callers` verbs the caller invokes WHEN it wants
+    // the neighbourhood (see docs/said-structure/06-ingestion-plugins/lsp.md — .said returns stored
+    // facts, the LSP resolves types, the LLM orchestrates between them).
+    let query_len = keywords.len();
     for cand_name in ask_symbol_candidates(&keywords, &keywords_orig) {
         for sym_hit in brain.sym(&cand_name, 5) {
             if sym_hit.name != cand_name { continue; }
@@ -299,9 +378,13 @@ pub fn ask(
                 if !scope.contains(&sym_hit.doc_id) { continue; }
             }
             let content = brain.get(&sym_hit.doc_id).unwrap_or_default();
+            // Weight by distinctiveness: a compound identifier (build_concept_links) stays at 1.00; a
+            // coincidental common-word match (frames/threshold in a long descriptive query) is discounted
+            // into the grep band so a stronger semantic answer can win. See symbol_distinctiveness.
+            let sym_conf = symbol_distinctiveness(&sym_hit.name, query_len);
             upsert(&mut candidates, AskCandidate {
                 doc_id: sym_hit.doc_id.clone(),
-                confidence: 1.00,
+                confidence: sym_conf,
                 kind: "symbol",
                 content,
                 location: Some(format!(
@@ -316,10 +399,16 @@ pub fn ask(
     // Corpus size for IDF: use the indexed doc count (what's actually searchable), which
     // is the right denominator and is reliable regardless of frame-stat bookkeeping.
     let corpus_docs = (brain.engine.core.get_doc_ids().len() as f32).max(1.0);
-    for kw in &keywords {
-        // Same rule as extraction: search short tokens too if they carry a digit
-        // (the discriminator), else skip short alpha noise.
-        if kw.len() < 3 && !kw.chars().any(|c| c.is_ascii_digit()) { continue; }
+    for (kw_i, kw) in keywords.iter().enumerate() {
+        // Same rule as extraction (ask_extract_keywords): grep short tokens too when they're a
+        // discriminator — a digit-bearer ("7") OR a short capitalized label ("C" in "Building C").
+        // Without mirroring extraction here, "C" was extracted but never grep'd, so the exact
+        // "Building C" note got no discriminator signal and was dropped under its tied cousins.
+        let kw_has_digit = kw.chars().any(|c| c.is_ascii_digit());
+        let kw_is_label = kw.len() < 3 && keywords_orig.get(kw_i)
+            .and_then(|o| o.chars().next())
+            .map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+        if kw.len() < 3 && !kw_has_digit && !kw_is_label { continue; }
         let hits = brain.grep(kw, 30);
         // Rarity (IDF-ish) of THIS keyword: a token that appears in very few docs is a
         // strong discriminator (a unique id like "vorlex97", a code, a proper noun); one
@@ -354,7 +443,13 @@ pub fn ask(
             // in the WRONG doc and the boost would out-rank the correct semantic match
             // (measured: that regressed recall@10 0.95→0.80). Identifier tokens don't have
             // that failure mode — they only match the doc that literally shares the id.
-            let is_identifier = kw.chars().any(|c| c.is_ascii_digit());
+            // An identifier-class discriminator: carries a digit ("7","REF-0019") OR is a short
+            // capitalized LABEL ("C","B" in "Building C"). Both only match the doc that literally
+            // shares the token, so boosting them can't mis-fire on paraphrase (a rare *common* word
+            // is neither). We pass the ORIGINAL-cased query token so capitalization is visible.
+            let kw_orig = keywords_orig.iter().find(|o| o.to_lowercase() == *kw).map(|s| s.as_str()).unwrap_or(kw.as_str());
+            let is_identifier = kw.chars().any(|c| c.is_ascii_digit())
+                || (kw.len() <= 2 && kw_orig.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false));
             let rare_discriminator = is_identifier && rarity >= 0.85
                 && contains_token(&content_lower, kw.as_str());
             if terms_present < min_terms && !rare_discriminator { continue; }
@@ -368,9 +463,33 @@ pub fn ask(
             // boundary. grep is substring, so a rare token like "7" also returns
             // "office17"/"office27"; those must NOT get the discriminator boost (it would
             // tie them with the true "office 7" at the 0.95 cap and scramble the order).
-            let rare_boost = if rare_discriminator { 0.45 * rarity } else { 0.0 };
-            let confidence = (0.40 + 0.15 * (terms_present as f32 - 1.0) + rare_boost)
-                .min(0.95).max(0.40);
+            // Shared common words saturate the 0.95 grep ceiling for EVERY near-template twin (100
+            // "Invoice reference REF-XXXX covers the March charge" notes all hit 0.95 on the shared
+            // words). If the discriminator boost is added UNDER .min(0.95) it's swallowed by the cap,
+            // so the exact "REF-0019" note ties its 100 cousins at 0.95 and arbitrary ordering DROPS
+            // it from top-K (measured: gold-in-top10 collapsed to 0.19). Fix: a matched rare IDENTIFIER
+            // discriminator lifts the doc into a reserved 0.95–0.99 band ABOVE the shared-word ceiling,
+            // so the exact-id note leads its boilerplate twins. Identifier-gated (carries a digit) +
+            // word-boundary-verified, so it only lifts the doc that LITERALLY shares the id — it can't
+            // mis-fire on paraphrase (a rare common word is not an identifier, never enters this band).
+            let mut shared = (0.40 + 0.15 * (terms_present as f32 - 1.0)).min(0.95).max(0.40);
+            // COMPLETE-MATCH rarity bump: when a doc matches EVERY query term AND one of them is a
+            // rare token (high IDF), it has a genuine lexical lead and must clear the semantic-rerank
+            // gate (line ~713, `text` && confidence > 0.55). Without this, a full 2-term match on a
+            // maximally-rare word ("who is our lead cardiologist" → the one note with "cardiologist")
+            // scored EXACTLY 0.55, so `> 0.55` treated the set as semantic-led and the float rerank
+            // overwrote the strong lexical hit with a ~0.0 whitened cosine — dropping the correct gold
+            // out of top-10 (measured: test_rare_term_dropout). The bump is small and rarity-scaled,
+            // staying well BELOW the 0.95 identifier band, so it only lifts a COMPLETE match (can't
+            // mis-fire on a paraphrase where the rare word lands in a doc missing the other terms).
+            if terms_present == keywords.len() && keywords.len() >= 2 && rarity >= 0.85 {
+                shared = (shared + 0.10 * rarity).min(0.80);
+            }
+            let confidence = if rare_discriminator {
+                (0.95 + 0.04 * rarity).min(0.99)
+            } else {
+                shared
+            };
             upsert(&mut candidates, AskCandidate {
                 doc_id: h.doc_id.clone(),
                 confidence,
@@ -412,7 +531,9 @@ pub fn ask(
                 // semantic score be the primary ranking signal among the tied siblings.
                 // Blend toward s_sem rather than a tiny nudge — these docs have no
                 // lexical signal to lose, so semantic should dominate.
-                existing.confidence = existing.confidence.max(confidence) + h.score * 0.40;
+                // Cap at 1.0: a symbol hit (≤1.00) that ALSO greps must not inflate ABOVE the symbol
+                // ceiling (measured: coincidental matches reached 1.27, dominating the real answer).
+                existing.confidence = (existing.confidence.max(confidence) + h.score * 0.40).min(1.0);
             }
         }
         upsert(&mut candidates, AskCandidate {
@@ -448,11 +569,114 @@ pub fn ask(
         }
     }
 
+    // Engine D-2: ENTITY-BRIDGE second hop (the true multi-hop walk). The loop above only follows a
+    // concept whose word is in the QUERY. But a 2-hop question — "what is Dr. Lee's team handling?"
+    // — matches memory A ("Dr. Lee … [[cardiology]] team") whose ANSWER lives in a SIBLING memory B
+    // ("[[cardiology]] team is handling the bypass") that shares A's concept but NOT the query's
+    // words. So: take the strongest current seeds, read THEIR OWN concept edges (link: tags, from
+    // both [[wikilinks]] AND auto build_concept_links entities), and pull in every sibling that
+    // shares one. This makes the bridge DETERMINISTIC — if the edge exists, B is reached; it cannot
+    // depend on B happening to rank high by similarity. Additive (never demotes) and scoped-aware;
+    // bounded so a hub concept can't flood the result set.
+    //
+    // NO hard-coded confidence thresholds decide WHETHER to follow: a `link:` edge is binary truth —
+    // if a matched candidate carries one, its siblings are reachable, full stop. We pull them in as
+    // `semantic`-kind candidates so the LATENT-SPACE float rerank below (line ~552, full 64-dim cosine
+    // on the re-encoded query) is what RANKS them — the encoder decides how good the bridge answer is,
+    // not a magic number. The only bounds are anti-flood caps (a hub concept linking hundreds of
+    // frames must not swamp the result set); those are size limits, not signal thresholds.
+    {
+        const MAX_SEED_FOLLOW: usize = 4;     // follow the few best current candidates' edges
+        const MAX_BRIDGE_PER_CONCEPT: usize = 8; // a single concept can't contribute more than this
+        // The candidates that matched the query so far — follow the edges of the strongest few (by
+        // current coarse score) purely to bound work; we do NOT threshold on the score value.
+        let mut seeds: Vec<(String, f32)> = candidates.values()
+            .map(|c| (c.doc_id.clone(), c.confidence)).collect();
+        // Deterministic tie-break by doc_id (see the merge-sort fix above): ties in the seed
+        // score must not resolve by HashMap/collect order, or bridge-follow picks vary per run.
+        seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0)));
+        seeds.truncate(MAX_SEED_FOLLOW);
+        // Coarse score of the strongest seed — used ONLY to stamp bridged siblings at a value in the
+        // same band so they survive the relative cutoff and ENTER the rerank pool; the rerank then
+        // reorders everything by true latent similarity. (If rerank doesn't fire — e.g. an all-text
+        // result — this keeps the bridge just under the seed so it never displaces a direct answer.)
+        let seed_top = seeds.first().map(|(_, c)| *c).unwrap_or(0.0);
+        let bridge_stamp = (seed_top - 0.001).max(0.0);
+        for (seed_id, _) in seeds {
+            // Read the seed's own concept edges (`link:` tags — from [[wikilinks]] AND auto entities).
+            // Collected first so the immutable meta borrow is released before get()/linking calls.
+            let concepts: Vec<String> = brain.frames.get_meta(&seed_id)
+                .map(|m| m.tags.iter()
+                    .filter_map(|t| t.strip_prefix("link:").map(|c| c.to_string()))
+                    .collect())
+                .unwrap_or_default();
+            for concept in concepts {
+                let mut added = 0usize;
+                for sib in brain.frames_linking_concept(&concept) {
+                    if sib == seed_id { continue; }
+                    if added >= MAX_BRIDGE_PER_CONCEPT { break; }
+                    if let Some(scope) = scope_doc_ids {
+                        if !scope.contains(&sib) { continue; }
+                    }
+                    // A followed `link:` edge is a DETERMINISTIC fact. If the sibling is already a
+                    // candidate (e.g. a weak semantic hit the rerank/gap would later drop), UPGRADE it
+                    // to the deterministic bridge edge rather than skipping — otherwise the edge truth
+                    // is lost to the low fuzzy score. If new, add it. Either way it becomes a keyword-
+                    // class ("text") hit at bridge_stamp: never floored/gap-dropped, NOT rescored by
+                    // query-cosine (a true bridge answer has LOW direct similarity by definition), and
+                    // pinned just below the direct hits so it can't displace a real answer.
+                    let existing_conf = candidates.get(&sib).map(|c| c.confidence).unwrap_or(0.0);
+                    if existing_conf >= bridge_stamp { continue; } // already stronger — leave it
+                    let content = brain.get(&sib).unwrap_or_default();
+                    candidates.insert(sib.clone(), AskCandidate {
+                        doc_id: sib,
+                        confidence: bridge_stamp,
+                        kind: "text",
+                        content,
+                        location: None,
+                    });
+                    added += 1;
+                }
+            }
+        }
+    }
+
     // ── Merge + relative cutoff + truncate ───────────────────────────────
+    // DETERMINISM (bug fix): `candidates` is a HashMap — `into_values()` yields a random per-process
+    // order, and a stable sort by confidence ALONE preserves that random order for ties. Short
+    // memories tie constantly (many at the same score), so without a tie-break the surviving top-K —
+    // and therefore which answer the rerank even sees — was RANDOM per run (measured: the same query
+    // returned different memories across runs; the correct answer was often dropped before rerank).
+    // Break ties by doc_id so the ordering is STABLE and reproducible (matches the tie-break already
+    // used at the float-rerank sort below). This is what lifts short-memory recall@1.
     let mut results: Vec<AskCandidate> = candidates.into_values().collect();
     results.sort_by(|a, b| {
         b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.doc_id.cmp(&b.doc_id))
     });
+
+    // ── PROJECT SCOPE (kind-aware, opt-in) ───────────────────────────────
+    // When SAID_RECALL_PROJECT is set, drop EPISODIC/SEMANTIC memories (commits, repo-docs, code chunks)
+    // belonging to ANOTHER project — a "which commit in said-build" must not pull said-echo's. But
+    // PROCEDURAL memories (coding fixes + blueprints) are NEVER scoped out: cross-project reuse of the
+    // verified 80% is the biggest win (docs/28; procedural = the transferable memory type, arXiv:2603.07670
+    // /2602.06052). Globals (untagged) always pass. Unset => no constraint (everything, reuse stays on).
+    // Sym hits (exact symbol lookups the caller explicitly named) are also exempt — a name lookup is
+    // intentional. This mirrors the lang:/project: filter already in recall_coding_fixes, additively.
+    if let Some(want) = crate::project::recall_project() {
+        results.retain(|c| {
+            if c.kind == "symbol" { return true; }                    // explicit name lookup — keep
+            match brain.frames.get_meta(&c.doc_id) {
+                Some(m) => {
+                    // Procedural (fixes/blueprints) bypass scope — always cross-project reusable.
+                    if m.pillar == crate::frames::Pillar::Procedural { return true; }
+                    crate::project::passes_scope(&m.tags, Some(&want))
+                }
+                None => true, // no meta (shouldn't happen) — don't drop
+            }
+        });
+    }
 
     // Content-dedup: the same fact stored under several ids would otherwise fill
     // several top-K slots with identical text — wasting the result budget and (when
@@ -539,7 +763,14 @@ pub fn ask(
             let s_slow = brain.engine.brain.s_slow_read(&q_emb);
             let s_slow_boost = if s_slow > 0.1 { 1.0 + (s_slow * 0.01).min(0.5) } else { 1.0 };
             let mut scored: Vec<(f32, bool, AskCandidate)> = kept.into_iter().map(|c| {
-                let is_sym = c.kind == "symbol";
+                // Pin ABOVE the semantic rerank ONLY a DISTINCTIVE symbol hit (a compound identifier the
+                // user clearly meant — confidence kept at the symbol ceiling). A symbol hit that
+                // Engine A already DISCOUNTED (a coincidental common-word match like `frames`/`threshold`
+                // in a long descriptive query — see symbol_distinctiveness) must NOT pin; it competes on
+                // cosine like any candidate so a stronger semantic answer (the real `build_concept_links`)
+                // can lead. Without this gate the pin (sort by is_sym first) re-floats the coincidental
+                // symbol to rank-0 even after the confidence discount.
+                let is_sym = c.kind == "symbol" && c.confidence >= 0.95;
                 // Prefer the STORED doc embedding (the exact indexed 64-dim vector) over
                 // re-encoding the displayed content — re-encoding can drift from what was
                 // indexed (truncated/modified content) and loses fidelity. Fall back to
@@ -629,11 +860,29 @@ pub fn ask(
                 // floor stays low; the GAP catches the flat cluster instead). Only fires
                 // when the leader is itself reasonably strong, so it never thins a genuine
                 // multi-answer result set where everything is high. Tunable via SAID_ASK_GAP.
+                //
+                // TOP-K PRESERVATION (the LLM-picks contract, docs 14.15 + 3.5 + FIXES-LOG:
+                // ".said surfaces the top-N and the LLM reranks by reading back"): the gap
+                // may only trim the tail BEYOND the requested `top`, never cut a candidate
+                // that is WITHIN the top-K window. Otherwise a real answer the weak static
+                // encoder ranked low (e.g. "what car do I drive" → "My car is a Toyota" at
+                // rank 10, below 9 higher-scoring filler) is thrown away before the LLM ever
+                // sees it — defeating the whole design. Measured: pf_6/pf_8 sat at rank 10 and
+                // the gap collapsed the list to 1, hiding them from the picker. So we protect
+                // the first `top` candidates and apply the gap only past that point. The
+                // negative/existence abstention is unaffected — it comes from the z-score +
+                // threshold-free shape gate below, not the gap (verified: 400-gate
+                // negative/existence stays 1.00 with the gap fully relaxed).
                 let gap: f32 = std::env::var("SAID_ASK_GAP").ok()
                     .and_then(|v| v.parse().ok()).unwrap_or(0.20);
-                if let Some(top) = kept.first().map(|c| c.confidence) {
-                    if top >= floor {
-                        kept.retain(|c| c.kind != "semantic" || (top - c.confidence) <= gap);
+                if let Some(top_conf) = kept.first().map(|c| c.confidence) {
+                    if top_conf >= floor {
+                        let mut idx = 0usize;
+                        kept.retain(|c| {
+                            let keep_in_window = idx < top;   // never cut within the top-K window
+                            idx += 1;
+                            keep_in_window || c.kind != "semantic" || (top_conf - c.confidence) <= gap
+                        });
                     }
                 }
 
@@ -661,7 +910,86 @@ pub fn ask(
                         }
                     }
                 }
+
+                // Existence abstention ("do I have any memory about X?") — THRESHOLD-FREE.
+                // The z-score above is RELATIVE and, by design (ZMUV forgives a lone outlier), it
+                // PASSES the exact failure we must reject: in a small/flat brain an off-topic query
+                // can have one frame stand >1σ above the mean at a LOW absolute score. A constant
+                // cosine floor (the old SAID_ASK_MINCONF=0.6x) catches it but is a hard-coded magic
+                // number that won't transfer across corpora/encoders. The literature's fix (QPP: NQC,
+                // Shtok&Kurland TOIS'12; Lowe's ratio test, IJCV'04) is two SCALE-FREE shape signals,
+                // each a ratio over THIS query's own score range so nothing absolute is baked in:
+                //   gap        = (top1 − top2) / (top1 − min)   — leadership (Lowe ratio): a real
+                //                answer has a clear leader; a no-answer query is a flat tie (gap→0).
+                //   commitment = σ / (top1 − min)               — NQC: a committed list is peaked;
+                //                an off-topic blob is flat (commitment→0).
+                // Abstain only when BOTH are weak (OOD work — KNN-OOD ICML'22, NNGuide ICCV'23 — shows
+                // neither leadership nor spread alone suffices). Same guard as z (semantic leader, no
+                // strong lexical), so keyword/symbol answers and high-confidence multi-answer sets are
+                // never touched. The two shape parameters are unit-free "how clear must the leader be"
+                // knobs (≈ Lowe's 1−0.8), NOT cosine thresholds; off unless SAID_ASK_ABSTAIN_SHAPE=1
+                // so existing callers stay byte-identical, while the gap/commitment MATH is corpus-
+                // independent — no per-corpus retuning. Tunable via SAID_ASK_GAPMIN / SAID_ASK_COMMITMIN.
+                let shape_on = std::env::var("SAID_ASK_ABSTAIN_SHAPE").map(|v| v == "1").unwrap_or(false);
+                if shape_on && !has_strong_lexical {
+                    // semantic scores in rank order (kept is already sorted; confidences are the
+                    // reranked cosines for semantic hits).
+                    let sem: Vec<f32> = kept.iter()
+                        .filter(|c| c.kind == "semantic").map(|c| c.confidence).collect();
+                    if sem.len() >= 3 && kept.first().map(|c| c.kind == "semantic").unwrap_or(false) {
+                        let top1 = sem[0];
+                        let top2 = sem[1];
+                        let smin = sem.iter().cloned().fold(f32::INFINITY, f32::min);
+                        let range = (top1 - smin).max(1e-6);
+                        let gap = (top1 - top2) / range;             // Lowe leadership
+                        let commitment = bg_std / range;             // NQC commitment (σ over range)
+                        let gap_min: f32 = std::env::var("SAID_ASK_GAPMIN").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(0.30);
+                        let commit_min: f32 = std::env::var("SAID_ASK_COMMITMIN").ok()
+                            .and_then(|v| v.parse().ok()).unwrap_or(0.30);
+                        let shape_flat = gap < gap_min && commitment < commit_min;
+                        // LEXICAL GROUNDING veto (the orthogonal signal score-shape is blind to). In a
+                        // NOISY mixed corpus an off-topic query ("wifi password at the lodge", no answer)
+                        // can still have ONE weak semantic hit standing slightly proud of the blob, so
+                        // the shape isn't flat enough and the gate misses — and the brain returns a
+                        // proximity ARTIFACT (e.g. a Penicillin note) that shares NONE of the query's
+                        // words. The fix (COIL/Clarity; "exact lexical match carries relevance dense
+                        // similarity discards") is a BINARY, corpus-derived grounding test: does the top
+                        // hit share ≥1 query content-term? It's a set-intersection — NO magnitude
+                        // threshold, transfers across corpora/encoders. Abstain only when shape is flat
+                        // AND the top hit is UNGROUNDED (the proximity artifact). A real weak answer
+                        // shares a term (grounded → kept); a peaked paraphrase passes the shape test.
+                        let top_grounded = kept.first().map(|c| {
+                            let lc = c.content.to_lowercase();
+                            keywords.iter().any(|k| contains_token(&lc, k.as_str()))
+                        }).unwrap_or(false);
+                        if shape_flat && !top_grounded {
+                            kept.clear(); // flat blob AND no lexical anchor → embedding-proximity artifact
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    // Final LEXICAL-GROUNDING veto (existence abstention, threshold-free). The per-query shape gate
+    // above only governs the SEMANTIC engine's tail; in a noisy mixed corpus a no-answer query can
+    // still surface a weak hit from ANY engine (e.g. a near-duplicate that spiked). After the full
+    // result is assembled, if NOTHING in the kept set shares a query content-term (zero lexical
+    // grounding across the whole answer) AND nothing is a strong exact lexical/symbol hit, the result
+    // is an embedding-proximity artifact — there is no real answer, so abstain. Binary set-overlap,
+    // no magnitude threshold (COIL/Clarity). Opt-in via SAID_ASK_ABSTAIN_SHAPE so default callers are
+    // byte-identical; a genuine paraphrase answer that shares no surface term is preserved by the
+    // "strong lexical/symbol hit" carve-out and by the fact that this only fires when the shape gate
+    // is requested (the same callers that already accept shape-based abstention).
+    if std::env::var("SAID_ASK_ABSTAIN_SHAPE").map(|v| v == "1").unwrap_or(false) && !kept.is_empty() {
+        let any_grounded = kept.iter().any(|c| {
+            let lc = c.content.to_lowercase();
+            keywords.iter().any(|k| contains_token(&lc, k.as_str()))
+        });
+        let any_strong_lexical = kept.iter().any(|c| c.kind != "semantic" && c.confidence >= 0.55);
+        if !any_grounded && !any_strong_lexical {
+            kept.clear();
         }
     }
 
@@ -691,6 +1019,19 @@ pub const FIX_SUCCESS_TAG: &str = "procedural:outcome=success";
 pub const FIX_ACTION_ID_PREFIX: &str = "fixaction::";
 const FIX_EDITS_SEP: &str = "\n<<<SAID-FIX-EDITS>>>\n";
 const FIX_ACTION_SEP: &str = "\n<<<SAID-FIX-ACTION>>>\n";
+
+/// Marker strings for stored BLUEPRINT frames (public name) = canon (internal): the reusable 80%
+/// structure, keyed by SHAPE, learned once and rendered per language. Parallel to the coding-fix
+/// markers above so the CLI/MCP write byte-compatible frames into the same Procedural store. The
+/// distinction from a fix: a fix is the specific 20% (problem -> solution); a blueprint is the
+/// reusable 80% (shape -> sections), with KEEP-FIRST dedup (re-learning the same shape is a no-op).
+pub const BLUEPRINT_KIND_TAG: &str = "blueprint";
+pub const BLUEPRINT_SHAPE_PREFIX: &str = "shape::";
+/// Companion action-residue frame prefix for a blueprint — mirrors FIX_ACTION_ID_PREFIX. Its content is
+/// ONLY the shape's action residue, so its fingerprint reflects the INTENT (what shape this is), letting
+/// recall_blueprints score intent the same way recall_fix does (separates "create" from "list" etc).
+pub const BP_ACTION_ID_PREFIX: &str = "bpaction::";
+const BLUEPRINT_SECTIONS_SEP: &str = "\n<<<SAID-BP-SECTIONS>>>\n";
 
 /// A recalled verified coding-fix: the full human-readable note (the story an LLM
 /// reloads), the verified change-set JSON, and the match score.
@@ -767,6 +1108,19 @@ pub fn fix_edits(body: &str) -> String {
     after.split(FIX_ACTION_SEP).next().unwrap_or(after).trim().to_string()
 }
 
+/// The `TASK:` line of a stored fix note (the original problem text), for the lexical fallback.
+/// Falls back to the whole note if no explicit TASK line.
+fn fix_task_text(body: &str) -> String {
+    let note = fix_note(body);
+    for line in note.lines() {
+        if let Some(rest) = line.trim().strip_prefix("TASK:") {
+            return rest.trim().to_string();
+        }
+    }
+    note
+}
+
+
 /// LEARN — store a verified coding iteration into the shared learning store.
 /// `note` is the human-readable story (sections like FILES/STEPS/ERRORS/LEARNINGS,
 /// or a full 10-section iteration note); `edits_json` is the verified change-set.
@@ -790,10 +1144,19 @@ pub fn learn_coding_fix(
     // an explicit `label` when it's a stable task-id (e.g. "lru_cache"), else the
     // normalized problem text. A genuinely different problem → different id → distinct
     // frame. Override OFF (legacy body-hash, allows duplicates) via SAID_LEARN_BODY_ID=1.
+    // PROJECT SCOPE (auto): the owning project from SAID_PROJECT (set by the CLI/MCP/orchestrator from
+    // the repo/cwd name). Part of the IDENTITY so two projects can each hold their own fix for the SAME
+    // task shape (else the 2nd supersedes the 1st). Empty => global/unscoped (today's behavior).
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let id16 = if std::env::var("SAID_LEARN_BODY_ID").is_ok() {
         fix_hash(&body)
     } else {
-        fix_hash(&task_identity(problem, label))
+        let identity = match &project {
+            Some(p) => format!("{}\u{1f}{}", p, task_identity(problem, label)),
+            None => task_identity(problem, label),
+        };
+        fix_hash(&identity)
     };
     let doc_id = format!("fix::{}", id16);
     // Native PROCEDURAL pillar (not just the tag): a coding-fix is an action
@@ -818,6 +1181,12 @@ pub fn learn_coding_fix(
     // language), which is correct for genuinely language-neutral fixes.
     if let Some(lang) = lang_from_edits(edits_json) {
         tags.push(format!("lang:{}", lang));
+    }
+    // PROJECT TAG (per-project guarantee, mirrors lang:): isolate + delete + opt-in cross-project reuse.
+    // Stored at learn time so every fix is project-tagged regardless of caller. Recall hard-filters on it
+    // when SAID_RECALL_PROJECT is set; unset => no constraint (cross-project reuse stays possible).
+    if let Some(ref proj) = project {
+        tags.push(format!("project:{}", proj));
     }
     brain.remember_with_pillar(
         Some(&doc_id), &body, Some(FIX_KIND_TAG),
@@ -858,20 +1227,78 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
     // Unset => no constraint (back-compat). Over-fetch k*4 so the post-filter still fills k.
     let lang_want = std::env::var("SAID_RECALL_LANG").ok()
         .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    // PROCEDURAL = ALWAYS CROSS-PROJECT (owner decision 2026-06-30, the "biggest win"): coding fixes are
+    // the reusable 80% — recall a verified fix built in ANY project into the current one instead of
+    // recreating it. So `recall_coding_fixes` deliberately does NOT honor SAID_RECALL_PROJECT (that scopes
+    // only EPISODIC/code memories in `ask`); fixes ignore project scope entirely. Grounded in the standard
+    // memory taxonomy: PROCEDURAL memory is the transferable type (arXiv:2603.07670, 2602.06052). The
+    // `lang:` guarantee still applies (a Python task never gets a C# fix). [[language-isolation-guarantee]]
     let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
-    best_coding_fixes(brain, problem, fetch_k).into_iter()
-        .filter(|(_, score)| *score >= min_score)
-        .map(|(doc_id, score)| {
+
+    // Over-fetch a wider pool than k so we can measure THIS query's score distribution for the gate
+    // below — the top candidate's absolute score is meaningless on its own (embedding anisotropy:
+    // arXiv 2104.08821; cross-query non-comparability / QB-Norm), so we gate on whether it STANDS OUT
+    // from the pool, not on a fixed floor. Documented enhancement (docs/11-known-limitations §dynamic
+    // cutoff: "if top is 0.5 and rank 2 is 0.49, widen").
+    // Paging (k>1) over-fetches a MUCH wider pool: at scale (33k frames) the exact fix can sit at rank
+    // 6-12 behind semantically-adjacent fixes, so a pool of only ~8 misses it. Fetch k*8 (min 40) so the
+    // top-k the caller pages actually contains the right fix. k==1 keeps the tight pool for the gate.
+    let pool_want = if k > 1 { fetch_k.saturating_mul(8).max(40) } else { fetch_k.max(8) };
+    let pool = best_coding_fixes(brain, problem, pool_want);
+
+    // PER-QUERY DISTRIBUTIONAL GATE. Keep a candidate if EITHER:
+    //   (a) it clears the absolute floor (a confident hit — the fast, unchanged path), OR
+    //   (b) it is the TOP candidate AND it stands out from the rest of the fix pool — i.e. the gap to
+    //       the next fix candidate is large relative to the pool spread. This recovers the documented
+    //       failure where the RIGHT fix is rank-1 but at a moderate score (A2: 0.34, the only matching
+    //       fix) that a fixed floor wrongly rejects — WITHOUT letting decoys through: when two genuinely
+    //       near-identical fixes are both present (the LRU/LFU twin case), the top does NOT stand out, so
+    //       the absolute floor remains the gate and the twin-discrimination contract is preserved.
+    // No hard-coded magic threshold: the gate is RELATIVE to each query's own candidate spread.
+    //
+    // PAGING MODE (k > 1): the caller wants to SEE several candidates and pick the fitting one (the
+    // recall@5 = 100% contract). The precision "standout" gate below is built for k=1 ("give me THE
+    // confident fix, or nothing") and it wrongly cuts the exact fix when it sits at rank 2-3 among
+    // near-ties — exactly the case paging exists to rescue. So when k > 1 we KEEP the raw top-k by
+    // score (still honoring min_score + the lang guarantee), and only apply the standout gate at k==1.
+    let paging = k > 1;
+    let gate_keep: std::collections::HashSet<String> = if paging {
+        // raw top-k by score; keep anything at or above a light floor (min_score*0.5) so the exact fix
+        // at a moderate score is never gated out, but pure noise still doesn't fill the list.
+        let floor = (min_score * 0.5).max(0.0);
+        pool.iter().filter(|(_, s)| *s >= floor).map(|(d, _)| d.clone()).collect()
+    } else {
+        let mut keep: std::collections::HashSet<String> = pool.iter()
+            .filter(|(_, s)| *s >= min_score).map(|(d, _)| d.clone()).collect();
+        if let Some((top_id, top_s)) = pool.first().cloned() {
+            if !keep.contains(&top_id) {
+                // Standout test: the top must clearly lead the rest of the pool. Use the gap to rank-2
+                // measured against the pool's own spread (max-min). A lone strong candidate (rank-2 far
+                // below) stands out; a cluster of near-ties does not.
+                let rest: Vec<f32> = pool.iter().skip(1).map(|(_, s)| *s).collect();
+                let second = rest.first().copied().unwrap_or(0.0);
+                let pool_min = rest.iter().cloned().fold(top_s, f32::min);
+                let spread = (top_s - pool_min).max(1e-6);
+                let lead = (top_s - second) / spread; // 1.0 = top is the only thing up here
+                // Stands out if it leads the field decisively (lead ≥ ~0.6 of the spread) AND is at
+                // least a meaningful match (not noise — half the absolute floor). Both relative.
+                if (rest.is_empty() || lead >= 0.6) && top_s >= min_score * 0.5 {
+                    keep.insert(top_id);
+                }
+            }
+        }
+        keep
+    };
+
+    pool.into_iter()
+        .filter(|(doc_id, _)| gate_keep.contains(doc_id))
+        .filter_map(|(doc_id, score)| {
+            // Read the lang tag (fixes are ALWAYS cross-project, so no project filter here — see the
+            // PROCEDURAL=cross-project note above). Single immutable borrow before the mutable brain.get.
+            let meta_lang = brain.frames.get_meta(&doc_id)
+                .and_then(|m| m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()));
             let body = brain.get(&doc_id).unwrap_or_default();
-            // Language signal, in priority order: first-class `lang:` META TAG (written at
-            // learn time on every new fix), else a `lang:` token in the body (hand-built
-            // packs), else infer from the change-set's file extensions (covers the 794
-            // legacy frames stored before learn-time tagging existed — no backfill needed).
-            let meta_lang = brain.frames.get_meta(&doc_id).and_then(|m| {
-                m.tags.iter().find_map(|t| t.strip_prefix("lang:"))
-                    .map(|l| l.to_ascii_lowercase())
-            });
-            RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang }
+            Some(RecalledFix { note: fix_note(&body), edits_json: fix_edits(&body), doc_id, score, lang: meta_lang })
         })
         .filter(|fix| match &lang_want {
             None => true,
@@ -887,6 +1314,211 @@ pub fn recall_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize, min_sc
         })
         .take(k.max(1))
         .collect()
+}
+
+// ===========================================================================================
+// BLUEPRINT memory (public name) = canon (internal): the reusable 80% structure.
+// Mirrors the coding-fix engine (same Procedural store, same scorer, same lang/project scoping)
+// with ONE deliberate rule change: KEEP-FIRST dedup. learn_blueprint of an existing shape is a
+// no-op (the original stands); promote_blueprint is the explicit "new standard" supersede.
+// ===========================================================================================
+
+/// A recalled blueprint: the shape it covers, its sections payload (the language-neutral
+/// structure the LLM renders in the active language), and the match score.
+pub struct RecalledBlueprint {
+    pub doc_id: String,
+    pub score: f32,
+    /// The shape line (e.g. "Create<Entity> REST endpoint") — the human-readable key.
+    pub shape: String,
+    /// The stored sections payload (JSON the LLM renders per language).
+    pub sections_json: String,
+    /// The blueprint's language from its `lang:` meta tag, if any (None = language-neutral).
+    pub lang: Option<String>,
+}
+
+/// Stable identity for a blueprint = its SHAPE (folded with SAID_PROJECT, mirroring fixes), so two
+/// projects can each hold their own blueprint for the same shape. The doc_id is `shape::<blake3-16>`.
+fn blueprint_identity(shape: &str, project: &Option<String>) -> String {
+    let base = shape.trim().to_ascii_lowercase();
+    let base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    match project {
+        Some(p) => format!("{}\u{1f}{}", p, base),
+        None => base,
+    }
+}
+
+/// LEARN a blueprint. The rule is simple:
+///   * `verified == false` → KEEP-FIRST: if the shape already has a blueprint this is a NO-OP (the
+///     original stands). Safe, idempotent re-learns.
+///   * `verified == true` → the structure was edited AND the build/test passed, so AUTO-UPDATE: if the
+///     stored structure differs, supersede it (the green gate IS the "is it better" check). If it's the
+///     same, it's a harmless no-op. This is promote-on-verified-edit, with no prompt and no model tags.
+/// Returns the blueprint's doc_id (`shape::<hash>`). Shared by CLI `learn-blueprint` + MCP.
+pub fn learn_blueprint(
+    brain: &mut SaidFile,
+    shape: &str,
+    sections_json: &str,
+    lang: Option<&str>,
+    label: Option<&str>,
+    verified: bool,
+) -> String {
+    let project = std::env::var("SAID_PROJECT").ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let id16 = fix_hash(&blueprint_identity(shape, &project));
+    let doc_id = format!("{}{}", BLUEPRINT_SHAPE_PREFIX, id16);
+
+    // KEEP-FIRST (unverified): an existing blueprint is authoritative — a later UNVERIFIED learn does
+    // NOT overwrite it. A VERIFIED learn (build green) falls through to auto-update below: if the new
+    // structure differs from the stored one, supersede; if identical, the rewrite is a no-op.
+    if !verified && brain.read(&doc_id).is_some() {
+        return doc_id;
+    }
+
+    let body = blueprint_body(shape, sections_json);
+    let mut tags = vec![
+        FIX_PILLAR_TAG.to_string(),
+        BLUEPRINT_KIND_TAG.to_string(),
+    ];
+    if let Some(l) = label { if !l.trim().is_empty() { tags.push(format!("pr:{}", l.trim())); } }
+    if let Some(l) = lang { if !l.trim().is_empty() { tags.push(format!("lang:{}", l.trim().to_ascii_lowercase())); } }
+    if let Some(ref proj) = project { tags.push(format!("project:{}", proj)); }
+
+    brain.remember_with_pillar(
+        Some(&doc_id), &body, Some(BLUEPRINT_KIND_TAG),
+        crate::frames::Pillar::Procedural, tags,
+    );
+    // Action-residue companion — BYTE-IDENTICAL to learn_coding_fix's fixaction:: frame: content is the
+    // action residue of the INTENT KEY (the shape), so recall scores intent exactly as recall_fix does.
+    // 14.15: "the shape is the intent key, fingerprinted like recall_fix." We do NOT mix the sections
+    // (the payload) into the key — that would diverge from the proven engine.
+    let action = action_residue(shape);
+    if !action.is_empty() {
+        let action_id = format!("{}{}", BP_ACTION_ID_PREFIX, id16);
+        brain.remember_with_pillar(
+            Some(&action_id), &action, Some(BLUEPRINT_KIND_TAG),
+            crate::frames::Pillar::Procedural, vec![BLUEPRINT_KIND_TAG.to_string()],
+        );
+    }
+    let _ = brain.build_index();
+    doc_id
+}
+
+/// PROMOTE — auto-update the blueprint after a VERIFIED edit (build/test green). Thin wrapper over
+/// `learn_blueprint(..., verified=true)`: the green gate is the whole "is it better" check, so a changed
+/// structure supersedes and an identical one is a no-op. No prompt, no model tags.
+pub fn promote_blueprint(
+    brain: &mut SaidFile,
+    shape: &str,
+    sections_json: &str,
+    lang: Option<&str>,
+    label: Option<&str>,
+) -> String {
+    learn_blueprint(brain, shape, sections_json, lang, label, true)
+}
+
+/// RECALL TOP-K blueprints for a shape query, highest score first. Reuses the coding-fix semantic
+/// scorer, filtered to BLUEPRINT_KIND_TAG. Like fixes, blueprints are PROCEDURAL = ALWAYS CROSS-PROJECT
+/// (owner decision 2026-06-30): a verified reusable structure built in any project is recallable in the
+/// current one — so this does NOT honor SAID_RECALL_PROJECT. The SAID_RECALL_LANG guarantee still applies.
+pub fn recall_blueprints(brain: &mut SaidFile, shape: &str, k: usize, min_score: f32) -> Vec<RecalledBlueprint> {
+    let lang_want = std::env::var("SAID_RECALL_LANG").ok()
+        .map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    let fetch_k = if lang_want.is_some() { k.saturating_mul(4).max(k) } else { k };
+
+    let pool = best_blueprints(brain, shape, fetch_k.max(8));
+    pool.into_iter()
+        .filter(|(_, score)| *score >= min_score)
+        .filter_map(|(doc_id, score)| {
+            // lang tag only (blueprints are always cross-project — see the PROCEDURAL note above).
+            let meta_lang = brain.frames.get_meta(&doc_id)
+                .and_then(|m| m.tags.iter().find_map(|t| t.strip_prefix("lang:")).map(|l| l.to_ascii_lowercase()));
+            let body = brain.get(&doc_id).unwrap_or_default();
+            Some(RecalledBlueprint {
+                shape: blueprint_shape(&body),
+                sections_json: blueprint_sections(&body),
+                doc_id, score, lang: meta_lang,
+            })
+        })
+        .filter(|bp| match &lang_want {
+            None => true,
+            Some(want) => match bp.lang.clone() { Some(have) => &have == want, None => true },
+        })
+        .take(k.max(1))
+        .collect()
+}
+
+/// Blueprint scorer — MIRRORS best_coding_fixes exactly (rel_conf spine + semantic fingerprint of the
+/// full query + action-isolated INTENT fingerprint against the bpaction:: companion), so a natural-language
+/// query recalls a blueprint by INTENT the way recall_fix does — not by lexical name overlap. This is the
+/// doc's "shape = intent key, fingerprinted like recall_fix" (14.15).
+fn best_blueprints(brain: &mut SaidFile, query: &str, k: usize) -> Vec<(String, f32)> {
+    use std::collections::HashMap;
+    let n = brain.frames.active_count();
+    let fetch = (n / 2).clamp(50, 1000);
+
+    let (fusion_cands, _kw) = ask(brain, query, fetch, true, None);
+    // Real blueprint frames only (shape::...), NOT the bpaction:: companions (also blueprint-tagged).
+    let ranked: Vec<(String, f32)> = fusion_cands.iter()
+        .filter(|c| c.doc_id.starts_with(BLUEPRINT_SHAPE_PREFIX))
+        .filter(|c| brain.frames.get_meta(&c.doc_id)
+            .map(|m| m.tags.iter().any(|t| t == BLUEPRINT_KIND_TAG)).unwrap_or(false))
+        .map(|c| (c.doc_id.clone(), c.confidence))
+        .collect();
+    if ranked.is_empty() { return Vec::new(); }
+    let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
+
+    // SEMANTIC: pure-semantic 1-bit fingerprint of the full query against every frame.
+    let sem_fp: HashMap<String, f32> = brain.rank_by_fingerprint(query, fetch).into_iter().collect();
+    // INTENT: action-isolated fingerprint against the bpaction:: companions (what SHAPE is being asked for).
+    let q_action = action_residue(query);
+    let action_fp: HashMap<String, f32> = if q_action.is_empty() {
+        HashMap::new()
+    } else {
+        brain.rank_by_fingerprint(&q_action, fetch).into_iter()
+            .filter_map(|(d, s)| d.strip_prefix(BP_ACTION_ID_PREFIX).map(|id| (id.to_string(), s)))
+            .collect()
+    };
+
+    // Scoring is BYTE-IDENTICAL to best_coding_fixes (the proven engine 14.15 mandates reusing — "Recall
+    // = the existing engine, pointed at structure. No new retrieval mechanism."): rel_conf spine +
+    // semantic fingerprint of the query + action-isolated INTENT against the bpaction:: companion. The
+    // only differences from the fix path are the doc_id prefix (shape:: vs fix::) and the companion prefix
+    // (bpaction:: vs fixaction::) — NOT the formula. Recall-ranking weakness is therefore a SHARED
+    // property of recall_fix, documented as a known limit, never patched as a blueprint-only divergence.
+    let dbg = std::env::var("SAID_BP_SCORE_DEBUG").is_ok();
+    let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
+        let id16 = doc_id.strip_prefix(BLUEPRINT_SHAPE_PREFIX).unwrap_or(doc_id);
+        let intent = action_fp.get(id16).copied().unwrap_or(0.0);
+        let semantic = sem_fp.get(doc_id).copied()
+            .or_else(|| sem_fp.get(&format!("{}{}", BP_ACTION_ID_PREFIX, id16)).copied())
+            .unwrap_or(0.0);
+        let ask_spine = conf / top_conf;
+        let rel_conf = if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) };
+        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
+        if dbg {
+            eprintln!("[bp-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
+                doc_id, conf, rel_conf, semantic, intent, score);
+        }
+        (doc_id.clone(), score)
+    }).collect();
+    // Deterministic tie-break by doc_id — same-score fixes/blueprints must rank reproducibly
+    // (HashMap collect order otherwise makes the top-k vary per run).
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0)));
+    scored.truncate(k.max(1));
+    scored
+}
+
+fn blueprint_body(shape: &str, sections_json: &str) -> String {
+    format!("SHAPE: {}{}{}", shape.trim(), BLUEPRINT_SECTIONS_SEP, sections_json.trim())
+}
+
+fn blueprint_shape(body: &str) -> String {
+    let head = body.split(BLUEPRINT_SECTIONS_SEP).next().unwrap_or("");
+    head.strip_prefix("SHAPE: ").unwrap_or(head).trim().to_string()
+}
+fn blueprint_sections(body: &str) -> String {
+    body.split(BLUEPRINT_SECTIONS_SEP).nth(1).unwrap_or("").trim().to_string()
 }
 
 /// Parse the stored `lang:<x>` token from a coding-fix frame body (e.g. a curated FILES
@@ -918,6 +1550,11 @@ pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
         "kt" | "kts" => "kotlin",
         "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
         "c" | "h" => "c",
+        // SQL / T-SQL. Without this, a coding-fix or blueprint over a .sql file was invisible to
+        // the language layer (lang_from_edits → None → no per-language recall isolation; harvest
+        // skipped SQL from blueprints). SQL chunking + symbols are already first-class; this makes
+        // FIXES + BLUEPRINTS first-class too, the same as C#. (sql_chunk handles sql|ddl|tsql.)
+        "sql" | "tsql" | "ddl" => "sql",
         _ => return None,
     })
 }
@@ -989,21 +1626,114 @@ pub fn best_coding_fix(brain: &mut SaidFile, problem: &str) -> Option<(String, f
 /// Neighborhood and fingerprint widths scale with the corpus so a crowded store
 /// doesn't truncate the true match out of the candidate pool before scoring.
 pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(String, f32)> {
-    // Widen the ask neighborhood + fingerprint pools with corpus size: at 10 records
-    // 25 is plenty; at 1000s the right fix can sit past rank 25, so scale the fetch.
+    // ask() neighborhood width. The deep `ask` float-reranks its OWN returned pool, so a huge fetch is
+    // expensive (measured: fetch=1000 deep-ask on a 9k harvested brain made recall_fix take >60s). We
+    // don't need a wide ask pool for reachability — the fix-store UNION below adds every fix:: frame as
+    // a candidate regardless — so we keep ask() tight and let the bounded float rerank do the ranking.
     let n = brain.frames.active_count();
-    let fetch = (n / 2).clamp(50, 1000);
+    let fetch = (n / 2).clamp(50, 200);
 
-    let (fusion_cands, _kw) = ask(brain, problem, fetch, false, None);
-    let ranked: Vec<(String, f32)> = fusion_cands.iter()
+    // deep=true is REQUIRED here. The non-deep abstention/cutoff path is tuned for end-user `ask`: when a
+    // coincidental high-confidence SYMBOL hit matches the query (e.g. the word "save" → a `save` symbol),
+    // it treats "a confident answer exists" as true and DROPS the semantic tail — which is exactly the
+    // fix frame we're after (a Procedural memory found semantically). Measured: on a paraphrased fix
+    // query, brain.query surfaced the fix at 0.71 but non-deep ask returned ONLY the symbol (fix
+    // starved), so recall_fix wrongly returned "No known fix"; deep ask returns the fix. We re-score the
+    // fix candidates ourselves below (rel_conf + semantic + intent fingerprints), so we want the FULL
+    // semantic-led pool here, not the abstention-trimmed top-K.
+    let (fusion_cands, _kw) = ask(brain, problem, fetch, true, None);
+    let mut ranked: Vec<(String, f32)> = fusion_cands.iter()
         .filter(|c| brain.frames.get_meta(&c.doc_id)
             .map(|m| m.tags.iter().any(|t| t == FIX_KIND_TAG)).unwrap_or(false))
         .map(|c| (c.doc_id.clone(), c.confidence))
         .collect();
+
+    // LEXICAL + OKF FALLBACK (scoped to the FIX STORE only — never touches global recall). At scale the
+    // dense `ask` window is dominated by code frames, so a loosely-worded fix query can miss its fix
+    // frame entirely even when they share tokens ("leap-day date parsing" vs "date parse ... 29th of
+    // February"). We ALSO scan every fix:: frame's TASK text for token overlap with the query and UNION
+    // those in as candidates (with a modest confidence). The LLM then decides among @1/@5/@10 — the
+    // documented contract (recall returns candidates; the model picks). This makes a fix REACHABLE via
+    // lexical/wiki even when the fingerprint doesn't rank it, without changing global `ask` behavior.
+    //
+    // REACHABILITY (paging, k > 1): the 1-bit fingerprint that `ask` uses to build its candidate window
+    // discards per-dim magnitude, so a synonym-swapped paraphrase ("floating point" vs stored "float",
+    // "wraps around" vs "overflow") can miss its fix frame ENTIRELY — it never enters the pool, so no
+    // rerank can rescue it. In paging mode we therefore UNION IN every fix:: frame as a candidate (they
+    // are few — this is the fix store, not the whole corpus), and let the FLOAT-COSINE rerank below rank
+    // them by true latent similarity. k==1 (the abstention/confident-answer contract) keeps ONLY the
+    // dense-neighborhood candidates, so an unrelated query still returns "No known fix".
+    if k > 1 {
+        let already: std::collections::HashSet<String> = ranked.iter().map(|(d, _)| d.clone()).collect();
+        let fix_ids: Vec<String> = brain.frames.get_all_frames().iter()
+            .filter(|m| m.status == crate::frames::FrameStatus::Active
+                && m.doc_id.starts_with("fix::")
+                && !already.contains(&m.doc_id))
+            .map(|m| m.doc_id.clone())
+            .collect();
+        // seed with a low base conf; the float rerank decides their real rank.
+        for did in fix_ids { ranked.push((did, 0.05)); }
+    }
+
     if ranked.is_empty() {
         return Vec::new();
     }
     let top_conf = ranked.iter().map(|(_, c)| *c).fold(0.0f32, f32::max).max(1e-6);
+
+    // FLOAT-COSINE RERANK (the documented recall@1 0.195→0.855 mechanism, roadmap 2026-06-22 / 14.1 /
+    // 14.8) — applied to fix candidates, which previously scored ONLY on the 1-bit fingerprint and so
+    // could not bridge synonym swaps. Re-encode the query + each candidate's TASK text and score by
+    // WHITENED float cosine (anisotropy/all-but-the-top correction, same as the `ask` rerank). This is
+    // the full-magnitude 64-dim signal the 1-bit throws away. Cheap: a handful of re-encodes (~µs each).
+    let float_cos: HashMap<String, f32> = {
+        let mut m = HashMap::new();
+        if let Some(q_emb) = brain.engine.encode_query(problem) {
+            let mu = brain.engine.core.get_corpus_mean().to_vec();
+            let sd = brain.engine.core.get_corpus_std().to_vec();
+            let whiten = |v: &[f32]| -> Vec<f32> {
+                if mu.len() == v.len() {
+                    v.iter().enumerate().map(|(d, x)| (x - mu[d]) / sd.get(d).copied().unwrap_or(1.0).max(1e-6)).collect()
+                } else { v.to_vec() }
+            };
+            let cos = |a: &[f32], b: &[f32]| -> f32 {
+                let (mut d, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+                for i in 0..a.len().min(b.len()) { d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+                d / (na.sqrt().max(1e-12) * nb.sqrt().max(1e-12))
+            };
+            let q_c = whiten(&q_emb);
+            // Rerank a BOUNDED candidate set, not the whole pool — re-encoding EVERY candidate meant a
+            // decompress+encode per fix frame, which at scale (a harvested multi-project brain) made
+            // recall_fix take >60s. The set = the top-N dense candidates (by 1-bit spine) UNION every
+            // unioned fix:: frame (the paging reachability seeds, base conf 0.05 — must not be truncated
+            // out, they're the whole point of the union). Fix frames are few, so this stays small.
+            // Bound total re-encodes (each is a frame decompress + encode_query). Take the top-N dense
+            // candidates by 1-bit spine, then fill the remaining budget with the unioned fix frames.
+            // Total capped at RERANK_MAX so recall_fix stays fast even on a large brain (measured: an
+            // uncapped rerank over a harvested multi-project pool took >60s). RERANK_MAX comfortably
+            // covers a realistic fix store; a brain with thousands of fixes would want a cheap lexical
+            // prefilter here (future — noted in docs/11 §recall).
+            const RERANK_MAX: usize = 64;
+            let mut by_spine: Vec<(String, f32)> = ranked.clone();
+            by_spine.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0)));  // deterministic tie-break by doc_id
+            let mut keep_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (d, _) in by_spine.iter() {
+                if keep_ids.len() >= RERANK_MAX { break; }
+                keep_ids.insert(d.clone());
+            }
+            // gather candidate TASK texts first (immutable), then encode (no borrow conflict).
+            let tasks: Vec<(String, String)> = keep_ids.iter()
+                .map(|d| (d.clone(), fix_task_text(&brain.get(d).unwrap_or_default())))
+                .collect();
+            for (did, task) in tasks {
+                if task.is_empty() { continue; }
+                if let Some(c_emb) = brain.engine.encode_query(&task) {
+                    m.insert(did, cos(&q_c, &whiten(&c_emb)));
+                }
+            }
+        }
+        m
+    };
 
     // SEMANTIC discriminator: pure-semantic 1-bit fingerprint of the FULL problem
     // against every frame — separates near-twins (LRU vs LFU) where words tie.
@@ -1023,23 +1753,43 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
     let mut scored: Vec<(String, f32)> = ranked.iter().map(|(doc_id, conf)| {
         let id16 = doc_id.strip_prefix("fix::").unwrap_or(doc_id);
         let intent = action_fp.get(id16).copied().unwrap_or(0.0);
-        let rel_conf = conf / top_conf;
         let semantic = sem_fp.get(doc_id).copied()
             .or_else(|| sem_fp.get(&format!("{}{}", FIX_ACTION_ID_PREFIX, id16)).copied())
             .unwrap_or(0.0);
-        // ask confidence = right neighborhood (spine); the semantic fingerprint of the
-        // PROBLEM (meaning) + the action fingerprint (isolated INTENT) pick the right
-        // one within it. Weighted comparably so an adversarial twin (an LFU fix that
-        // mentions "least-recently-used") is out-voted by intent.
-        let score = rel_conf * (0.3 + 0.4 * semantic + 0.3 * intent);
+        // rel_conf is the documented "right NEIGHBORHOOD" spine (docs/15-orchestration): it confirms the
+        // fix is in the candidate neighborhood; the fingerprints discriminate WITHIN it. The ask
+        // confidence is the natural spine — BUT in deep mode the float rerank zeros a fix frame's ask
+        // conf because a good fix NOTE intentionally doesn't echo the problem's words (its centered
+        // cosine ≈ 0). Using that zero as a multiplier vetoed strong-fingerprint fixes (A2: semantic
+        // 0.49 + intent 0.61 but ask=0 → 0.34, under the 0.45 floor). The fix: when the ask spine is
+        // unreliable (≈0), fall back to the SEMANTIC FINGERPRINT as the neighborhood signal — it IS a
+        // documented neighborhood measure (rank_by_fingerprint), and deep mode doesn't destroy it. A
+        // real match in the semantic neighborhood gets a strong rel_conf; a decoy in a DIFFERENT
+        // neighborhood gets a weak one, so twin discrimination is preserved (the LRU/LFU case still
+        // splits on the within-neighborhood fingerprint+intent terms).
+        let ask_spine = conf / top_conf;
+        // fcos = whitened FLOAT cosine (the full-magnitude semantic signal). It's the documented bridge
+        // for synonym swaps the 1-bit fingerprint can't see, so it's the PRIMARY neighborhood measure
+        // when present; fall back to the fingerprint/ask spine when the encoder is unavailable.
+        let fcos = float_cos.get(doc_id).copied();
+        let rel_conf = match fcos {
+            Some(fc) => fc.max(0.0),
+            None => if ask_spine >= 0.10 { ask_spine } else { semantic.max(ask_spine) },
+        };
+        // Neighborhood (float cosine, primary) × discriminators (semantic fingerprint of the PROBLEM +
+        // action fingerprint for INTENT). The float cosine ranks synonym-swapped matches correctly; the
+        // fingerprints still split adversarial same-neighborhood twins (LRU vs LFU) on intent.
+        let sem_signal = fcos.map(|f| f.max(semantic)).unwrap_or(semantic);
+        let score = rel_conf * (0.3 + 0.4 * sem_signal + 0.3 * intent);
         if dbg {
-            eprintln!("[fix-score] {} ask={:.3} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
-                doc_id, conf, rel_conf, semantic, intent, score);
+            eprintln!("[fix-score] {} ask={:.3} fcos={:?} rel={:.3} semantic={:.3} intent={:.3} -> {:.3}",
+                doc_id, conf, fcos, rel_conf, semantic, intent, score);
         }
         (doc_id.clone(), score)
     }).collect();
 
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0)));  // deterministic tie-break by doc_id
     scored.truncate(k.max(1));
     scored
 }
@@ -1047,3 +1797,27 @@ pub fn best_coding_fixes(brain: &mut SaidFile, problem: &str, k: usize) -> Vec<(
 // best_coding_fix(es) are validated end-to-end by the decoy + scale harnesses
 // (hard-eval/recall-measure.sh, recall-scale.sh) — they need a brain with the static
 // encoder loaded (the semantic fingerprint signal), which a pure unit test cannot give.
+
+#[cfg(test)]
+mod ext_to_lang_tests {
+    use super::ext_to_lang;
+
+    // The Wonga bank rewrite is C# + T-SQL. SQL chunking + symbols are first-class, but a
+    // coding-fix or blueprint over a .sql file was INVISIBLE to the language layer: ext_to_lang
+    // returned None for sql/tsql, so lang_from_edits could not tag a SQL fix (no per-language
+    // recall) and harvest.rs skipped SQL from blueprint harvesting entirely. SQL must be a
+    // first-class language for FIXES + BLUEPRINTS the same way C# is.
+    #[test]
+    fn sql_is_a_recognized_language() {
+        assert_eq!(ext_to_lang("sql"), Some("sql"));
+        assert_eq!(ext_to_lang("tsql"), Some("sql"));
+        assert_eq!(ext_to_lang("ddl"), Some("sql"));
+    }
+
+    #[test]
+    fn existing_languages_still_recognized() {
+        assert_eq!(ext_to_lang("cs"), Some("csharp"));
+        assert_eq!(ext_to_lang("py"), Some("python"));
+        assert_eq!(ext_to_lang("nonsense"), None);
+    }
+}

@@ -14,10 +14,13 @@ use sca_core::frames::{MemoryType, Pillar};
 use sca_core::said_file::SaidFile;
 
 fn tmp_path(label: &str) -> String {
-    // Cargo cwd during `cargo test` is the crate root — keep files there so
-    // we don't depend on target/ or system temp dirs existing.
+    // Write to the system temp dir (NOT the crate root) so test brains don't pile up as
+    // tmp_decision3_*.said in the repo when a test panics before cleanup.
     let pid = std::process::id();
-    format!("tmp_decision3_{}_{}.said", label, pid)
+    std::env::temp_dir()
+        .join(format!("said_decision3_{}_{}.said", label, pid))
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn cleanup(path: &str) {
