@@ -1489,6 +1489,35 @@ impl FrameStore {
         result
     }
 
+    /// Aggregate the tag vocabulary across all ACTIVE frames: every distinct tag
+    /// and how many active memories carry it, sorted by count desc then name asc.
+    /// Taxonomy-agnostic — it reports whatever tags were stored (the LLM chooses
+    /// them at save time), with NO hard-coded namespaces. This is the read side
+    /// that makes tags a browsable, self-describing vocabulary (surfaces the
+    /// `list_tags` / `list-tags` command) so an agent can see the conventions
+    /// already in use and converge on them instead of inventing synonyms.
+    /// `prefix`, if set, keeps only tags starting with it (e.g. "project:").
+    pub fn tag_counts(&self, prefix: Option<&str>) -> Vec<(String, usize)> {
+        use std::collections::HashMap;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let keep = |t: &str| prefix.map_or(true, |p| t.starts_with(p));
+        for frame in &self.frames {
+            if frame.status != FrameStatus::Active { continue; }
+            for t in frame.tags.iter().filter(|t| keep(t)) {
+                *counts.entry(t.clone()).or_insert(0) += 1;
+            }
+        }
+        for pending in &self.pending {
+            if pending.meta.status != FrameStatus::Active { continue; }
+            for t in pending.meta.tags.iter().filter(|t| keep(t)) {
+                *counts.entry(t.clone()).or_insert(0) += 1;
+            }
+        }
+        let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v
+    }
+
     /// Read and decompress a frame's content from the raw file data.
     /// `file_data` is the entire .said file (or mmap'd region).
     /// Read the raw decompressed payload of a frame by its frame_id.

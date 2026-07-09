@@ -184,6 +184,16 @@ enum Commands {
         #[arg(long)]
         prefix: Option<String>,
     },
+    /// List the tags your memories carry (the `tags:` metadata vocabulary), with a count per
+    /// tag. Distinct from list-concepts, which walks the [[wikilink]] graph — this surfaces the
+    /// free-form tags you (or an agent) attach when saving, so you can see the conventions already
+    /// in use and reuse them instead of inventing synonyms.
+    #[command(name = "list-tags")]
+    ListTags {
+        /// Only show tags starting with this prefix (e.g. --prefix project:)
+        #[arg(long)]
+        prefix: Option<String>,
+    },
     /// Save a memory-evidence frame (the doc-31 standard): a CLAIM with structured evidence, recalled
     /// by manifest + LLM-select (like Claude/Kimi), with link: edges to its source (commit/file/concept).
     /// Coexists with blueprints + coding-fixes in the same brain.
@@ -1538,6 +1548,7 @@ fn run() {
         Commands::Checkout { ref name, version, frame, write } => cmd_checkout(cli.path.as_deref(), name, version, frame, write, cli.json),
         Commands::Stats { verbose } => cmd_stats(cli.path.as_deref(), cli.json, verbose),
         Commands::ListConcepts { prefix } => cmd_list_concepts(cli.path.as_deref(), prefix.as_deref(), cli.json),
+        Commands::ListTags { prefix } => cmd_list_tags(cli.path.as_deref(), prefix.as_deref(), cli.json),
         Commands::SaveMemory { ref name, ref description, ref mtype, ref claim, ref claim_file, ref evidence } =>
             cmd_save_memory(cli.path.as_deref(), name, description, mtype, claim.as_deref(), claim_file.as_deref(), evidence, cli.json),
         Commands::RecallMemory { ref name } => cmd_recall_memory(cli.path.as_deref(), name, cli.json),
@@ -3956,6 +3967,30 @@ fn cmd_list_concepts(path: Option<&str>, prefix: Option<&str>, json: bool) -> Re
     println!("Concepts ({} distinct):", concepts.len());
     for (c, n) in &concepts {
         println!("  {:>4}  {}", n, c);
+    }
+    Ok(())
+}
+
+fn cmd_list_tags(path: Option<&str>, prefix: Option<&str>, json: bool) -> Result<(), String> {
+    let brain = open_brain(path)?;
+    let tags = brain.tag_counts(prefix);
+    if json {
+        let arr: Vec<_> = tags.iter()
+            .map(|(t, n)| serde_json::json!({ "tag": t, "memories": n }))
+            .collect();
+        println!("{}", serde_json::json!(arr));
+        return Ok(());
+    }
+    if tags.is_empty() {
+        match prefix {
+            Some(p) => println!("No tags starting with '{}'. Add tags when saving (e.g. add \"...\" --tag project:said).", p),
+            None => println!("No tags yet. Add tags when saving a memory (e.g. add \"...\" --tag project:said --tag topic:launch) to build a browsable vocabulary."),
+        }
+        return Ok(());
+    }
+    println!("Tags ({} distinct):", tags.len());
+    for (t, n) in &tags {
+        println!("  {:>4}  {}", n, t);
     }
     Ok(())
 }

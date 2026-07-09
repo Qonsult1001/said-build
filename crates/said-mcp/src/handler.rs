@@ -549,6 +549,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::AskTool(t) => self.handle_ask(t),
             SaidTools::GetTool(t) => self.handle_get(t),
             SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
+            SaidTools::ListTagsTool(t) => self.handle_list_tags(t),
             #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
@@ -930,6 +931,20 @@ impl SaidServerHandler {
         // Return JSON so the caller's LLM can parse and reuse concepts programmatically.
         let arr: Vec<serde_json::Value> = concepts.iter()
             .map(|(c, n)| serde_json::json!({ "concept": c, "memories": n }))
+            .collect();
+        let body = serde_json::to_string_pretty(&arr)
+            .unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+    }
+
+    fn handle_list_tags(&self, t: ListTagsTool) -> Result<CallToolResult, CallToolError> {
+        let brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let tags = brain.tag_counts(t.prefix.as_deref());
+        // JSON so the caller's LLM can parse the vocabulary and REUSE existing tags.
+        let arr: Vec<serde_json::Value> = tags.iter()
+            .map(|(tag, n)| serde_json::json!({ "tag": tag, "memories": n }))
             .collect();
         let body = serde_json::to_string_pretty(&arr)
             .unwrap_or_else(|_| "[]".to_string());

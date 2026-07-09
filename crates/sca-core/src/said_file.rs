@@ -3139,6 +3139,16 @@ impl SaidFile {
     /// (lowercased). The recall-time half of the build-graph path (3.9): used by
     /// `ask` to traverse explicit concept links so a query reaches a linked note even
     /// when the bridge word isn't in its body. Returns doc_ids.
+    /// The brain's tag vocabulary: every distinct tag on an active memory and how
+    /// many carry it (count desc, then name asc). `prefix` narrows to a namespace
+    /// like "project:". Taxonomy-agnostic — reports whatever the LLM stored, with
+    /// no hard-coded namespaces. This is the read side that turns write-only tags
+    /// into a browsable vocabulary agents can converge on (the `list_tags` command).
+    /// Distinct from `list_concepts`, which walks the `[[wikilink]]` graph, not tags.
+    pub fn tag_counts(&self, prefix: Option<&str>) -> Vec<(String, usize)> {
+        self.frames.tag_counts(prefix)
+    }
+
     pub fn frames_linking_concept(&self, concept: &str) -> Vec<String> {
         let cl = concept.to_lowercase();
         let want = format!("link:{}", cl);

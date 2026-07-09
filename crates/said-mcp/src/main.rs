@@ -147,9 +147,16 @@ async fn main() -> SdkResult<()> {
              - `delete` — remove a memory (recoverable via `admin`).\n\
              - `history` / `checkout` — see or restore earlier versions of a memory.\n\
              - `status` — how many memories the brain holds.\n\
-             - `list_concepts` — the topics your memories connect to.\n\
+             - `list_concepts` — the [[wikilink]] topics your memories connect to.\n\
+             - `list_tags` — the `tags` metadata vocabulary your memories carry.\n\
              - `create` / `open` — make or switch to a brain file.\n\
              - `admin` — recover deleted memories, manage retention.\n\n\
+             ## TAG EVERY MEMORY\n\
+             When you `remember`, attach `tags` describing what the memory is about (subject, \
+             project, status, kind, time) so it's browsable/filterable later. Pick them yourself \
+             from the content — there is NO fixed list. Use `namespace:value` (e.g. `project:said`, \
+             `topic:launch`, `status:planned`). Call `list_tags` FIRST and REUSE an existing tag \
+             instead of coining a synonym — a converged vocabulary keeps browse/filter accurate.\n\n\
              ## FIRST CONTACT\n\
              If the brain is empty, call `prompts/get name=\"onboard\"` and paste the welcome. \
              Otherwise greet briefly and offer `ask`. Check `status` if unsure — never overwrite blindly.\n");

@@ -98,6 +98,23 @@ pub struct ListConceptsTool {
     pub prefix: Option<String>,
 }
 
+#[mcp_tool(
+    name = "list_tags",
+    description = "List the tags memories carry (the `tags` metadata vocabulary), with how many \
+                   memories carry each. This is the FREE-FORM taxonomy you attach when remembering \
+                   (e.g. project:said, topic:launch, status:planned) — distinct from list_concepts, \
+                   which is the [[wikilink]] graph. ALWAYS call this BEFORE remembering so you REUSE \
+                   an existing tag instead of inventing a synonym (reuse 'status:planned', don't add \
+                   'status:todo'), keeping the vocabulary converged so a later browse/filter is \
+                   accurate. Returns [{tag, memories}] sorted by frequency.",
+    read_only_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ListTagsTool {
+    /// Optional: only return tags starting with this prefix (e.g. "project:").
+    pub prefix: Option<String>,
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Tool 3: INGEST — add files to the brain
 // ════════════════════════════════════════════════════════════════════════════
@@ -145,8 +162,18 @@ pub struct IngestTool {
                    \
                    Pillars drive retrieval weighting: Episodic decays by recency, \
                    Semantic is confidence-ranked. Choosing well now pays off once \
-                   Dream consolidation lands. Optional id, title, and tags for \
-                   organization. The brain learns from every query (S_slow) and \
+                   Dream consolidation lands. \
+                   \
+                   ALWAYS TAG. Attach `tags` describing what THIS memory is about — the \
+                   facets you'd later browse or filter by (subject, project, status, kind, \
+                   time). Choose them yourself from the content; there is NO fixed tag list. \
+                   Use `namespace:value` form (e.g. `project:said`, `topic:launch`, \
+                   `status:planned`, `quarter:Q4`). CRITICAL: call `list_tags` FIRST and REUSE \
+                   an existing tag rather than coining a synonym (reuse `status:planned`, don't \
+                   add `status:todo`; reuse `project:said`, don't add `project:said-build`) — a \
+                   converged vocabulary is what makes later browse/filter accurate. \
+                   \
+                   Optional id and title too. The brain learns from every query (S_slow) and \
                    dreams after 100 queries (reconsolidation).",
     destructive_hint = false
 )]
@@ -1260,12 +1287,12 @@ pub struct HarvestBlueprintsTool {
 //                                                            the brain CLI → hidden from the free surface
 // The code branches below keep every tool, so coding/coding-plus/full are UNCHANGED.
 #[cfg(all(not(feature = "forge"), not(feature = "code")))]
-tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, RememberTool, StatusTool,
+tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, ListTagsTool, RememberTool, StatusTool,
                       HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool]);
 
 // CODE builds (coding / coding-plus / full), no forge — FULL tool set, unchanged.
 #[cfg(all(not(feature = "forge"), feature = "code"))]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
@@ -1273,7 +1300,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool]);
 
 #[cfg(feature = "forge")]
-tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool,
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
                       SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
