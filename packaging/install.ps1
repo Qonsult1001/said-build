@@ -8,6 +8,14 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Copy one binary over a possibly-locked destination. Returns $true on success, $false if the
+# target is still in use (so the caller can retry). Kept as a function so the copy loop stays
+# free of inline try/catch (which the here-string-heavy body below doesn't parse cleanly around).
+function Copy-Said-Binary($src, $dst) {
+  try { Copy-Item $src $dst -Force -ErrorAction Stop; return $true }
+  catch { return $false }
+}
+
 $repo   = 'Qonsult1001/said-build'
 $bundle = if ($env:SAID_BUNDLE) { $env:SAID_BUNDLE } else { 'brain' }
 $asset  = "said-$bundle-windows-x64.zip"
@@ -26,11 +34,41 @@ try {
   Write-Host "said: extracting ..."
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
+  # An agent (Cursor / Claude Desktop / Copilot) may have said-mcp.exe running as its MCP server,
+  # which LOCKS the file on Windows and makes the copy fail with "being used by another process".
+  # Stop any running said / said-mcp processes first so the update can overwrite them — this only
+  # stops the SERVER PROCESS, never touches any .said brain file. Agents relaunch it on reload.
+  $running = @(Get-Process said, said-mcp -ErrorAction SilentlyContinue)
+  if ($running.Count -gt 0) {
+    Write-Host "said: stopping $($running.Count) running said process(es) so they can be updated (your data is untouched)..."
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 800   # let the OS release the file handles
+    $wasRunning = $true
+  } else { $wasRunning = $false }
+
   foreach ($b in @('said.exe', 'said-mcp.exe')) {
     $src = Join-Path $tmp $b
-    if (Test-Path $src) { Copy-Item $src (Join-Path $dest $b) -Force }
+    if (-not (Test-Path $src)) { continue }
+    $dst = Join-Path $dest $b
+    # Retry the copy a few times in case a file handle is still releasing after Stop-Process.
+    # On a persistent lock (an agent that refused to stop), give a clear, actionable message
+    # instead of a raw IOException.
+    $copied = $false
+    $n = 0
+    while (-not $copied -and $n -lt 4) {
+      $n++
+      if (Copy-Said-Binary $src $dst) { $copied = $true } else { Start-Sleep -Milliseconds 700 }
+    }
+    if (-not $copied) {
+      Write-Host "said: could not update $b -- it is still in use."
+      Write-Host "      Fully close your AI agents (Cursor, Claude Desktop, VS Code/Copilot) and re-run this installer."
+      throw "said: $b is locked by a running process; close your agents and retry."
+    }
   }
   Write-Host "said: installed to $dest"
+  if ($wasRunning) {
+    Write-Host "said: (reload / restart your AI agents so they pick up the updated server)"
+  }
 
   # Add to the USER PATH (persistent) if not already there.
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
