@@ -51,6 +51,21 @@ else
 fi
 
 # ── install the two brain binaries ──
+# An agent may have said-mcp running as its MCP server. On Linux/macOS `install` replaces the file
+# by inode so the copy itself won't fail, but the running server keeps the OLD binary until it's
+# relaunched — so stop it, then let the agent respawn it on reload. This only stops the SERVER
+# PROCESS; it never touches any .said brain file.
+said_was_running=0
+if command -v pkill >/dev/null 2>&1; then
+  if pgrep -x said-mcp >/dev/null 2>&1 || pgrep -x said >/dev/null 2>&1; then
+    echo "said: stopping running said process(es) so they update cleanly (your data is untouched)..."
+    pkill -x said-mcp 2>/dev/null || true
+    pkill -x said 2>/dev/null || true
+    said_was_running=1
+    sleep 1
+  fi
+fi
+
 for b in said said-mcp; do
   if [ -f "$tmp/$b" ]; then
     install -m 0755 "$tmp/$b" "$bindir/$b"
@@ -58,6 +73,7 @@ for b in said said-mcp; do
 done
 
 echo "said: installed to $bindir"
+[ "$said_was_running" = "1" ] && echo "said: (reload / restart your AI agents so they pick up the updated server)"
 "$bindir/said" --version || true
 
 # ── PATH hint ──
