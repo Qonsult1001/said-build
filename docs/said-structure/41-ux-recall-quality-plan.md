@@ -31,7 +31,7 @@ The client tracker predates v0.11.4. Corrected status:
 | Dream invisible to users | ✅ **Shipped** — plain-English "Learning:" line | v0.11.4, FIXES-LOG #16 |
 | Status shows code-tier next steps | ✅ **Shipped** — `ask`/`remember`/`get` only on brain | v0.11.4, FIXES-LOG #16 |
 | Tags write-only (`quarter:Q2` invisible) | ✅ **Shipped** — `list_tags` surfaces the tag vocabulary; `ask --tag`/`tags:[…]` filters by facet | v0.11.4, FIXES-LOG #16 |
-| Score ties at 0.90 on vague asks | ✅ **Not a defect** — top-K + LLM-decides contract (above); target is in the set. The cross-facet bleed a user *can* control is fixed by the tag filter. | 31, 11, this doc |
+| Score ties at 0.90 on vague asks | ✅ **Fixed WHEN SCOPED — intra-facet ties remain by design.** The tag filter cuts cross-facet bleed; within one facet a vague one-shot still ties at 0.90 (top-K + LLM-decides — the target is in the set). ⚠️ Mark it "fixed with tag scoping", NOT "fixed for unscoped vague queries" — else a client retests unscoped and reads it as a regression. | 31, 11, this doc |
 | `"102 of 36 memories indexed"` | ✅ **Shipped** — honest index count (tombstoned entries explained) | v0.11.4 |
 | Filler-memory noise (the tester's brain) | ✅ **Cleaned** for this brain (66 fillers tombstoned) — see "E" for the general story | this session |
 | Agent must use brain autonomously | 🟡 Documented caveat (constitution nudges; obedience = host agent) | 11-known-limitations 14.1 |
@@ -41,6 +41,23 @@ The client tracker predates v0.11.4. Corrected status:
 **Action for the client:** the top three "🔴 still rough" items are **already fixed in v0.11.4** — the
 tester was on an earlier binary (the running MCP didn't advertise the `tags` param). **Reinstall v0.11.4
 and reload agents** to get them. Nothing further to build for those.
+
+### The `said-watch` recall matrix (verified on the live brain, v0.11.4)
+
+Concrete proof of "fixed when scoped; intra-facet ties are the design" — the exact probes a client runs:
+
+| Probe | Filter | q2-said-watch | Top score |
+|---|---|---|---|
+| "offline integration that watches files for changes" | none | ❌ not in top 8 | 0.90 tie (cross-facet bleed) |
+| same | `tags:["quarter:Q2"]` | ✅ in the 6-item Q2 set | 0.90 tie *within* the facet |
+| "filesystem watcher watches files for changes" | `tags:["quarter:Q2"]` | ✅ **#1** | **1.27 [semantic]** |
+| "which Q2 integration is the filesystem watcher" | `tags:["quarter:Q2"]` | ❌ not in top 5 | 0.90 tie (top-5 are other Q2 items) |
+
+Read this as: **the tag filter breaks cross-quarter bleed; within a facet a vague one-shot still ties**,
+and the answer is workflow — `list_tags` → scope with `quarter:Q2` → `ask` with a distinguishing keyword
+(or let the LLM pick from the small scoped set). With scope **and** a keyword, the target ranks #1 at
+1.27. This is the top-K + LLM-decides contract, not a bug — do not "fix" the unscoped tie by touching the
+ranking path.
 
 ## Genuinely open work (all read-only / additive — zero ranking change)
 
