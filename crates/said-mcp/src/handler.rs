@@ -2182,6 +2182,24 @@ permanently, run `said compact --drop-history --all` from a terminal.",
                 "Mode:          ENTERPRISE (pointer-only; content-embedding ingests REFUSED)",
         };
 
+        // "Learning" line — explain in plain English what the brain has learned from use,
+        // instead of the engineer-facing "Queries run: N / Dream cycles: M". A normal user
+        // has no idea what a "dream cycle" is; tell them what it DOES: the brain quietly
+        // learns from how you search and reorganizes so the right memory surfaces faster.
+        let learning_line = if s.brain_queries == 0 {
+            "Learning:      not yet — ask it a few questions and it starts learning from how you \
+             search".to_string()
+        } else {
+            let dreamed = if s.brain_cycles > 0 {
+                format!(", and has reorganized itself {} time{} to surface the right memory faster",
+                    s.brain_cycles, if s.brain_cycles == 1 { "" } else { "s" })
+            } else {
+                String::new()
+            };
+            format!("Learning:      active — has learned from {} search{}{}",
+                s.brain_queries, if s.brain_queries == 1 { "" } else { "es" }, dreamed)
+        };
+
         let output = format!(
             "{}\n\
              â”€â”€â”€ Brain details â”€â”€â”€\n\
@@ -2191,8 +2209,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
              Size on disk:  {} bytes ({:.1} MB)\n\
              Search index:  {}\n\
              {}\
-             Queries run:   {} (brain learns from usage)\n\
-             Dream cycles:  {}   (memory consolidation events){}",
+             {}{}",
             headline,
             said_path,
             mode_line,
@@ -2221,8 +2238,7 @@ permanently, run `said compact --drop-history --all` from a terminal.",
             } else {
                 String::new()
             },
-            s.brain_queries,
-            s.brain_cycles,
+            learning_line,
             reload_note,
         );
 

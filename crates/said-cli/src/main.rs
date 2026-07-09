@@ -4132,6 +4132,19 @@ fn cmd_stats(path: Option<&str>, json: bool, verbose: bool) -> Result<(), String
             println!("  Recoverable:       {} deleted memories, {} bytes ({:.1}% of file) [said compact --drop-history to purge]",
                 tombstones, tomb_bytes, pct);
         }
+        // Plain-English learning summary (the default view). The brain quietly learns from how you
+        // search and, after enough queries, reorganizes so the right memory surfaces faster. Say
+        // that in human terms; the raw query-log / dream-cycle counters live under --verbose.
+        if s.brain_queries == 0 {
+            println!("  Learning:          not yet — ask it questions and it learns from how you search");
+        } else {
+            let dreamed = if s.brain_cycles > 0 {
+                format!(", reorganized itself {} time{} to surface answers faster",
+                    s.brain_cycles, if s.brain_cycles == 1 { "" } else { "s" })
+            } else { String::new() };
+            println!("  Learning:          active — learned from {} search{}{}",
+                s.brain_queries, if s.brain_queries == 1 { "" } else { "es" }, dreamed);
+        }
         // Everything below is internal/diagnostic — only shown with --verbose so the
         // default view stays focused on what a memory user cares about. (Search-index
         // counts like Symbol table / Trigram are code-feature internals and read 0 /
