@@ -97,7 +97,10 @@ pub struct GetTool {
                    how many memories carry each. ALWAYS call this BEFORE remembering a new \
                    memory so you reuse an existing concept (e.g. link 'heart', not a new \
                    'heart-health') — this keeps the concept graph converged so recall stays \
-                   consistent. Returns [{concept, memories}] sorted by frequency.",
+                   consistent. Returns [{concept, memories}] sorted by frequency. \
+                   NOTE: this is the `[[wikilink]]` graph ONLY — it does NOT show the `tags` \
+                   metadata (e.g. quarter:Q2, status:planned). For that separate vocabulary use \
+                   `list_tags`. Concepts LINK related memories; tags CLASSIFY them by facet.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
