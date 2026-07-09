@@ -440,6 +440,20 @@ If you change a limitation here, update the matching roadmap entry in the same c
 
 ---
 
+## 14. Product surface & discoverability
+
+### 14.1 The agent is the UI — autonomous brain use depends on the host agent
+- **Limitation** — there's no standalone GUI or slash-command surface for a normal user; the brain is reached **through an AI agent** (Claude/Cursor/Copilot via MCP). The brain-MCP constitution instructs the agent to use the brain autonomously — "**ALWAYS call `ask` first**" for user-context questions, and act as a note-taker (`remember` on decisions/facts) — but whether that actually happens depends on the **host agent obeying its instructions**. A less-compliant agent may answer from its own training instead of consulting the brain, or forget to save.
+- **Impact** — the brain's value (recall + auto-memory) is only realized when the agent leans on it. Users can't discover `admin`, deep `ask`, or `list_tags` on their own; they rely on the agent to invoke them. This was learned the hard way in testing — the mechanism (the nudge) exists, but adoption is agent-dependent.
+- **Why it's here, not fixed** — the mechanism is already built (constitution nudges + hook injection, doc [22-memory-injection-nudge-pattern.md](22-memory-injection-nudge-pattern.md)); the residual gap is a *product-surface* decision (a standalone UI / slash-command layer), which is a larger scope than a code fix. Recorded as an explicit decision to keep the "agent is the UI" model for now.
+- **Mitigation today** — the constitution is as strong a nudge as prompt-level steering allows; users who want reliable autonomous use should prefer a capable agent and can always invoke tools explicitly ("use my brain — remember X", "check my brain for Y").
+- **Roadmap §** — a standalone discovery surface (UI / slash commands) is not yet scheduled; see [12-roadmap.md](12-roadmap.md).
+
+### 14.2 Status "dream cycles" — RESOLVED
+- Fixed: `status`/`stats` now render a plain-English "Learning:" line ("learned from N searches, reorganized itself M times to surface answers faster") instead of the engineer-facing "Dream cycles: N". Raw counters remain under `stats --verbose`. (Kept here only as a pointer; the entry is resolved — remove on next cleanup.)
+
+---
+
 ## Maintenance rule
 
 When any item above is fixed:
