@@ -41,15 +41,27 @@ Send them the `my-brain.said` file. When they point their agent at it, they get 
 > **Heads-up:** whoever has the file has everything in it. Don't share a brain that holds passwords or
 > private notes unless you mean to.
 
+## Keep more than one brain
+
+You're not limited to a single brain. You might keep a **personal** brain and a separate **work** brain,
+for example. To start a fresh, empty one, ask the agent:
+
+    Create a new brain at /path/to/work-brain.said
+
+The agent makes an empty brain file at that path. Anything you save while it's attached goes there —
+your other brains are untouched. Each brain is a separate file with its own memories.
+
 ## Switch which brain an agent uses (without restarting)
 
 If your agent is already running and you want it to use a *different* brain file, ask it:
 
     Switch to the brain at /path/to/other-brain.said
 
-The agent attaches to that file for the rest of the session. Ask it to switch back the same way.
+The agent attaches to that file for the rest of the session (this is the brain's `open` tool). Ask it to
+switch back the same way. This is how you move between your personal and work brains in one session —
+switch, work, switch back; each stays separate.
 
 ## Next
 
 - **[Store and recall notes through your agent](how-to-store-and-recall-notes-with-an-agent.md)**
-- **[The command-line walkthrough](../cli/tutorial-your-first-brain.md)** — do all of this from the terminal.
+- **[The command-line walkthrough](../../cli/doc/tutorial-your-first-brain.md)** — do all of this from the terminal.

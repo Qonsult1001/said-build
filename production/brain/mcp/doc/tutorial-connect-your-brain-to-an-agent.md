@@ -6,21 +6,21 @@
 > chats. No prior experience needed.
 >
 > This is the **MCP** walkthrough. To use `said` directly from the terminal instead, see
-> **[Getting started — your first portable brain](../cli/tutorial-your-first-brain.md)**.
+> **[Getting started — your first portable brain](../../cli/doc/tutorial-your-first-brain.md)**.
 
 Every step below is real. Follow them in order and check the "You should see:" block after each one.
 
 ## Before you start
 
-- [ ] The `said` app, version 0.11.1 or newer. Check it:
+- [ ] The `said` app, version 0.11.3 or newer. Check it:
 
       said --version
 
   You should see:
 
-      said 0.11.1
+      said 0.11.3
 
-  If `said` isn't found, install it first: **[How to download and install `said`](../how-to-install-said.md)**.
+  If `said` isn't found, install it first: **[How to download and install `said`](how-to-install-said.md)**.
 - [ ] An AI agent that speaks **MCP** — for example Claude Desktop, Claude Code, or Cursor. Any of them works.
 - [ ] About 10 minutes.
 
@@ -113,7 +113,7 @@ Your agent now has a memory that persists across conversations, models, and mach
   everyday pattern of saving and asking.
 - **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)** — one
   file, any MCP agent.
-- Prefer the terminal? **[The command-line walkthrough](../cli/tutorial-your-first-brain.md)** does all of this
+- Prefer the terminal? **[The command-line walkthrough](../../cli/doc/tutorial-your-first-brain.md)** does all of this
   with `said` commands directly.
 
 Stuck? The brain is just a file — delete `my-brain.said` and start this tutorial again from Step 1.

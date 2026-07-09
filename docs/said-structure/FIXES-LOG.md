@@ -591,11 +591,11 @@ Four defects found by driving the real **brain** build (MCP + CLI), all shipped 
    — proving they were NOT the cause: the vague probe was unchanged after cleanup; the flat-0.90
    concept-link tie was.
 
-**Known state (not a defect — tracked):** these fixes are in source + `target/release`, but the shipped
-**v0.11.2 release zips still carry the 2026-07-07 binaries** (no `list_tags`, old `status`). Shipping the
-fixes requires a **v0.11.3 CI rebuild** (`build-binaries.yml`) so every bundle + native installer is
-rebuilt consistently. Until then, `install.ps1`/`install.sh` download the pre-fix binaries. Do NOT
-hand-patch individual release assets across a version — bump the version and rebuild the whole matrix.
+**Shipping:** all of the above ships in **v0.11.3** — version bumped in `said-cli` + `said-mcp`
+Cargo.toml, tag `v0.11.3` pushed to trigger `build-binaries.yml`, which rebuilds every bundle
+(brain/coding/coding-plus/full) + native installers (.deb/.pkg/setup.exe) + the install scripts on clean
+runners and publishes them as one consistent release. (Rule, learned in this cycle: never hand-patch
+individual release assets across a version — bump the version and rebuild the whole matrix via CI.)
 
 ## Production surface parity — the standard
 

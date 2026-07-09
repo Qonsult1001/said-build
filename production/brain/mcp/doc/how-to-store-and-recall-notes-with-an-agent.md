@@ -46,14 +46,14 @@ The agent reads it back verbatim.
 
 **Changed your mind?** Just save the new version — tell the agent the updated fact and it stores it.
 The brain keeps the older version in history (see
-**[How to track versions of a memory](../cli/how-to-track-versions-of-a-memory.md)**).
+**[How to track versions of a memory](how-to-track-versions-with-an-agent.md)**).
 
 **Want it gone?** Ask:
 
     Delete my wifi note.
 
 The agent removes it. Deleted notes go to a recycle bin and can be recovered — see
-**[How to recover a deleted memory](../cli/how-to-recover-a-deleted-memory.md)**.
+**[How to recover a deleted memory](how-to-clean-up-your-brain-with-an-agent.md)**.
 
 ## If the agent can't find something
 
@@ -65,4 +65,4 @@ The agent removes it. Deleted notes go to a recycle bin and can be recovered —
 ## Next
 
 - **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)**
-- **[Recover a deleted memory](../cli/how-to-recover-a-deleted-memory.md)**
+- **[Recover a deleted memory](how-to-clean-up-your-brain-with-an-agent.md)**

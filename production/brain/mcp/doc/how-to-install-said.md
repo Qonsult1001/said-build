@@ -1,11 +1,13 @@
-# How to download and install `said`
+# How to install `said` for use with an AI agent (MCP)
 
-> Goal: get the `said` command working on your computer, starting from nothing. When
-> you're done, `said --version` works in your terminal and you're ready for the
-> [tutorial](cli/tutorial-your-first-brain.md).
+> Goal: get the `said-mcp` server installed on your computer so your AI agent (Claude Desktop, Claude
+> Code, Cursor, …) can use it as a memory. When you're done, you'll have `said-mcp` on your machine and
+> be ready to connect it to your agent.
 
-`said` is a single self-contained program — no dependencies, nothing to configure. It works offline.
-There are three ways to install it, easiest first.
+For the MCP path you install the same package as everyone else — it contains **`said-mcp`** (the memory
+server your agent talks to) alongside `said` (the terminal command, which you won't need for MCP). You
+don't run `said-mcp` by hand; your agent launches it for you once you connect it (next guide). Fully
+offline, no cloud.
 
 ## Option A — one-line install (recommended)
 
@@ -17,93 +19,69 @@ There are three ways to install it, easiest first.
 
     irm https://github.com/Qonsult1001/said-build/releases/latest/download/install.ps1 | iex
 
-This downloads `said` + `said-mcp` for your OS, installs them, and adds them to your PATH. Reopen your
-terminal and run `said --version`. Done — skip to the [tutorial](cli/tutorial-your-first-brain.md).
+This installs both `said-mcp` and `said`, adds them to your PATH, **and auto-connects the brain to any
+AI agent it finds** — Claude Code, Claude Desktop, Cursor, and GitHub Copilot. It prints which agents it
+wired up, e.g.:
+
+    said: connected the brain to your agent(s): claude-code, cursor
+      brain file: ~/.said/brain.said   (restart / reload each agent to pick it up)
+
+**Restart / reload that agent** and it already has your memory — nothing to hand-configure. Then check
+the install landed:
+
+    said-mcp --version
+
+You should see:
+
+    said-mcp 0.11.3
+
+> **Don't want it touching your agent config?** Set `SAID_NO_CONNECT=1` before running the installer and
+> it installs the binaries only, then you connect manually (next guide). To use a specific brain file,
+> set `SAID_BRAIN=/full/path/to/your-brain.said`.
+
+If an agent was auto-connected, you can skip straight to the **[MCP tutorial](tutorial-connect-your-brain-to-an-agent.md)**
+(start at "Tell the agent something to remember"). If not, or to wire a different agent by hand, see
+**[Connect your brain to your agent](how-to-connect-said-to-your-agent.md)**.
 
 ## Option B — native installer (double-click)
 
 Download and run the installer for your OS from the
 [releases page](https://github.com/Qonsult1001/said-build/releases/latest):
 
-- **Windows** → `said-setup-<version>-x64.exe` — run it; it installs `said` + `said-mcp` and adds them
-  to your PATH. Uninstall from *Add or Remove Programs*.
+- **Windows** → `said-setup-<version>-x64.exe` — run it; installs `said-mcp` + `said` and adds them to
+  your PATH. Uninstall from *Add or Remove Programs*.
 - **macOS** (Apple Silicon) → `said-<version>-arm64.pkg` — open it; installs into `/usr/local/bin`.
   (Unsigned for now: if macOS blocks it, right-click the `.pkg` → **Open**.)
-- **Linux** (Debian/Ubuntu) → `said_<version>_amd64.deb` — install with
-  `sudo apt install ./said_<version>_amd64.deb` (installs to `/usr/bin`).
+- **Linux** (Debian/Ubuntu) → `said_<version>_amd64.deb` — `sudo apt install ./said_<version>_amd64.deb`.
 
-## Option C — download the zip manually (no installer)
+Then verify with `said-mcp --version` (should print `said-mcp 0.11.3`) and continue to the connect guide.
 
-The most manual path — download, unzip, add to PATH yourself. Use this if you want to control exactly
-where the binaries live.
+## Option C — download the zip manually
 
-## Step 1 — Download the right file for your computer
-
-Go to the releases page: **https://github.com/Qonsult1001/said-build/releases/latest**
-
-Download the **`brain`** build that matches your machine:
+From the [releases page](https://github.com/Qonsult1001/said-build/releases/latest), download the
+**`brain`** zip for your machine:
 
 - **Windows** → `said-brain-windows-x64.zip`
-- **macOS** (Apple Silicon — M1/M2/M3/M4) → `said-brain-macos-arm64.zip`
-- **Linux** (64-bit Intel/AMD) → `said-brain-linux-x64.zip`
+- **macOS** (Apple Silicon) → `said-brain-macos-arm64.zip`
+- **Linux** (64-bit) → `said-brain-linux-x64.zip`
 
-> The `brain` build is the portable personal-memory version this guide covers. (The
-> `coding` / `full` builds add code and document features you don't need for memory use.)
+Unzip it. Inside you get `said-mcp` (+ `said`). Put them somewhere permanent and note the **full path to
+`said-mcp`** — you'll paste that path into your agent's config in the next guide. (You don't need
+`said-mcp` on your PATH for MCP; the agent runs it by its path.)
 
-## Step 2 — Unzip it
+> macOS only — the first time a downloaded binary runs, macOS may block it. Clear it once with:
+> `xattr -d com.apple.quarantine /path/to/said-mcp`
 
-The zip contains the `said` program (a single file).
+## Which one should I pick?
 
-- **Windows** → right-click the `.zip` → **Extract All…** → pick a folder you'll remember,
-  e.g. `C:\said`.
-- **macOS** → double-click the `.zip` in Finder; it unzips next to itself.
-- **Linux** → in a terminal:
-
-      unzip said-brain-linux-x64.zip -d ~/said
-
-## Step 3 — Make `said` runnable from anywhere
-
-You want to type `said` in any folder. Pick the path for your OS:
-
-- **Windows** → add the folder you extracted to (e.g. `C:\said`) to your **PATH**:
-  Start menu → "Edit the system environment variables" → **Environment Variables** → under
-  *User variables* select **Path** → **Edit** → **New** → paste `C:\said` → OK. Open a
-  **new** terminal afterward.
-- **macOS / Linux** → move the binary onto your PATH and mark it executable:
-
-      chmod +x ~/said/said
-      sudo mv ~/said/said /usr/local/bin/said
-
-  - **If you can't use `sudo`** → keep it in `~/said` and run it as `~/said/said` instead
-    of `said`, or add `export PATH="$HOME/said:$PATH"` to your `~/.bashrc` / `~/.zshrc`.
-
-### macOS only — clear the "unidentified developer" block
-
-The first time you run a downloaded binary, macOS may refuse it. If you see that:
-
-    xattr -d com.apple.quarantine /usr/local/bin/said
-
-…then run it again. (Or: System Settings → Privacy & Security → "Open Anyway".)
-
-## Step 4 — Confirm it works
-
-Open a **new** terminal and run:
-
-    said --version
-
-You should see:
-
-    said 0.11.1
-
-- **If you get "command not found" / "not recognized"** → the folder isn't on your PATH
-  yet, or you didn't open a new terminal. Re-check Step 3, or run it by full path
-  (`C:\said\said.exe --version` on Windows, `~/said/said --version` on macOS/Linux).
-
-## Result
-
-`said` is installed and runs from any folder. You're ready to create your first memory.
+- Just want it working → **Option A** (the one-liner). It handles PATH and both binaries.
+- Prefer a click-through installer → **Option B**.
+- Want to control exactly where the files live → **Option C**.
 
 ## Next step
 
-- **[Tutorial: Your first portable brain](cli/tutorial-your-first-brain.md)** — create a
-  brain, store a memory, and ask it a question.
+- **[Connect your brain to your agent](how-to-connect-said-to-your-agent.md)** — wire `said-mcp` into
+  Claude Desktop, Claude Code, or Cursor. **This is the important one** — installing only puts the server
+  on your machine; connecting is what gives your agent the memory.
+- Then the **[MCP tutorial](tutorial-connect-your-brain-to-an-agent.md)** walks the whole thing end to
+  end (create a brain → connect → remember → recall).
