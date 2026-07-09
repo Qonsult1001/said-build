@@ -532,6 +532,47 @@ MCP are TWO surfaces of one product and must reach parity — human-facing `--he
 descriptions, consistent parameter names, and NO stub commands. Sweep every command/tool against a real
 brain before shipping.
 
+## 16. (RESOLVED) Status mislabel, code-tier noise on brain, `admin audit` schema gap, tags write-only
+
+Four defects found by driving the real **brain** build (MCP + CLI), all shipped in the same session:
+
+1. **`status` said "Search index: absent" on a healthy brain.** The field was keyed off
+   `trigram_present` — the trigram/grep index, a **code-tier** feature always empty on a text brain —
+   so a 28-memory, perfectly-recalling brain reported "absent". **Fix:** report the SEMANTIC index
+   (`index_docs`, what `ask` uses): "present (28 of 28 memories indexed…)". Also dropped the "Symbols:
+   0" line and the code-tier "next steps" (`overview`/`search`/`sym`/`snapshot`) from brain builds;
+   they now suggest `ask`/`remember`/`get`. Same fix in CLI `stats --verbose`.
+2. **Tags were WRITE-ONLY.** Every frame stored `tags`, and they drove `delete`/scope, but nothing
+   surfaced them — `list_concepts` only walks the `[[wikilink]]` graph. Agents kept inventing synonyms
+   (`priority:launch` vs `priority:launch-blocker`, `link:wikilink` vs `link:wikilinks`). **Fix:** added
+   `list_tags` (MCP) / `list-tags` (CLI) — aggregate the tag vocabulary with per-tag counts, sorted by
+   frequency, optional prefix — matching the global standard (Obsidian's core "Tags view"). Plus a
+   `remember` "ALWAYS TAG + call list_tags first to reuse" directive so agents converge instead of
+   fragmenting. See [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md).
+3. **`admin` compliance actions were in the FREE brain tier + `audit` was undocumented.** Two problems,
+   one fix. (a) `audit` was implemented but missing from the `admin` schema, so an agent never learned it
+   existed (repeat of the #15 discoverability rule). (b) More importantly, the whole **enterprise
+   compliance surface** — `legal-hold-add/release`, `retention-sweep`, `audit` (SOX/GDPR/HIPAA machinery)
+   — shipped in the FREE personal brain, which is a monetization leak: those belong to the paid tier.
+   **Fix (product decision):** added an `enterprise` cargo feature; the four compliance actions are now
+   compile-gated to the **`full`/Enterprise bundle only** (CLI: `#[cfg(feature="enterprise")]` on the
+   `AdminAction` variants + match arms; MCP: on the handler arms). Basic recovery (`list-tombstones`,
+   `restore`, `who-deleted`) stays free in every bundle — a user must always be able to undo a delete.
+   On a non-Enterprise build a compliance action returns an honest "needs the Enterprise build" message,
+   not a silent unknown. Verified: brain CLI `admin --help` hides them + `admin audit` is unrecognized;
+   brain MCP returns the upsell message; basic actions still work; `full` still has all seven.
+4. **Tier surface not documented anywhere.** No single doc said what each shipped bundle
+   (brain/coding/coding-plus/full) includes vs excludes, so docs kept referencing code-tier commands in
+   brain contexts. **Fix:** new [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md)
+   — the authoritative per-bundle tool/command surface, verified against the `tool_box!` macros and
+   `#[cfg(feature)]` gates.
+
+**Known state (not a defect — tracked):** these fixes are in source + `target/release`, but the shipped
+**v0.11.2 release zips still carry the 2026-07-07 binaries** (no `list_tags`, old `status`). Shipping the
+fixes requires a **v0.11.3 CI rebuild** (`build-binaries.yml`) so every bundle + native installer is
+rebuilt consistently. Until then, `install.ps1`/`install.sh` download the pre-fix binaries. Do NOT
+hand-patch individual release assets across a version — bump the version and rebuild the whole matrix.
+
 ## Production surface parity — the standard
 
 To stop the class of defect in #15 from recurring, every shipped `.said` binary must satisfy, per build

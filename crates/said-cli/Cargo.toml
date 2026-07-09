@@ -36,6 +36,9 @@ code = ["sca-core/code"]
 lsp = ["sca-core/lsp"]
 docs = ["sca-core/docs"]
 ocr = ["sca-core/ocr"]
+# enterprise — compliance admin actions (legal-hold, retention-sweep, tamper-evident audit) for
+# regulated/production deployments. Gated out of the free brain + dev tiers; shipped in `full` only.
+enterprise = []
 forge = ["dep:said-forge", "dep:tokio"]
 # XLSX/XLSM ingest in forge sync (calamine-backed).
 forge-xlsx = ["forge", "said-forge/forge-xlsx"]
@@ -68,4 +71,4 @@ brain = ["embed-model"]
 simd = ["sca-core/simd"]
 coding = ["embed-model", "code", "simd"]
 coding-plus = ["embed-model", "code", "lsp", "simd"]
-full = ["embed-model", "code", "docs", "ocr", "lsp", "simd"]
+full = ["embed-model", "code", "docs", "ocr", "lsp", "simd", "enterprise"]

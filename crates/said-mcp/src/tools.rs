@@ -815,10 +815,15 @@ pub struct DreamTool {
                    \n  - `list-tombstones`     list non-active frames (optional `like`) \
                    \n  - `restore`             re-promote `doc_id`'s newest tombstone \
                    \n  - `who-deleted`         lineage trail with tags for `doc_id` \
+                   \n\
+                   Enterprise compliance actions — available in the `full`/Enterprise build ONLY \
+                   (calling them on a lighter build returns a clear 'needs the Enterprise build' error): \
                    \n  - `legal-hold-add`      tag every frame with `legal_hold:<case>` \
                    \n  - `legal-hold-release`  strip the hold \
                    \n  - `retention-sweep`     reap tombstones older than `older_than_days` \
                                                keeping `keep_per_doc` most-recent per doc \
+                   \n  - `audit`               tamper-evident audit log of admin actions \
+                                               (remember, restore, legal-hold, …); chain-verified \
                    \
                    Legal holds block retention sweeps. Restores persist immediately. \
                    Every action saves the brain on success.",
@@ -827,7 +832,8 @@ pub struct DreamTool {
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct AdminTool {
     /// Which admin action to run — one of: `list-tombstones`, `restore`,
-    /// `who-deleted`, `legal-hold-add`, `legal-hold-release`, `retention-sweep`.
+    /// `who-deleted`, `legal-hold-add`, `legal-hold-release`, `retention-sweep`,
+    /// `audit`.
     pub action: String,
 
     /// Document id target (required by restore, who-deleted, legal-hold-*).

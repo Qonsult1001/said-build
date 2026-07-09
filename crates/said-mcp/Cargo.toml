@@ -30,15 +30,19 @@ whisper = ["sca-core/whisper"]
 code = ["sca-core/code"]
 lsp = ["sca-core/lsp"]
 embed-model = ["sca-core/embed-model"]
+# enterprise — compliance admin actions (legal-hold, retention-sweep, tamper-evident audit). These are
+# for regulated/production deployments (SOX/GDPR), NOT the free personal brain. Compile-gated so they
+# do not exist in lower bundles. Basic recovery (list-tombstones/restore/who-deleted) stays ungated.
+enterprise = []
 forge = ["dep:said-forge"]
 forge-xlsx = ["forge", "said-forge/forge-xlsx"]
 forge-docs = ["forge", "said-forge/forge-docs"]
 
 # ---------------------------------------------------------------------------
 # Shipping bundles — mirror said-cli. Each bakes the encoder in (embed-model).
-#   brain | coding | coding-plus | full
+#   brain | coding | coding-plus | full   (enterprise compliance = full only)
 # ---------------------------------------------------------------------------
 brain = ["embed-model"]
 coding = ["embed-model", "code"]
 coding-plus = ["embed-model", "code", "lsp"]
-full = ["embed-model", "code", "docs", "ocr", "lsp"]
+full = ["embed-model", "code", "docs", "ocr", "lsp", "enterprise"]

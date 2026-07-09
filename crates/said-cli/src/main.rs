@@ -492,12 +492,13 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Recover deleted memories and manage retention
+    /// Recover deleted memories (and, in the Enterprise build, manage retention)
     ///
-    /// Subcommands expose the tombstone lineage for audit, byte-exact
-    /// restore (GDPR / SOX / HIPAA friendly), and legal-hold tagging that
-    /// blocks retention sweeps. All admin actions are per-brain â€” they
-    /// don't reach across files.
+    /// Every build exposes the recycle bin: list tombstones, restore a deleted
+    /// memory byte-exact, and trace a memory's deletion lineage. The Enterprise
+    /// (`full`) build adds compliance actions — legal holds, retention sweeps,
+    /// and a tamper-evident audit log (GDPR / SOX / HIPAA). All admin actions
+    /// are per-brain — they don't reach across files.
     Admin {
         #[command(subcommand)]
         action: AdminAction,
@@ -1236,6 +1237,8 @@ enum AdminAction {
     },
     /// Place a legal hold on every frame (active + tombstoned) with this
     /// doc_id. Tags `legal_hold:<case_id>` â€” retention sweeps skip them.
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     LegalHoldAdd {
         /// doc_id to hold
         doc_id: String,
@@ -1243,6 +1246,8 @@ enum AdminAction {
         case: String,
     },
     /// Release a legal hold (strip `legal_hold:<case_id>` tag).
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     LegalHoldRelease {
         /// doc_id to release
         doc_id: String,
@@ -1252,6 +1257,8 @@ enum AdminAction {
     /// Apply a retention policy â€” drop tombstones older than `days`, keeping
     /// the most recent `keep_per_doc` per doc_id. Legal holds are honored
     /// (held frames are never touched regardless of age).
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     RetentionSweep {
         /// Drop tombstones older than N days. Default 365.
         #[arg(long, default_value_t = 365)]
@@ -1263,6 +1270,8 @@ enum AdminAction {
     },
     /// Show the append-only audit log. BLAKE3-chained â€” tampering breaks the
     /// chain. Use `--verify` to just check integrity without listing entries.
+    /// (Enterprise compliance — `full` build only.)
+    #[cfg(feature = "enterprise")]
     Audit {
         /// Only verify the chain's integrity â€” print "ok" or the break point.
         #[arg(long)]
@@ -1788,6 +1797,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::LegalHoldAdd { doc_id, case } => {
             let mut brain = open_brain(path)?;
             let n = brain.admin_legal_hold_add(doc_id, case);
@@ -1799,6 +1809,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 if n == 0 { println!("  (no frames found with that doc_id)"); }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::LegalHoldRelease { doc_id, case } => {
             let mut brain = open_brain(path)?;
             let n = brain.admin_legal_hold_release(doc_id, case);
@@ -1809,6 +1820,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 println!("âœ“ Released legal hold '{}' from {} frame(s) for doc_id '{}'.", case, n, doc_id);
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::Audit { verify, actor, kind } => {
             let brain = open_brain(path)?;
             let log = brain.audit();
@@ -1858,6 +1870,7 @@ fn cmd_admin(path: Option<&str>, action: &AdminAction, json: bool) -> Result<(),
                 }
             }
         }
+        #[cfg(feature = "enterprise")]
         AdminAction::RetentionSweep { older_than_days, keep_per_doc } => {
             let mut brain = open_brain(path)?;
             // For the day-based filter, we need to tombstone frames created

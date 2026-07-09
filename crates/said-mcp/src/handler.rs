@@ -1780,6 +1780,12 @@ impl SaidServerHandler {
                 }
                 Ok(CallToolResult::text_content(vec![TextContent::from(out)]))
             }
+            // ── Enterprise compliance actions (legal-hold, retention-sweep, audit) ──
+            // Gated behind `enterprise` (full bundle only). Basic recovery above
+            // (list-tombstones/restore/who-deleted) is ungated so a free user can always
+            // undo a delete. When the feature is off these names fall through to the
+            // default arm, which returns an honest "needs the Enterprise build" message.
+            #[cfg(feature = "enterprise")]
             "legal-hold-add" | "hold-add" => {
                 let doc_id = t.doc_id.as_deref().ok_or_else(||
                     CallToolError::from_message("legal-hold-add requires `doc_id`".to_string()))?;
@@ -1792,6 +1798,7 @@ impl SaidServerHandler {
                     case, n, doc_id,
                 ))]))
             }
+            #[cfg(feature = "enterprise")]
             "legal-hold-release" | "hold-release" => {
                 let doc_id = t.doc_id.as_deref().ok_or_else(||
                     CallToolError::from_message("legal-hold-release requires `doc_id`".to_string()))?;
@@ -1804,6 +1811,7 @@ impl SaidServerHandler {
                     case, n, doc_id,
                 ))]))
             }
+            #[cfg(feature = "enterprise")]
             "audit" | "audit-log" => {
                 let log = brain.audit();
                 match log.verify() {
@@ -1830,6 +1838,7 @@ impl SaidServerHandler {
                 }
                 return Ok(CallToolResult::text_content(vec![TextContent::from(out)]));
             }
+            #[cfg(feature = "enterprise")]
             "retention-sweep" | "sweep" => {
                 let older_than_days = t.older_than_days.unwrap_or(365);
                 let keep_per_doc = t.keep_per_doc.unwrap_or(1) as usize;
@@ -1863,10 +1872,24 @@ impl SaidServerHandler {
                     dropped, older_than_days, keep_per_doc,
                 ))]))
             }
+            // A compliance action requested on a non-enterprise build lands here — say so
+            // honestly rather than "unknown action", so the caller knows it exists but needs
+            // the Enterprise (full) build, not that they mistyped.
+            "legal-hold-add" | "hold-add" | "legal-hold-release" | "hold-release"
+            | "retention-sweep" | "sweep" | "audit" | "audit-log" => {
+                Err(CallToolError::from_message(format!(
+                    "admin action '{}' is an Enterprise compliance feature (legal holds, retention \
+                     sweeps, tamper-evident audit) and is not included in this build. It ships in the \
+                     `full`/Enterprise bundle. Available here: list-tombstones, restore, who-deleted.",
+                    action,
+                )))
+            }
             other => Err(CallToolError::from_message(format!(
-                "Unknown admin action '{}'. Valid: list-tombstones, restore, \
-                 who-deleted, legal-hold-add, legal-hold-release, retention-sweep.",
+                "Unknown admin action '{}'. Available: list-tombstones, restore, who-deleted{}.",
                 other,
+                if cfg!(feature = "enterprise") {
+                    ", legal-hold-add, legal-hold-release, retention-sweep, audit"
+                } else { "" },
             ))),
         }
     }
