@@ -214,60 +214,109 @@ impl SaidServerHandler {
             .and_then(|n| n.to_str())
             .unwrap_or(current);
 
-        if is_placeholder {
-            format!(
-                "# Welcome to .said\n\
-                 \n\
-                 You're connected to the **.said** MCP server. Right now it's \
-                 attached to `{base}` â€” a temporary placeholder.\n\
-                 \n\
-                 ## Quick start (2 questions)\n\
-                 \n\
-                 **1. Pick a name for your brain.** It's one file that holds \
-                 everything â€” code, SQL, documents, memories. What should it \
-                 be called?\n\
-                 \n\
-                 Suggestions:\n\
-                 - `willie.said` â€” personal / single-project brain\n\
-                 - `acme.said` â€” one brain per client\n\
-                 - `vivere.said` â€” name it after the codebase you're indexing\n\
-                 \n\
-                 **2. What do you want to use it for?**\n\
-                 \n\
-                 - **Portable** â€” notes, journaling, research (start with \
-                 `remember` and `search`)\n\
-                 - **Enterprise** â€” legacy monolith modernization (start with \
-                 `init` on your SQL/code folder, then `overview` + `snapshot`)\n\
-                 \n\
-                 ## Once you tell me the name, I'll:\n\
-                 \n\
-                 1. Call `open path=\"<your-name>.said\"` â€” creates the brain \
-                 and cleans up the placeholder\n\
-                 2. If enterprise: run `init dir=\"<path>\"` to ingest, then \
-                 `overview` to show you what's inside\n\
-                 3. If portable: hand you the `remember` / `search` commands\n\
-                 \n\
-                 Type: **\"Use `willie.said` and it's portable\"** or \
-                 **\"Create `vivere.said` and init from `G:\\work\\sql`\"** \
-                 â€” or anything natural. I'll map it to the right tools."
-            )
-        } else {
-            format!(
-                "# Welcome back to .said\n\
-                 \n\
-                 Attached to: **{base}**\n\
-                 \n\
-                 Common commands from here:\n\
-                 - `status` â€” health + frame count\n\
-                 - `overview` â€” what products/modules are in this brain\n\
-                 - `search <term>` â€” semantic search\n\
-                 - `snapshot <module>` â€” extract a module workspace\n\
-                 - `sandbox <module>` â€” spin up a Docker SQL Server test DB\n\
-                 - `open <name>.said` â€” switch to a different brain (this \
-                 one is kept)\n\
-                 \n\
-                 Tell me what you're trying to do and I'll pick the right tool."
-            )
+        // The greeting is TIER-SPECIFIC. The brain (memory) build speaks in memory terms —
+        // remember/ask, "learns how you search" — with none of the code-tier vocabulary
+        // (init/overview/snapshot/sandbox) a memory user has no tools for. Code builds keep
+        // the codebase-oriented welcome. This mirrors the status "next steps" tier split.
+        #[cfg(not(feature = "code"))]
+        {
+            if is_placeholder {
+                // Empty brain — the agent-voiced welcome (a person, not docs). Your first win
+                // in 30 seconds: say something worth keeping, then recall it next message.
+                format!(
+                    "Hey — I'm connected to your **{base}**. It's fresh and empty.\n\
+                     \n\
+                     Think of me as someone with a notebook that never gets thrown away. When you:\n\
+                     - **decide something** → I save it\n\
+                     - **state a preference** → I save it\n\
+                     - **ask \"what did we…\" / \"what's my…\"** → I check the brain first, then answer\n\
+                     \n\
+                     You don't manage a database. You don't paste context every session. You just talk.\n\
+                     \n\
+                     It's a single file on your machine that survives every chat reset — your machine \
+                     only, no cloud, no account. And it gets smarter: every question teaches it how you \
+                     search, and after enough use it quietly reorganizes so the right memory surfaces \
+                     faster.\n\
+                     \n\
+                     **First win in 30 seconds:** tell me one thing about how you work — I'll remember \
+                     it, and you can test recall in your next message. Try:\n\
+                     \n\
+                     > \"Remember that I prefer short answers and minimal code changes.\"\n\
+                     \n\
+                     …then ask me \"what are my preferences?\" — even in a brand-new chat."
+                )
+            } else {
+                format!(
+                    "Welcome back — I'm attached to your **{base}**.\n\
+                     \n\
+                     Just talk to me. I'll:\n\
+                     - **save** what's worth keeping when you decide something or state a preference \
+                     (or say \"remember …\" to be explicit),\n\
+                     - **recall** it by meaning when you ask (\"what did I decide about X\", \"what's my …\"),\n\
+                     even in a new chat.\n\
+                     \n\
+                     Want to see what's in here? Ask \"what do you have on <topic>?\", or say \"show my \
+                     status\" for a quick health check."
+                )
+            }
+        }
+        #[cfg(feature = "code")]
+        {
+            if is_placeholder {
+                format!(
+                    "# Welcome to .said\n\
+                     \n\
+                     You're connected to the **.said** MCP server. Right now it's \
+                     attached to `{base}` â€” a temporary placeholder.\n\
+                     \n\
+                     ## Quick start (2 questions)\n\
+                     \n\
+                     **1. Pick a name for your brain.** It's one file that holds \
+                     everything â€” code, SQL, documents, memories. What should it \
+                     be called?\n\
+                     \n\
+                     Suggestions:\n\
+                     - `willie.said` â€” personal / single-project brain\n\
+                     - `acme.said` â€” one brain per client\n\
+                     - `vivere.said` â€” name it after the codebase you're indexing\n\
+                     \n\
+                     **2. What do you want to use it for?**\n\
+                     \n\
+                     - **Portable** â€” notes, journaling, research (start with \
+                     `remember` and `search`)\n\
+                     - **Enterprise** â€” legacy monolith modernization (start with \
+                     `init` on your SQL/code folder, then `overview` + `snapshot`)\n\
+                     \n\
+                     ## Once you tell me the name, I'll:\n\
+                     \n\
+                     1. Call `open path=\"<your-name>.said\"` â€” creates the brain \
+                     and cleans up the placeholder\n\
+                     2. If enterprise: run `init dir=\"<path>\"` to ingest, then \
+                     `overview` to show you what's inside\n\
+                     3. If portable: hand you the `remember` / `search` commands\n\
+                     \n\
+                     Type: **\"Use `willie.said` and it's portable\"** or \
+                     **\"Create `vivere.said` and init from `G:\\work\\sql`\"** \
+                     â€” or anything natural. I'll map it to the right tools."
+                )
+            } else {
+                format!(
+                    "# Welcome back to .said\n\
+                     \n\
+                     Attached to: **{base}**\n\
+                     \n\
+                     Common commands from here:\n\
+                     - `status` â€” health + frame count\n\
+                     - `overview` â€” what products/modules are in this brain\n\
+                     - `search <term>` â€” semantic search\n\
+                     - `snapshot <module>` â€” extract a module workspace\n\
+                     - `sandbox <module>` â€” spin up a Docker SQL Server test DB\n\
+                     - `open <name>.said` â€” switch to a different brain (this \
+                     one is kept)\n\
+                     \n\
+                     Tell me what you're trying to do and I'll pick the right tool."
+                )
+            }
         }
     }
 
@@ -647,6 +696,13 @@ impl ServerHandler for SaidServerHandler {
         _params: Option<PaginatedRequestParams>,
         _runtime: Arc<dyn McpServer>,
     ) -> Result<ListPromptsResult, RpcError> {
+        // Advertise ONLY `onboard`. `answerer` (the agent system prompt) is injected
+        // automatically on connect via the server instructions — a user should never have to
+        // manually load it, and it's noise in a prompt-picker. `fix-template` is an INTERNAL
+        // template the orchestrator passes to `learn_fix` (code-tier); a human never fetches it
+        // by hand, and it's meaningless on the memory build where `learn_fix` doesn't exist.
+        // Both remain retrievable BY NAME (handle_get_prompt still serves them) for any tool
+        // that references them — they're just not listed in the user-facing picker.
         Ok(ListPromptsResult {
             meta: None,
             next_cursor: None,
@@ -655,39 +711,9 @@ impl ServerHandler for SaidServerHandler {
                     name: "onboard".to_string(),
                     title: Some("Welcome â€” Quick Start".to_string()),
                     description: Some(
-                        "A short guided setup for .said: pick a brain name, \
-                         ingest your codebase, then explore modules. Use this \
-                         when attaching the MCP server for the first time."
-                            .to_string(),
-                    ),
-                    arguments: vec![],
-                    icons: vec![],
-                    meta: None,
-                },
-                Prompt {
-                    name: "answerer".to_string(),
-                    title: Some(".said Answerer Agent".to_string()),
-                    description: Some(
-                        "Canonical system prompt for the .said agent â€” reads \
-                         brain content and answers with citations. Aligned \
-                         with Anthropic Claude Code production prompts. \
-                         Single source of truth (said-prompts crate)."
-                            .to_string(),
-                    ),
-                    arguments: vec![],
-                    icons: vec![],
-                    meta: None,
-                },
-                Prompt {
-                    name: "fix-template".to_string(),
-                    title: Some("Coding-fix iteration template".to_string()),
-                    description: Some(
-                        "The 10-section coding-iteration note template (Title / Current \
-                         State / Task / Files and Functions / Workflow / Errors and \
-                         Corrections / Codebase Documentation / Learnings / Key Results / \
-                         Worklog). Fill it in after a green gate and pass it to `learn_fix` \
-                         â€” the SAME structured story the orchestrator stores, so the saved \
-                         memory recalls well (not a one-line label)."
+                        "A short, friendly welcome for your brain: what it is, and your \
+                         first save-and-recall in under a minute. Use this the first time \
+                         you connect."
                             .to_string(),
                     ),
                     arguments: vec![],
