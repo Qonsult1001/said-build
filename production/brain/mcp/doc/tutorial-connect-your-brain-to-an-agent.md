@@ -39,6 +39,11 @@ You should see:
 
 That file *is* your brain. Everything the agent remembers goes here.
 
+> **Already have a brain on this machine?** The free version keeps **one brain per computer**, so
+> `said create` will instead point you to the brain you already have (rather than make a second). That's
+> fine — just use that existing file's path everywhere this tutorial says `my-brain.said`, and skip to
+> Step 2. (Multiple brains on one machine is an Enterprise feature.)
+
 ## Step 2 — Point your agent at the brain
 
 Your agent needs one line of configuration telling it to start `said` as a memory server. The exact
