@@ -1,6 +1,6 @@
 [package]
 name = "said-mcp"
-version = "0.11.6"
+version = "0.11.7"
 edition = "2021"
 description = "MCP server for .said portable brain files — 5 facade tools for LLM integration"
 license = "MIT"
