@@ -1,7 +1,7 @@
-# verify-mcp — `brain` variant · v0.11.8 acceptance record
+# verify-mcp — `brain` variant · v0.11.9 acceptance record
 
 **Variant:** `brain` = `--no-default-features --features brain` (`embed-model` only — no `code`, `lsp`, `docs`).
-**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.8`.
+**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.9`.
 **Transport:** MCP stdio JSON-RPC. Isolated brain, single session (state carried across calls).
 
 > This is a per-release acceptance record — re-run it against the shipped binary each release. The tool
@@ -30,7 +30,7 @@ The brain bundle advertises **only** the memory tools it can actually deliver. N
 | `admin` | recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted` | ✅ |
 | `create` / `open` | make or switch to a brain file | ✅ |
 
-### Recall UX (v0.11.8 — tags + tie footer)
+### Recall UX (v0.11.9 — tags + tie footer)
 
 | Behavior | Verified |
 |---|---|
@@ -38,6 +38,8 @@ The brain bundle advertises **only** the memory tools it can actually deliver. N
 | Vague query with ≥3 close scores (within 0.05) appends tie footer with distinguishing tag counts | ✅ e.g. `offline integrations` → `topic:product (2)`, `quarter:Q2 (1)` |
 | Scoped re-ask `ask` + `tags:["quarter:Q2"]` narrows pool before scoring | ✅ 1 result |
 | Single clear hit or `<3` results → no tie footer | ✅ |
+| **Clear winner suppresses the footer** — #1 with a gap to #2 (>0.03) OR a near-exact bullseye (≥0.95) → NO footer (not chatty on obvious queries) | ✅ e.g. `SAID file format…` → #1 @0.95, no footer |
+| Genuine ~0.90-band tie still fires | ✅ e.g. `what did we decide about integrations` → 5 close matches footer |
 | Tied results sharing all tags → honest "read the top few and pick" message | ✅ (code path) |
 | Connect instructions steer agent: on close matches → scope with tag, don't guess | ✅ |
 

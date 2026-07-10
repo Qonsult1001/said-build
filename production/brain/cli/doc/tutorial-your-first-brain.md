@@ -8,13 +8,13 @@ Every command below is real; type them exactly and check the "You should see:" b
 
 ## Before you start
 
-- [ ] The `said` app, version 0.11.8 or newer. Check it:
+- [ ] The `said` app, version 0.11.9 or newer. Check it:
 
       said --version
 
   You should see:
 
-      said 0.11.8
+      said 0.11.9
 
   (Or a newer version — match whatever your install shipped.) If `said` isn't found, install it first:
   **[How to download and install `said`](how-to-install-said.md)**.

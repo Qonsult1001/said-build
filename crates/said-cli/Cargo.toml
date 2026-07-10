@@ -1,6 +1,6 @@
 [package]
 name = "said-cli"
-version = "0.11.8"
+version = "0.11.9"
 edition = "2021"
 description = "CLI for .said portable brain files — add, query, get in one binary"
 license = "MIT"
