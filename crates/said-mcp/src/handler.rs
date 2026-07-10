@@ -970,11 +970,13 @@ impl SaidServerHandler {
         // tie time instead of buried in a doc).
         if kept.len() >= 3 {
             let top = kept[0].confidence;
-            // Only nudge when recall is genuinely AMBIGUOUS. Suppress when #1 is a clear winner —
-            // a real gap to #2, or a near-exact bullseye (≥0.95) — so the footer isn't chatty on
-            // obvious queries (the dentist-at-0.99 case). It targets the ~0.90-band bleed at scale.
+            // Only nudge when recall is genuinely AMBIGUOUS. Suppress when #1 CLEARLY WINS — i.e. it
+            // stands out from #2 by a real margin (the dentist-at-0.99-with-a-gap case). Do NOT key
+            // off the absolute score: grep-band hits legitimately cluster at the 0.95 ceiling with
+            // zero gap, and THAT is exactly the ambiguity worth scoping. The gap to #2 is the honest
+            // signal — a flat cluster (gap ≈ 0) is a tie; a clear leader (gap > 0.03) is not.
             let gap_to_second = kept.get(1).map(|c| top - c.confidence).unwrap_or(1.0);
-            let tied: Vec<&sca_core::ask::AskCandidate> = if gap_to_second > 0.03 || top >= 0.95 {
+            let tied: Vec<&sca_core::ask::AskCandidate> = if gap_to_second > 0.03 {
                 Vec::new()
             } else {
                 kept.iter().filter(|c| (top - c.confidence) <= 0.05).collect()

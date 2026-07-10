@@ -3596,7 +3596,7 @@ fn brain_user_tags(brain: &SaidFile, doc_id: &str) -> Vec<String> {
 }
 
 /// When top results cluster (≥3 within 0.05), print scoping guidance — CLI/MCP parity with the
-/// v0.11.8 recall UX contract.
+/// v0.11.9 recall UX contract.
 fn print_ask_tie_footer(brain: &SaidFile, kept: &[sca_core::ask::AskCandidate]) {
     if kept.len() < 3 { return; }
     let top = kept[0].confidence;
@@ -3606,9 +3606,11 @@ fn print_ask_tie_footer(brain: &SaidFile, kept: &[sca_core::ask::AskCandidate]) 
     //     of other high scores there is "several relevant", not "which did you mean".
     // The footer's job is the ~0.90-band bleed a user hits at scale, not to second-guess a
     // confident answer. This keeps it from being chatty on obvious queries (the dentist-at-0.99 case).
+    // Suppress only when #1 CLEARLY WINS (a real gap to #2). Do NOT key off the absolute score:
+    // grep-band hits cluster at the 0.95 ceiling with zero gap, and that flat cluster IS the tie
+    // worth scoping. The gap to #2 is the honest signal.
     let gap_to_second = kept.get(1).map(|c| top - c.confidence).unwrap_or(1.0);
     if gap_to_second > 0.03 { return; }          // #1 clearly ahead → no nudge
-    if top >= 0.95 { return; }                    // #1 is a near-exact bullseye → no nudge
     let tied: Vec<&sca_core::ask::AskCandidate> = kept.iter()
         .filter(|c| (top - c.confidence) <= 0.05).collect();
     if tied.len() < 3 { return; }
