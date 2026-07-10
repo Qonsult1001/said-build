@@ -21,7 +21,7 @@ Targets (the matrix, authoritative in the workflow): `linux-x64` (ubuntu), `wind
 
 ## The three install paths a user gets
 
-Ranked easiest-first (documented for users in `docs/walkthrough/how-to-install-said.md`):
+Ranked easiest-first (documented for users in `production/brain/cli/doc/how-to-install-said.md`):
 
 | Path | Linux / macOS | Windows |
 |---|---|---|
@@ -82,4 +82,4 @@ secrets and a signing step to the workflow when the certs exist. Until then, the
 - [35-production-build.md](35-production-build.md) — the native-fast *speed* compile (LTO, target-cpu).
   Distinct from packaging: #35 is "make it fast", #39 is "make it installable".
 - [CIRCLE_PLAN.md](CIRCLE_PLAN.md) §Distribution — the full signed/notarised/auto-update MVP plan.
-- `docs/walkthrough/how-to-install-said.md` — the user-facing install guide (the three options above).
+- `production/brain/cli/doc/how-to-install-said.md` — the user-facing install guide (the three options above).

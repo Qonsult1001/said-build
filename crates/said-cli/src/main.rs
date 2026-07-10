@@ -25,7 +25,7 @@ use std::time::Instant;
     EVERYDAY COMMANDS: create | add | ask | get | delete | stats | use\n\
     `ask` is the one you'll use most - it finds memories by meaning, in your own words.\n\
     \n\
-    Full step-by-step guide: docs/walkthrough/  (start with tutorial-your-first-brain.md)\n\
+    Full step-by-step guide: production/brain/cli/doc/  (start with tutorial-your-first-brain.md)\n\
     Run `said <command> --help` for the options on any command.")]
 struct Cli {
     /// Path to .said file (auto-detects if omitted)
