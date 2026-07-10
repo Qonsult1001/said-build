@@ -925,6 +925,19 @@ impl SaidServerHandler {
             )]));
         }
 
+        // User-facing tags for a doc: drop the internal facets (link:/pillar:/salience:/blake3:)
+        // that are machinery, not the vocabulary a user tags/browses by. Keeps the ask output
+        // focused on the facets that matter for scoping (project:, topic:, quarter:, status:, …).
+        let user_tags = |did: &str| -> Vec<String> {
+            brain.frames.get_meta(did)
+                .map(|m| m.tags.iter()
+                    .filter(|t| !t.starts_with("link:") && !t.starts_with("pillar:")
+                        && !t.starts_with("salience:") && !t.starts_with("blake3:")
+                        && !t.starts_with("user_id:") && !t.starts_with("session:"))
+                    .cloned().collect())
+                .unwrap_or_default()
+        };
+
         let mut output = format!(
             "Ask: \"{}\"  ({} results, keywords: {})\n\n",
             t.query, kept.len(), keywords.join(", "),
@@ -932,15 +945,60 @@ impl SaidServerHandler {
         for (i, r) in kept.iter().enumerate() {
             let loc = r.location.as_deref().unwrap_or("");
             let preview: String = r.content.chars().take(500).collect();
+            // Show the memory's tags on the line, so when several results tie the agent can SEE
+            // which facet distinguishes them (quarter:Q2 vs quarter:Q3) without a second call.
+            let tags = user_tags(&r.doc_id);
+            let tag_str = if tags.is_empty() { String::new() }
+                else { format!("  tags: {}", tags.join(", ")) };
             output.push_str(&format!(
-                "{}. [{:.2}][{}] {} {}\n{}\n\n",
+                "{}. [{:.2}][{}] {} {}{}\n{}\n\n",
                 i + 1,
                 r.confidence,
                 r.kind,
                 r.doc_id,
                 if loc.is_empty() { String::new() } else { format!("({})", loc) },
+                tag_str,
                 preview,
             ));
+        }
+
+        // Tie-detection footer: when the top results CLUSTER (≥3 within a narrow confidence band),
+        // recall is ambiguous — the brain correctly surfaced a handful and the agent must pick. Tell
+        // it HOW to narrow: show the tags shared across the tied results with counts, so it can
+        // re-ask scoped to a facet instead of guessing. No new query, no ranking change — pure
+        // guidance from data already in hand (the v0.11.4 "scope with tags" contract, surfaced at
+        // tie time instead of buried in a doc).
+        if kept.len() >= 3 {
+            let top = kept[0].confidence;
+            let tied: Vec<&sca_core::ask::AskCandidate> = kept.iter()
+                .filter(|c| (top - c.confidence) <= 0.05).collect();
+            if tied.len() >= 3 {
+                use std::collections::BTreeMap;
+                let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                for c in &tied {
+                    for tag in user_tags(&c.doc_id) { *counts.entry(tag).or_insert(0) += 1; }
+                }
+                // Only suggest facets that DON'T cover all tied results (those can't disambiguate).
+                let mut facets: Vec<(String, usize)> = counts.into_iter()
+                    .filter(|(_, n)| *n >= 1 && *n < tied.len())
+                    .collect();
+                facets.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                if !facets.is_empty() {
+                    output.push_str(&format!(
+                        "── {} close matches (within 0.05). To narrow, ask again scoped to a tag \
+                         (`ask` with tags:[\"…\"]):\n",
+                        tied.len()));
+                    for (tag, n) in facets.iter().take(6) {
+                        output.push_str(&format!("   • {}  ({} of these)\n", tag, n));
+                    }
+                    output.push_str("   Or call `list_tags` for the full vocabulary. \
+                                     Don't guess which memory the user meant — scope, then re-ask.\n");
+                } else {
+                    output.push_str(&format!(
+                        "── {} close matches (within 0.05). They share the same tags, so read the \
+                         top few and pick — or ask the user which one they mean.\n", tied.len()));
+                }
+            }
         }
 
         // Auto-dream now fires inside sca_core::ask::ask (core) — no duplicate trigger

@@ -133,6 +133,12 @@ async fn main() -> SdkResult<()> {
              If `ask` returns a relevant result, quote it and cite the id — never override a stored \
              memory with training knowledge. For purely general knowledge (\"how does async work?\"), \
              answer from training and skip the brain. If the brain is empty, say so; don't pretend to recall.\n\n\
+             **When `ask` returns several CLOSE matches** (the result includes a \"close matches\" note \
+             listing tags), recall is ambiguous — do NOT guess which memory the user meant. The result \
+             lists the tags that distinguish the tied memories; pick the facet that fits the question \
+             and re-ask scoped: `ask query=\"…\" tags:[\"quarter:Q2\"]`. Call `list_tags` if you need \
+             the full vocabulary. This narrows the pool before meaning-matching — the intended \
+             tie-breaker once the brain holds many memories on overlapping topics.\n\n\
              ## AUTO-MEMORY (act as the user's note-taker)\n\n\
              Chat turns are ephemeral — the brain only remembers what you save with `remember`. \
              Call `remember` whenever the user: makes a decision, states a preference/constraint, \
