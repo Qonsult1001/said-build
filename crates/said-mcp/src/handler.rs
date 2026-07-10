@@ -970,8 +970,15 @@ impl SaidServerHandler {
         // tie time instead of buried in a doc).
         if kept.len() >= 3 {
             let top = kept[0].confidence;
-            let tied: Vec<&sca_core::ask::AskCandidate> = kept.iter()
-                .filter(|c| (top - c.confidence) <= 0.05).collect();
+            // Only nudge when recall is genuinely AMBIGUOUS. Suppress when #1 is a clear winner —
+            // a real gap to #2, or a near-exact bullseye (≥0.95) — so the footer isn't chatty on
+            // obvious queries (the dentist-at-0.99 case). It targets the ~0.90-band bleed at scale.
+            let gap_to_second = kept.get(1).map(|c| top - c.confidence).unwrap_or(1.0);
+            let tied: Vec<&sca_core::ask::AskCandidate> = if gap_to_second > 0.03 || top >= 0.95 {
+                Vec::new()
+            } else {
+                kept.iter().filter(|c| (top - c.confidence) <= 0.05).collect()
+            };
             if tied.len() >= 3 {
                 use std::collections::BTreeMap;
                 let mut counts: BTreeMap<String, usize> = BTreeMap::new();

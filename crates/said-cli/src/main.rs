@@ -1,4 +1,4 @@
-﻿//! `said` â€” CLI for .said portable brain files.
+//! `said` â€” CLI for .said portable brain files.
 //!
 //! Drop-in replacement for ChromaDB/Pinecone: `said add`, `said query`, `said get`.
 
@@ -2357,6 +2357,18 @@ fn cmd_add(
         }));
     } else {
         println!("Added '{}' ({} bytes)", doc_id, content.len());
+        #[cfg(not(feature = "code"))]
+        {
+            println!("  Stored as text — recall with `said ask` in plain English.");
+            let looks_like_code = content.contains("fn ") || content.contains("def ")
+                || content.contains("function ") || content.contains("class ")
+                || content.contains("=> ") || content.contains("{\n") || content.contains(";\n")
+                || content.contains("import ") || content.contains("SELECT ") || content.contains("</");
+            if looks_like_code {
+                println!("  Note: memory brain only — snippet kept as text, not indexed as code. \
+                          Use the coding build for symbol/repo search.");
+            }
+        }
     }
     Ok(())
 }
@@ -3573,6 +3585,63 @@ fn cmd_sym(path: Option<&str>, name: &str, max: usize, list: bool, json: bool) -
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
+fn brain_user_tags(brain: &SaidFile, doc_id: &str) -> Vec<String> {
+    brain.frames.get_meta(doc_id)
+        .map(|m| m.tags.iter()
+            .filter(|t| !t.starts_with("link:") && !t.starts_with("pillar:")
+                && !t.starts_with("salience:") && !t.starts_with("blake3:")
+                && !t.starts_with("user_id:") && !t.starts_with("session:"))
+            .cloned().collect())
+        .unwrap_or_default()
+}
+
+/// When top results cluster (≥3 within 0.05), print scoping guidance — CLI/MCP parity with the
+/// v0.11.8 recall UX contract.
+fn print_ask_tie_footer(brain: &SaidFile, kept: &[sca_core::ask::AskCandidate]) {
+    if kept.len() < 3 { return; }
+    let top = kept[0].confidence;
+    // Only nudge when recall is genuinely AMBIGUOUS. Suppress when #1 is a clear winner:
+    //   • a real gap to #2 (#1 stands out — the answer is obvious, no scoping needed), or
+    //   • #1 is a very high exact-ish hit (≥0.95, e.g. a symbol/keyword bullseye) — clustering
+    //     of other high scores there is "several relevant", not "which did you mean".
+    // The footer's job is the ~0.90-band bleed a user hits at scale, not to second-guess a
+    // confident answer. This keeps it from being chatty on obvious queries (the dentist-at-0.99 case).
+    let gap_to_second = kept.get(1).map(|c| top - c.confidence).unwrap_or(1.0);
+    if gap_to_second > 0.03 { return; }          // #1 clearly ahead → no nudge
+    if top >= 0.95 { return; }                    // #1 is a near-exact bullseye → no nudge
+    let tied: Vec<&sca_core::ask::AskCandidate> = kept.iter()
+        .filter(|c| (top - c.confidence) <= 0.05).collect();
+    if tied.len() < 3 { return; }
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for c in &tied {
+        for tag in brain_user_tags(brain, &c.doc_id) {
+            *counts.entry(tag).or_insert(0) += 1;
+        }
+    }
+    let mut facets: Vec<(String, usize)> = counts.into_iter()
+        .filter(|(_, n)| *n >= 1 && *n < tied.len())
+        .collect();
+    facets.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if !facets.is_empty() {
+        println!(
+            "── {} close matches (within 0.05). To narrow, ask again scoped to a tag:",
+            tied.len()
+        );
+        for (tag, n) in facets.iter().take(6) {
+            println!("   • {}  ({} of these)", tag, n);
+        }
+        println!("   Or run `said list-tags` for the full vocabulary.");
+        println!("   Read the top few and pick — or add `--tag <facet>` to scope before asking.");
+    } else {
+        println!(
+            "── {} close matches (within 0.05). They share the same tags, so read the \
+             top few and pick — or ask which one you mean.",
+            tied.len()
+        );
+    }
+}
+
 fn cmd_ask(path: Option<&str>, query: &str, top: usize, deep: bool, engine: &str, pillar: Option<&str>, tags: &[String], json: bool) -> Result<(), String> {
     let mut brain = open_brain(path)?;
     ask_on_brain(&mut brain, query, top, deep, engine, pillar, tags, json)
@@ -3681,6 +3750,7 @@ fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engi
                 "kind": r.kind,
                 "location": r.location,
                 "content": preview,
+                "tags": brain_user_tags(brain, &r.doc_id),
             })
         }).collect();
         println!("{}", serde_json::json!({
@@ -3700,13 +3770,17 @@ fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engi
                 let loc = r.location.as_deref().unwrap_or("");
                 let preview: String = r.content.chars().take(120).collect();
                 let preview = preview.replace('\n', " ");
+                let tags = brain_user_tags(brain, &r.doc_id);
+                let tag_str = if tags.is_empty() { String::new() }
+                    else { format!("  tags: {}", tags.join(", ")) };
                 println!(
-                    "  {}. [{:.2}][{}] {} {}",
+                    "  {}. [{:.2}][{}] {} {}{}",
                     i + 1,
                     r.confidence,
                     r.kind,
                     r.doc_id,
-                    if loc.is_empty() { String::new() } else { format!("({})", loc) }
+                    if loc.is_empty() { String::new() } else { format!("({})", loc) },
+                    tag_str,
                 );
                 println!(
                     "      {}{}",
@@ -3714,6 +3788,7 @@ fn ask_on_brain(brain: &mut SaidFile, query: &str, top: usize, deep: bool, _engi
                     if r.content.len() > 120 { "..." } else { "" }
                 );
             }
+            print_ask_tie_footer(brain, &kept);
         }
         if dreamed {
             eprintln!("\n[brain] dream cycle complete â€” corpus drift toward recent query patterns");
