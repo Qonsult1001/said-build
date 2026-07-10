@@ -62,8 +62,8 @@ its export and bring those memories in.
 
 ## Result
 
-Your memories from the other tool now live in your `said` brain and are searchable with
-`ask` like any other memory.
+Your memories from the other tool now live in your `said` brain and are recallable with `ask` like any
+other memory.
 
 ## See also
 

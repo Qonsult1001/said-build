@@ -33,7 +33,7 @@ the install landed:
 
 You should see:
 
-    said-mcp 0.11.7
+    said-mcp 0.11.8
 
 > **Don't want it touching your agent config?** Set `SAID_NO_CONNECT=1` before running the installer and
 > it installs the binaries only, then you connect manually (next guide). To use a specific brain file,
@@ -54,7 +54,7 @@ Download and run the installer for your OS from the
   (Unsigned for now: if macOS blocks it, right-click the `.pkg` → **Open**.)
 - **Linux** (Debian/Ubuntu) → `said_<version>_amd64.deb` — `sudo apt install ./said_<version>_amd64.deb`.
 
-Then verify with `said-mcp --version` (should print `said-mcp 0.11.7`) and continue to the connect guide.
+Then verify with `said-mcp --version` (should print `said-mcp 0.11.8` or newer) and continue to the connect guide.
 
 ## Option C — download the zip manually
 

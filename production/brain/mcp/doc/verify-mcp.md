@@ -1,7 +1,7 @@
-# verify-mcp — `brain` variant · v0.11.7 acceptance record
+# verify-mcp — `brain` variant · v0.11.8 acceptance record
 
 **Variant:** `brain` = `--no-default-features --features brain` (`embed-model` only — no `code`, `lsp`, `docs`).
-**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.7`.
+**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.8`.
 **Transport:** MCP stdio JSON-RPC. Isolated brain, single session (state carried across calls).
 
 > This is a per-release acceptance record — re-run it against the shipped binary each release. The tool
@@ -30,6 +30,17 @@ The brain bundle advertises **only** the memory tools it can actually deliver. N
 | `admin` | recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted` | ✅ |
 | `create` / `open` | make or switch to a brain file | ✅ |
 
+### Recall UX (v0.11.8 — tags + tie footer)
+
+| Behavior | Verified |
+|---|---|
+| Every `ask` result line shows user-facing `tags:` (internals like `pillar:`/`link:` filtered out) | ✅ |
+| Vague query with ≥3 close scores (within 0.05) appends tie footer with distinguishing tag counts | ✅ e.g. `offline integrations` → `topic:product (2)`, `quarter:Q2 (1)` |
+| Scoped re-ask `ask` + `tags:["quarter:Q2"]` narrows pool before scoring | ✅ 1 result |
+| Single clear hit or `<3` results → no tie footer | ✅ |
+| Tied results sharing all tags → honest "read the top few and pick" message | ✅ (code path) |
+| Connect instructions steer agent: on close matches → scope with tag, don't guess | ✅ |
+
 ### Prompts (`prompts/list` — 1)
 
 | Prompt | What it is | Verified |
@@ -55,10 +66,11 @@ dry-run reports the 1 tombstone). ✅
 | `compact` drop_history with no scope | rejected: "drop_history needs a scope (all or keep_per_doc)" ✅ |
 | a code-tier tool name (e.g. `ingest`) | clean "Unknown tool" — absent from this build ✅ |
 
-### Tier honesty (fixed since earlier builds)
+### Tier honesty
 
-- Pasting **code** into `remember` no longer falsely promises `search` — it says "stored as text — ask
-  for it later", and when the content looks like code it adds "does NOT index code — use the coding build".
+- Pasting **code** into `remember` says "stored as text — ask for it later", and when the content looks
+  like code it adds "does NOT index code — use the coding build".
+- `remember` tool description no longer says "searchable memory" — recalls via `ask`/`get` only.
 - `status` next-steps and the `onboard` welcome use **memory** vocabulary only (no code-tier commands).
 
 ## Resolved finding — the tool-leak the previous verify flagged is FIXED
@@ -73,5 +85,7 @@ of what works. See [docs/said-structure/40-build-tier-capability-matrix.md](../.
 ## Reproduce
 
     cargo build --release -p said-mcp --no-default-features --features brain
+    cargo build --release -p said-cli --no-default-features --features brain
     # then drive tools/list + tools/call over stdio JSON-RPC against the binary
     # (production/brain/mcp/said-mcp.exe), or run the mcp harness in hard-eval/mcp-harness/.
+    # CLI parity: said ask shows tags per line + tie footer; said add honesty on memory brain.

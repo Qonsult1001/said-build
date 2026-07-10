@@ -63,5 +63,6 @@ You can now grow a brain over time and retrieve memories either by **asking** (b
 ## See also
 
 - Stop repeating `--path` → [How to set a default brain file](how-to-set-a-default-brain.md)
-- Finding memories with `ask` and `get` → [How to find a memory](how-to-find-a-specific-memory.md)
+- Finding memories with `ask` and `get` → [How to find and organize memories](how-to-find-a-specific-memory.md)
+- Pasted code vs coding build → [Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)
 - Full options for `add`, `get`, `delete` → the [Command reference](cli-reference.md).

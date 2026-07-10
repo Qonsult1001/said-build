@@ -12,15 +12,16 @@ Every step below is real. Follow them in order and check the "You should see:" b
 
 ## Before you start
 
-- [ ] The `said` app, version 0.11.7 or newer. Check it:
+- [ ] The `said` app, version 0.11.8 or newer. Check it:
 
-      said --version
+      said-mcp --version
 
   You should see:
 
-      said 0.11.7
+      said-mcp 0.11.8
 
-  If `said` isn't found, install it first: **[How to download and install `said`](how-to-install-said.md)**.
+  (Or a newer version — match whatever your install shipped.) If `said-mcp` isn't found, install it
+  first: **[How to download and install `said`](how-to-install-said.md)**.
 - [ ] An AI agent that speaks **MCP** — for example Claude Desktop, Claude Code, or Cursor. Any of them works.
 - [ ] About 10 minutes.
 
@@ -39,10 +40,13 @@ You should see:
 
 That file *is* your brain. Everything the agent remembers goes here.
 
-> **Already have a brain on this machine?** The free version keeps **one brain per computer**, so
-> `said create` will instead point you to the brain you already have (rather than make a second). That's
-> fine — just use that existing file's path everywhere this tutorial says `my-brain.said`, and skip to
-> Step 2. (Multiple brains on one machine is an Enterprise feature.)
+> **Already have a default brain?** The installer usually creates one at `~/.said/brain.said` (Windows:
+> `%USERPROFILE%\.said\brain.said`). If you run `said create` again without a new path, it may point you
+> at that existing file — use it everywhere this tutorial says `my-brain.said`, and skip to Step 2.
+>
+> **Want a separate brain** (e.g. work vs personal)? Create at a *different path*:
+> `said create /path/to/work-brain.said`, or ask your agent to create one. Switch between brain files
+> with `open` — see **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)**.
 
 ## Step 2 — Point your agent at the brain
 

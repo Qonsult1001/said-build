@@ -627,6 +627,22 @@ A batch of brain-tier surface fixes after v0.11.5 (same tier-accuracy discipline
    Verified live: a user asking "can you search my code from my memory?" gets the correct "No — not as
    code search; Yes — as text via ask/get" answer, not an over-promise.
 
+## 18. (RESOLVED) `ask` didn't surface the scope-with-tags workflow at tie time (v0.11.8)
+
+The "when recall gets noisy, scope with a tag" workflow existed in the product (`ask` has a `tags`
+filter, `list_tags` exists) and in the docs — but the agent had to *guess* WHEN to use it, so at ~30+
+memories a vague query returned a top handful tied at ~0.90 and the agent disambiguated blind. **Fix
+(additive, no ranking change):** `ask` now (1) prints each result's user-facing tags (internal
+`link:`/`pillar:`/`salience:`/`blake3:` filtered out), so the agent SEES the distinguishing facet;
+(2) on a tie (≥3 results within 0.05) appends a footer with the tags that distinguish the tied set +
+counts + "re-ask scoped, don't guess" (or "they share all tags — read the top few / ask the user" when
+no facet disambiguates); (3) the brain constitution gains a recall-side block telling the agent to scope
+on close matches. Data already in hand (scores + `get_meta` tags) — no extra query, no new tool.
+Regression-proofed: a single clear winner shows only its tag line, NO footer (verified live on the
+integrations ties → footer with quarter/topic facets, and a 2-memory brain → 1 result, no footer). This
+is the v0.11.4 "scope with tags" contract surfaced as product behavior. See
+[41-ux-recall-quality-plan.md](41-ux-recall-quality-plan.md) "SHIPPED (v0.11.8)".
+
 ## Production surface parity — the standard
 
 To stop the class of defect in #15 from recurring, every shipped `.said` binary must satisfy, per build

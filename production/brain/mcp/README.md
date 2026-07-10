@@ -1,8 +1,11 @@
-# said — MCP (AI agent)
+# said — MCP (AI agent) · v0.11.8
 
 Connect your portable brain to an AI agent (Claude Desktop, Cursor, …) so the agent reads and writes it
 for you — remembering facts automatically during your work and recalling them later, even in a fresh
 chat. Runs as a local MCP server; no cloud, fully offline.
+
+Ships with **`said-mcp.exe`** + docs — pair with the CLI bundle and a `brain.said` file for the full
+free memory brain (terminal + agent, same file format).
 
 ## What's here
 
@@ -26,6 +29,7 @@ chat. Runs as a local MCP server; no cloud, fully offline.
     - [`doc/how-to-track-versions-with-an-agent.md`](doc/how-to-track-versions-with-an-agent.md) — update a fact, see its history, roll it back
     - [`doc/how-to-clean-up-your-brain-with-an-agent.md`](doc/how-to-clean-up-your-brain-with-an-agent.md) — delete, recover from the recycle bin, set retention
     - [`doc/how-to-move-your-brain-to-another-agent.md`](doc/how-to-move-your-brain-to-another-agent.md) — one file, any agent/machine; keep multiple brains and switch between them
+    - [`doc/how-to-memory-vs-coding-brain.md`](doc/how-to-memory-vs-coding-brain.md) — pasted code vs real code search; when you need the coding build
   - **[`doc/verify-mcp.md`](doc/verify-mcp.md)** — how to drive the MCP server end-to-end and confirm each
     tool works (for review / acceptance).
 
@@ -35,7 +39,7 @@ The brain MCP server exposes **memory-only** tools — this is the Personal tier
 tools are not present:
 
 `ask` · `remember` · `get` · `list_concepts` · `list_tags` · `status` · `history` · `checkout` ·
-`delete` · `open` · `create` · `admin`
+`delete` · `compact` · `open` · `create` · `admin`
 
 ## Connect it (example: an MCP client config)
 
