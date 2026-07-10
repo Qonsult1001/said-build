@@ -1260,11 +1260,38 @@ impl SaidServerHandler {
         }
         let notes_line = notes.join(" Â· ");
 
+        // Tier-accurate recall verb: the brain build has NO `search` tool (that's code-tier) — a
+        // brain user recalls with `ask`. Referencing `search` here both leaks a paid-tier tool and
+        // implies code-indexing this build doesn't do. Code builds keep `search`.
+        #[cfg(not(feature = "code"))]
+        let recall_line = "This memory is stored as text — ask for it later in plain English \
+                           (e.g. `ask` \"...\") and the brain finds it by meaning.";
+        #[cfg(feature = "code")]
+        let recall_line = "This memory is searchable — future `search` calls can find it.";
+
+        // If the saved content looks like source code, say honestly what a MEMORY brain did with
+        // it: it kept the text (recallable by meaning), it did NOT index it as searchable code —
+        // that's the coding build. This is the one place the "I added my code" expectation lands,
+        // so set it straight here rather than let the user assume code-search works. Brain build only.
+        #[cfg(not(feature = "code"))]
+        let code_note = {
+            let c = &t.content;
+            let looks_like_code = c.contains("fn ") || c.contains("def ") || c.contains("function ")
+                || c.contains("class ") || c.contains("=> ") || c.contains("{\n") || c.contains(";\n")
+                || c.contains("import ") || c.contains("SELECT ") || c.contains("</");
+            if looks_like_code {
+                "\n\nNote: this is a memory brain — it kept your snippet as a text note you can recall \
+                 by meaning, but it does NOT index code (symbol/AST search over a codebase). For that, \
+                 use the coding build of said."
+            } else { "" }
+        };
+        #[cfg(feature = "code")]
+        let code_note = "";
+
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "âœ“ Saved to brain (memory #{}, pillar={}). {}\n\nBrain now has {} memories. \
-                 This memory is searchable â€” future `search` calls can find it.",
-                frame_id, pillar_label, notes_line, frame_count
+                "âœ“ Saved to brain (memory #{}, pillar={}). {}\n\nBrain now has {} memories. {}{}",
+                frame_id, pillar_label, notes_line, frame_count, recall_line, code_note
             ),
         )]))
     }
