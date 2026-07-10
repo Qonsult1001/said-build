@@ -25,7 +25,7 @@ use std::time::Instant;
     EVERYDAY COMMANDS: create | add | ask | get | delete | stats | use\n\
     `ask` is the one you'll use most - it finds memories by meaning, in your own words.\n\
     \n\
-    Full step-by-step guide: docs/walkthrough/  (start with tutorial-your-first-brain.md)\n\
+    Full step-by-step guide: production/brain/cli/doc/  (start with tutorial-your-first-brain.md)\n\
     Run `said <command> --help` for the options on any command.")]
 struct Cli {
     /// Path to .said file (auto-detects if omitted)
@@ -76,6 +76,10 @@ enum Commands {
         /// Optional title for the document
         #[arg(long)]
         title: Option<String>,
+        /// Tag the memory (repeatable, e.g. `--tag project:said --tag status:planned`). Tags are the
+        /// browsable metadata vocabulary (`said list-tags`) and the filter for `said ask --tag`.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
     },
     /// Read one memory by its id
     Get {
@@ -1499,7 +1503,7 @@ fn run() {
 
     let result = match cli.command {
         Commands::Create { ref file, ref mode, force } => cmd_create(file, mode, force, cli.json),
-        Commands::Add { ref text, ref file, ref dir, ref id, ref title } => {
+        Commands::Add { ref text, ref file, ref dir, ref id, ref title, ref tag } => {
             if let Some(d) = dir {
                 cmd_add_dir(cli.path.as_deref(), d, cli.json)
             } else if let Some(t) = text {
@@ -1508,13 +1512,13 @@ fn run() {
                     cmd_add_dir(cli.path.as_deref(), t, cli.json)
                 } else if Path::new(t).is_file() {
                     // It's a file path â€” index the file
-                    cmd_add(cli.path.as_deref(), None, Some(t.as_str()), id.as_deref(), title.as_deref(), cli.json)
+                    cmd_add(cli.path.as_deref(), None, Some(t.as_str()), id.as_deref(), title.as_deref(), tag, cli.json)
                 } else {
                     // It's text content
-                    cmd_add(cli.path.as_deref(), Some(t.as_str()), file.as_deref(), id.as_deref(), title.as_deref(), cli.json)
+                    cmd_add(cli.path.as_deref(), Some(t.as_str()), file.as_deref(), id.as_deref(), title.as_deref(), tag, cli.json)
                 }
             } else {
-                cmd_add(cli.path.as_deref(), None, file.as_deref(), id.as_deref(), title.as_deref(), cli.json)
+                cmd_add(cli.path.as_deref(), None, file.as_deref(), id.as_deref(), title.as_deref(), tag, cli.json)
             }
         }
         Commands::Get { ref doc_id } => cmd_get(cli.path.as_deref(), doc_id, cli.json),
@@ -2269,6 +2273,7 @@ fn cmd_add(
     file: Option<&str>,
     id: Option<&str>,
     title: Option<&str>,
+    tags: &[String],
     json: bool,
 ) -> Result<(), String> {
     let content = if let Some(f) = file {
@@ -2325,6 +2330,12 @@ fn cmd_add(
         brain.add_with_title(&doc_id, &content, t);
     } else {
         brain.add(&doc_id, &content);
+    }
+
+    // Apply user tags (--tag project:said …) so the memory is browsable via `list-tags` and
+    // filterable via `ask --tag`. CLI/MCP parity: the MCP `remember` tool already takes tags.
+    for tag in tags {
+        brain.add_tag(&doc_id, tag);
     }
 
     // OKF concept graph for MEMORY brains (default-on, opt out with SAID_OKF_LINKS=0). `init` builds

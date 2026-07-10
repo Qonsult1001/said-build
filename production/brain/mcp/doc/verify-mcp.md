@@ -1,77 +1,77 @@
-# verify-mcp — `brain` variant (MVP launch gate)
+# verify-mcp — `brain` variant · v0.11.6 acceptance record
 
 **Variant:** `brain` = `--no-default-features --features brain` (`embed-model` only — no `code`, `lsp`, `docs`).
-**Binary:** `production/brain/said-mcp.exe` (21.5 MB, production profile).
-**Build:** `cargo build --profile production -p said-mcp --no-default-features --features brain` → exit 0, 288 s.
-**Transport:** MCP stdio JSON-RPC, protocol `2025-11-25`. Isolated brain (`verify-brain.said`), single session for state-across-calls.
+**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.6`.
+**Transport:** MCP stdio JSON-RPC. Isolated brain, single session (state carried across calls).
 
-## Result: 25 / 25 PASS ✅
+> This is a per-release acceptance record — re-run it against the shipped binary each release. The tool
+> surface below is the **exact** `tools/list` of this build; if a future build changes it, update this doc.
 
-### (A) Positive — the memory surface the brain bundle exists to deliver
-Every memory tool works, on one session, with state carried across calls (remember → get → ask → recall_fix).
+## Result: PASS ✅ — 13 tools, all memory, all clean
 
-| Tool | Expected | Result |
+### The real tool surface (`tools/list` — 13 tools)
+
+The brain bundle advertises **only** the memory tools it can actually deliver. No `search`, `sym`,
+`init`, `ingest`, `overview`, `snapshot`, `lsp_*`, or blueprint/fix tools — those are code-tier and are
+**absent** from this build's `tools/list`, not merely disabled.
+
+| Tool | What it does | Verified |
 |---|---|---|
-| remember (Episodic/Semantic/Procedural) | saved | ✅ |
-| get | recalls the stored note by id | ✅ |
-| ask | semantic recall ("what owns the ledger" → billing/ledger) | ✅ |
-| search | lexical recall | ✅ |
-| salience | scores a note high/med/low | ✅ |
-| list_concepts | lists (empty on a fresh brain — correct) | ✅ |
-| list_tags | lists the tag vocabulary with per-tag counts (empty on a fresh brain — correct) | ✅ |
-| history | version list for a memory | ✅ |
-| journal | session note saved | ✅ |
-| learn_fix / recall_fix | learn a fix, recall it by a differently-worded query | ✅ |
-| status | shows memory count | ✅ |
-| dream | consolidation runs | ✅ |
-| delete (dry-run) | reports what it would remove | ✅ |
+| `remember` | save a note/fact/decision as a memory | ✅ saved (memory #0, pillar) |
+| `ask` | recall memories by meaning (the main command) | ✅ "when does billing run" → the billing note |
+| `get` | read one memory's exact text by id | ✅ returns the stored text |
+| `delete` | remove a memory (tombstoned — recoverable) | ✅ "Deleted: billing (tombstoned — preserved in history)" |
+| `history` | list a memory's past versions | ✅ |
+| `checkout` | restore a memory to an earlier version | ✅ |
+| `status` | brain health: memory count, index, plain-English Learning line | ✅ "Brain is POPULATED… Next steps: ask/remember/get" |
+| `list_concepts` | the `[[wikilink]]` concept vocabulary + counts | ✅ (empty on a fresh brain — correct) |
+| `list_tags` | the `tags` metadata vocabulary + per-tag counts | ✅ returns the tag list |
+| `compact` | tidy the file + reclaim space from deleted memories | ✅ dry-run: "recycle bin holds 1 deleted memory frame (38 bytes)" |
+| `admin` | recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted` | ✅ |
+| `create` / `open` | make or switch to a brain file | ✅ |
 
-### (B) Negative-gating — tools advertised but not backed by this bundle
-All respond **cleanly, no panic**. `lsp_*` give an exact "rebuild with --features lsp" message.
+### Prompts (`prompts/list` — 1)
 
-| Tool | Response | Clean? |
+| Prompt | What it is | Verified |
 |---|---|---|
-| lsp_def / refs / hover / symbols | `"said-mcp was built without the 'lsp' feature. Rebuild with cargo build -p said-mcp --features lsp"` | ✅ ideal |
-| sym | `"No symbol found: Account"` (empty symbol table) | ✅ no panic |
-| init (source dir) | `"Could not run said init — the CLI binary wasn't found…"` | ✅ no panic |
-| discover | `"Module Discovery — Total objects: 0"` | ✅ no panic |
-| harvest_blueprints | `"harvest: could not run the said CLI (set SAID_CLI?)"` | ✅ no panic |
+| `onboard` | friendly first-connect welcome (memory-specific; empty-brain = the agent-voiced first-win copy, populated = "welcome back") | ✅ |
 
-### (C) Error paths
+`answerer` (the agent system prompt) and `fix-template` (an internal orchestrator template) are **not**
+advertised — `answerer` is auto-injected on connect; `fix-template` is code-tier plumbing. Both remain
+retrievable by name for internal callers; neither belongs in a user-facing picker.
+
+### State-across-calls (one session)
+
+`remember` → `get` → `ask` → `list_tags` → `status` → `delete` → `compact(dry_run)` on a **single
+session**: each call sees the prior effect (the saved memory recalls; delete tombstones it; compact's
+dry-run reports the 1 tombstone). ✅
+
+### Error paths
+
 | Scenario | Result |
 |---|---|
-| get(nonexistent id) | clean not-found, no panic ✅ |
-| ask(no query) | clean, no panic ✅ |
-| delete(missing criteria) | `"No deletion criteria specified. Use doc_id, older_than_days, or before_date."` — helpful ✅ |
-| lsp_symbols(wrong field) | `"missing field 'query'"` — clean schema rejection ✅ |
+| `get`(nonexistent id) | clean "Document not found", no panic ✅ |
+| `delete`(no criteria) | helpful "No deletion criteria specified…" ✅ |
+| `compact` drop_history with no scope | rejected: "drop_history needs a scope (all or keep_per_doc)" ✅ |
+| a code-tier tool name (e.g. `ingest`) | clean "Unknown tool" — absent from this build ✅ |
 
-## Verdict: **GO for MVP** (memory surface), with one pre-launch polish item
+### Tier honesty (fixed since earlier builds)
 
-The brain bundle's **memory product is solid** — every memory tool works and errors are clean. Nothing
-panics. As a portable-memory MVP it passes.
+- Pasting **code** into `remember` no longer falsely promises `search` — it says "stored as text — ask
+  for it later", and when the content looks like code it adds "does NOT index code — use the coding build".
+- `status` next-steps and the `onboard` welcome use **memory** vocabulary only (no code-tier commands).
 
-## Finding — degrade quality is inconsistent (fix before a polished launch)
+## Resolved finding — the tool-leak the previous verify flagged is FIXED
 
-`brain` **advertises 38 tools** (`tools/list`), but ~10 of them need `code`/`lsp`/`docs` this bundle
-lacks. They degrade three *different* ways:
-
-1. **Ideal** — `lsp_*`: a precise "rebuild with `--features lsp`" message. A user knows exactly what to do.
-2. **Confusing** — `sym` "No symbol found", `discover` "Total objects: 0": these look like *empty results*,
-   not *disabled features*. A user thinks their data is missing, not that the bundle can't do this.
-3. **Leaky** — `init`, `harvest_blueprints`: "could not run the said CLI (set SAID_CLI?)" — this exposes
-   an *implementation detail* (it shells out to a CLI) and reads like a broken install, not a feature gate.
-
-### Recommendation: for the brain MVP, **HIDE the code/lsp/docs tools from `tools/list`**
-A memory-only bundle advertising `lsp_def`, `sym`, `harvest_blueprints` is misleading — a developer
-evaluating it sees code-intelligence tools that then fail. For a clean MVP the brain surface should be
-**only the memory tools** (~28), so `tools/list` is an honest menu of what actually works. Degrade-in-place
-is acceptable *only if* every message is as good as the `lsp_*` one (option 1); today two of the three
-classes aren't, so hiding is the safer, more sellable choice. (Deferred as a code change — this run
-verifies + files the finding, per verify-mcp's boundary.)
+An earlier verify (pre-v0.11.4) found the brain build advertised ~38 tools, ~10 of which needed
+`code`/`lsp`/`docs` this bundle lacks, degrading inconsistently (a leaky "set SAID_CLI?" message, empty
+"No symbol found", etc.). The recommendation — **hide the code/lsp/docs tools so `tools/list` is an
+honest menu** — has **shipped**: this build advertises exactly the 13 memory tools above, and the
+code-tier tools are compile-gated out (`#[cfg(feature = "code")]`). `tools/list` is now a truthful menu
+of what works. See [docs/said-structure/40-build-tier-capability-matrix.md](../../../../docs/said-structure/40-build-tier-capability-matrix.md).
 
 ## Reproduce
-```
-cargo build --profile production -p said-mcp --no-default-features --features brain
-SAID_MCP_BIN=.../production/brain/said-mcp.exe node hard-eval/mcp-harness/verify-brain.js
-```
-Raw results: `production/brain/verify-mcp-result.json`.
+
+    cargo build --release -p said-mcp --no-default-features --features brain
+    # then drive tools/list + tools/call over stdio JSON-RPC against the binary
+    # (production/brain/mcp/said-mcp.exe), or run the mcp harness in hard-eval/mcp-harness/.

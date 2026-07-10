@@ -93,7 +93,7 @@ Open a **new** terminal and run:
 
 You should see:
 
-    said 0.11.5
+    said 0.11.6
 
 - **If you get "command not found" / "not recognized"** → the folder isn't on your PATH
   yet, or you didn't open a new terminal. Re-check Step 3, or run it by full path

@@ -51,16 +51,28 @@ For an audit trail on a specific note — every version, when it was deleted, an
 The agent returns the full lineage (this uses `admin`'s `who-deleted` action). Useful if you're keeping
 records of what changed and when.
 
-## Age out old deleted notes (optional housekeeping)
+## Reclaim space from deleted notes (empty the recycle bin)
 
-The recycle bin keeps deleted memories indefinitely by default. If you want old ones to clear
-automatically, tell the agent to run a retention sweep:
+The recycle bin keeps deleted memories indefinitely, and they still take up space in your file. When
+you're sure you won't need them back, tell the agent to tidy up and reclaim that space:
 
-    Clear deleted notes older than 90 days from the recycle bin.
+**First, preview what would be cleared** (safe — changes nothing):
 
-You should see a summary of what was removed. **This is the one step that permanently frees space** —
-anything swept is no longer recoverable. Active memories are never touched, and anything you've put a
-legal hold on is skipped.
+    Tidy up my brain — show me what a cleanup would reclaim, but don't do it yet.
+
+You should see a summary like *"the recycle bin holds N deleted memory frame(s) (X bytes)"*. (The agent
+used the brain's `compact` tool with a dry run.)
+
+**Then, if you're happy, purge them:**
+
+    Empty the recycle bin and reclaim the space.
+
+You should see a confirmation — blocks repacked, bytes saved, and how many deleted memories were purged.
+**This is the one step that permanently frees space** — purged memories are no longer recoverable.
+Active memories are never touched.
+
+> Just want to tidy the file *without* emptying the recycle bin? Ask *"compact my brain"* on its own —
+> it repacks storage and keeps every deleted memory recoverable.
 
 ## If something goes wrong
 
@@ -68,8 +80,12 @@ legal hold on is skipped.
   Ask the agent to list what it has on the topic.
 - **You restored the wrong one** — restoring is safe and repeatable; check the recycle bin again and
   restore the right one.
-- **You want a note gone forever right now** — delete it, then run the retention sweep with a `0`-day
-  window. Be sure: after a sweep it cannot be recovered.
+- **You want a note gone forever right now** — delete it, then ask the agent to *"empty the recycle bin
+  and reclaim the space"* (the `compact` cleanup above). Be sure: after that it cannot be recovered.
+
+> **Automatic age-based cleanup** (clear anything older than N days, legal holds, an audit trail) is an
+> **Enterprise** feature, not part of the free memory brain. On this brain you clear the recycle bin
+> yourself with the cleanup above, when you choose to.
 
 ## Next
 

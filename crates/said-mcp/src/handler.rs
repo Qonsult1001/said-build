@@ -214,60 +214,109 @@ impl SaidServerHandler {
             .and_then(|n| n.to_str())
             .unwrap_or(current);
 
-        if is_placeholder {
-            format!(
-                "# Welcome to .said\n\
-                 \n\
-                 You're connected to the **.said** MCP server. Right now it's \
-                 attached to `{base}` â€” a temporary placeholder.\n\
-                 \n\
-                 ## Quick start (2 questions)\n\
-                 \n\
-                 **1. Pick a name for your brain.** It's one file that holds \
-                 everything â€” code, SQL, documents, memories. What should it \
-                 be called?\n\
-                 \n\
-                 Suggestions:\n\
-                 - `willie.said` â€” personal / single-project brain\n\
-                 - `acme.said` â€” one brain per client\n\
-                 - `vivere.said` â€” name it after the codebase you're indexing\n\
-                 \n\
-                 **2. What do you want to use it for?**\n\
-                 \n\
-                 - **Portable** â€” notes, journaling, research (start with \
-                 `remember` and `search`)\n\
-                 - **Enterprise** â€” legacy monolith modernization (start with \
-                 `init` on your SQL/code folder, then `overview` + `snapshot`)\n\
-                 \n\
-                 ## Once you tell me the name, I'll:\n\
-                 \n\
-                 1. Call `open path=\"<your-name>.said\"` â€” creates the brain \
-                 and cleans up the placeholder\n\
-                 2. If enterprise: run `init dir=\"<path>\"` to ingest, then \
-                 `overview` to show you what's inside\n\
-                 3. If portable: hand you the `remember` / `search` commands\n\
-                 \n\
-                 Type: **\"Use `willie.said` and it's portable\"** or \
-                 **\"Create `vivere.said` and init from `G:\\work\\sql`\"** \
-                 â€” or anything natural. I'll map it to the right tools."
-            )
-        } else {
-            format!(
-                "# Welcome back to .said\n\
-                 \n\
-                 Attached to: **{base}**\n\
-                 \n\
-                 Common commands from here:\n\
-                 - `status` â€” health + frame count\n\
-                 - `overview` â€” what products/modules are in this brain\n\
-                 - `search <term>` â€” semantic search\n\
-                 - `snapshot <module>` â€” extract a module workspace\n\
-                 - `sandbox <module>` â€” spin up a Docker SQL Server test DB\n\
-                 - `open <name>.said` â€” switch to a different brain (this \
-                 one is kept)\n\
-                 \n\
-                 Tell me what you're trying to do and I'll pick the right tool."
-            )
+        // The greeting is TIER-SPECIFIC. The brain (memory) build speaks in memory terms —
+        // remember/ask, "learns how you search" — with none of the code-tier vocabulary
+        // (init/overview/snapshot/sandbox) a memory user has no tools for. Code builds keep
+        // the codebase-oriented welcome. This mirrors the status "next steps" tier split.
+        #[cfg(not(feature = "code"))]
+        {
+            if is_placeholder {
+                // Empty brain — the agent-voiced welcome (a person, not docs). Your first win
+                // in 30 seconds: say something worth keeping, then recall it next message.
+                format!(
+                    "Hey — I'm connected to your **{base}**. It's fresh and empty.\n\
+                     \n\
+                     Think of me as someone with a notebook that never gets thrown away. When you:\n\
+                     - **decide something** → I save it\n\
+                     - **state a preference** → I save it\n\
+                     - **ask \"what did we…\" / \"what's my…\"** → I check the brain first, then answer\n\
+                     \n\
+                     You don't manage a database. You don't paste context every session. You just talk.\n\
+                     \n\
+                     It's a single file on your machine that survives every chat reset — your machine \
+                     only, no cloud, no account. And it gets smarter: every question teaches it how you \
+                     search, and after enough use it quietly reorganizes so the right memory surfaces \
+                     faster.\n\
+                     \n\
+                     **First win in 30 seconds:** tell me one thing about how you work — I'll remember \
+                     it, and you can test recall in your next message. Try:\n\
+                     \n\
+                     > \"Remember that I prefer short answers and minimal code changes.\"\n\
+                     \n\
+                     …then ask me \"what are my preferences?\" — even in a brand-new chat."
+                )
+            } else {
+                format!(
+                    "Welcome back — I'm attached to your **{base}**.\n\
+                     \n\
+                     Just talk to me. I'll:\n\
+                     - **save** what's worth keeping when you decide something or state a preference \
+                     (or say \"remember …\" to be explicit),\n\
+                     - **recall** it by meaning when you ask (\"what did I decide about X\", \"what's my …\"),\n\
+                     even in a new chat.\n\
+                     \n\
+                     Want to see what's in here? Ask \"what do you have on <topic>?\", or say \"show my \
+                     status\" for a quick health check."
+                )
+            }
+        }
+        #[cfg(feature = "code")]
+        {
+            if is_placeholder {
+                format!(
+                    "# Welcome to .said\n\
+                     \n\
+                     You're connected to the **.said** MCP server. Right now it's \
+                     attached to `{base}` â€” a temporary placeholder.\n\
+                     \n\
+                     ## Quick start (2 questions)\n\
+                     \n\
+                     **1. Pick a name for your brain.** It's one file that holds \
+                     everything â€” code, SQL, documents, memories. What should it \
+                     be called?\n\
+                     \n\
+                     Suggestions:\n\
+                     - `willie.said` â€” personal / single-project brain\n\
+                     - `acme.said` â€” one brain per client\n\
+                     - `vivere.said` â€” name it after the codebase you're indexing\n\
+                     \n\
+                     **2. What do you want to use it for?**\n\
+                     \n\
+                     - **Portable** â€” notes, journaling, research (start with \
+                     `remember` and `search`)\n\
+                     - **Enterprise** â€” legacy monolith modernization (start with \
+                     `init` on your SQL/code folder, then `overview` + `snapshot`)\n\
+                     \n\
+                     ## Once you tell me the name, I'll:\n\
+                     \n\
+                     1. Call `open path=\"<your-name>.said\"` â€” creates the brain \
+                     and cleans up the placeholder\n\
+                     2. If enterprise: run `init dir=\"<path>\"` to ingest, then \
+                     `overview` to show you what's inside\n\
+                     3. If portable: hand you the `remember` / `search` commands\n\
+                     \n\
+                     Type: **\"Use `willie.said` and it's portable\"** or \
+                     **\"Create `vivere.said` and init from `G:\\work\\sql`\"** \
+                     â€” or anything natural. I'll map it to the right tools."
+                )
+            } else {
+                format!(
+                    "# Welcome back to .said\n\
+                     \n\
+                     Attached to: **{base}**\n\
+                     \n\
+                     Common commands from here:\n\
+                     - `status` â€” health + frame count\n\
+                     - `overview` â€” what products/modules are in this brain\n\
+                     - `search <term>` â€” semantic search\n\
+                     - `snapshot <module>` â€” extract a module workspace\n\
+                     - `sandbox <module>` â€” spin up a Docker SQL Server test DB\n\
+                     - `open <name>.said` â€” switch to a different brain (this \
+                     one is kept)\n\
+                     \n\
+                     Tell me what you're trying to do and I'll pick the right tool."
+                )
+            }
         }
     }
 
@@ -550,6 +599,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::GetTool(t) => self.handle_get(t),
             SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
             SaidTools::ListTagsTool(t) => self.handle_list_tags(t),
+            SaidTools::CompactTool(t) => self.handle_compact(t),
             #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
@@ -647,6 +697,13 @@ impl ServerHandler for SaidServerHandler {
         _params: Option<PaginatedRequestParams>,
         _runtime: Arc<dyn McpServer>,
     ) -> Result<ListPromptsResult, RpcError> {
+        // Advertise ONLY `onboard`. `answerer` (the agent system prompt) is injected
+        // automatically on connect via the server instructions — a user should never have to
+        // manually load it, and it's noise in a prompt-picker. `fix-template` is an INTERNAL
+        // template the orchestrator passes to `learn_fix` (code-tier); a human never fetches it
+        // by hand, and it's meaningless on the memory build where `learn_fix` doesn't exist.
+        // Both remain retrievable BY NAME (handle_get_prompt still serves them) for any tool
+        // that references them — they're just not listed in the user-facing picker.
         Ok(ListPromptsResult {
             meta: None,
             next_cursor: None,
@@ -655,39 +712,9 @@ impl ServerHandler for SaidServerHandler {
                     name: "onboard".to_string(),
                     title: Some("Welcome â€” Quick Start".to_string()),
                     description: Some(
-                        "A short guided setup for .said: pick a brain name, \
-                         ingest your codebase, then explore modules. Use this \
-                         when attaching the MCP server for the first time."
-                            .to_string(),
-                    ),
-                    arguments: vec![],
-                    icons: vec![],
-                    meta: None,
-                },
-                Prompt {
-                    name: "answerer".to_string(),
-                    title: Some(".said Answerer Agent".to_string()),
-                    description: Some(
-                        "Canonical system prompt for the .said agent â€” reads \
-                         brain content and answers with citations. Aligned \
-                         with Anthropic Claude Code production prompts. \
-                         Single source of truth (said-prompts crate)."
-                            .to_string(),
-                    ),
-                    arguments: vec![],
-                    icons: vec![],
-                    meta: None,
-                },
-                Prompt {
-                    name: "fix-template".to_string(),
-                    title: Some("Coding-fix iteration template".to_string()),
-                    description: Some(
-                        "The 10-section coding-iteration note template (Title / Current \
-                         State / Task / Files and Functions / Workflow / Errors and \
-                         Corrections / Codebase Documentation / Learnings / Key Results / \
-                         Worklog). Fill it in after a green gate and pass it to `learn_fix` \
-                         â€” the SAME structured story the orchestrator stores, so the saved \
-                         memory recalls well (not a one-line label)."
+                        "A short, friendly welcome for your brain: what it is, and your \
+                         first save-and-recall in under a minute. Use this the first time \
+                         you connect."
                             .to_string(),
                     ),
                     arguments: vec![],
@@ -950,6 +977,76 @@ impl SaidServerHandler {
         Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
     }
 
+    fn handle_compact(&self, t: CompactTool) -> Result<CallToolResult, CallToolError> {
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let drop_history = t.drop_history.unwrap_or(false);
+        let all = t.all.unwrap_or(false);
+        let keep = t.keep_per_doc.map(|v| v as usize);
+        let dry_run = t.dry_run.unwrap_or(false);
+
+        // Same guardrails as `said compact` — a bare drop-history must not nuke the whole
+        // recycle bin by accident; it requires an explicit scope.
+        if drop_history && !all && keep.is_none() {
+            return Err(CallToolError::from_message(
+                "drop_history needs a scope: set all=true to purge every deleted memory, \
+                 or keep_per_doc=N to keep the N most recent deleted versions per memory."
+                    .to_string()));
+        }
+        if drop_history && all && keep.is_some() {
+            return Err(CallToolError::from_message(
+                "drop_history: choose all=true OR keep_per_doc=N, not both.".to_string()));
+        }
+        if (all || keep.is_some()) && !drop_history {
+            return Err(CallToolError::from_message(
+                "all / keep_per_doc require drop_history=true.".to_string()));
+        }
+
+        let tombstones = brain.tombstone_count();
+        let tomb_bytes = brain.tombstone_bytes();
+
+        // Dry run: report what a purge WOULD reclaim, change nothing.
+        if dry_run {
+            let would_drop = if !drop_history { 0 }
+                else if all { tombstones }
+                else { tombstones.saturating_sub(keep.unwrap()) }; // approximate: keep-N per doc
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                "[dry run] recycle bin holds {} deleted memory frame(s) ({} bytes).{}\n\
+                 Nothing changed. Re-run without dry_run to apply.",
+                tombstones, tomb_bytes,
+                if drop_history {
+                    format!(" A purge would drop ~{} tombstone(s) and reclaim space.", would_drop)
+                } else {
+                    " Plain compact would repack blocks + decay cold recall weights (keeps all history).".to_string()
+                },
+            ))]));
+        }
+
+        let dropped = if drop_history {
+            if all { brain.drop_history() } else { brain.drop_history_keep(keep.unwrap()) }
+        } else { 0 };
+        let (blocks, saved) = brain.compact();
+        let decayed = brain.consolidate();
+        brain.save().map_err(|e| CallToolError::from_message(e))?;
+
+        let mut msg = format!("✓ Compacted: {} block(s) repacked, {} bytes saved.", blocks, saved);
+        if dropped > 0 {
+            msg.push_str(&format!("\n  Purged {} deleted memory frame(s) from the recycle bin \
+                                   (no longer recoverable).", dropped));
+        } else if drop_history {
+            msg.push_str("\n  Recycle bin was already empty.");
+        }
+        if decayed > 0 {
+            msg.push_str(&format!("\n  Tidied {} cold recall weight(s).", decayed));
+        }
+        if !drop_history && tombstones > 0 {
+            msg.push_str(&format!("\n  ({} deleted memories are still recoverable — pass \
+                                   drop_history=true with all=true to purge them for good.)", tombstones));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(msg)]))
+    }
+
     fn handle_list_tags(&self, t: ListTagsTool) -> Result<CallToolResult, CallToolError> {
         let brain = self.brain.lock().map_err(|e| {
             CallToolError::from_message(format!("brain lock: {}", e))
@@ -1163,11 +1260,38 @@ impl SaidServerHandler {
         }
         let notes_line = notes.join(" Â· ");
 
+        // Tier-accurate recall verb: the brain build has NO `search` tool (that's code-tier) — a
+        // brain user recalls with `ask`. Referencing `search` here both leaks a paid-tier tool and
+        // implies code-indexing this build doesn't do. Code builds keep `search`.
+        #[cfg(not(feature = "code"))]
+        let recall_line = "This memory is stored as text — ask for it later in plain English \
+                           (e.g. `ask` \"...\") and the brain finds it by meaning.";
+        #[cfg(feature = "code")]
+        let recall_line = "This memory is searchable — future `search` calls can find it.";
+
+        // If the saved content looks like source code, say honestly what a MEMORY brain did with
+        // it: it kept the text (recallable by meaning), it did NOT index it as searchable code —
+        // that's the coding build. This is the one place the "I added my code" expectation lands,
+        // so set it straight here rather than let the user assume code-search works. Brain build only.
+        #[cfg(not(feature = "code"))]
+        let code_note = {
+            let c = &t.content;
+            let looks_like_code = c.contains("fn ") || c.contains("def ") || c.contains("function ")
+                || c.contains("class ") || c.contains("=> ") || c.contains("{\n") || c.contains(";\n")
+                || c.contains("import ") || c.contains("SELECT ") || c.contains("</");
+            if looks_like_code {
+                "\n\nNote: this is a memory brain — it kept your snippet as a text note you can recall \
+                 by meaning, but it does NOT index code (symbol/AST search over a codebase). For that, \
+                 use the coding build of said."
+            } else { "" }
+        };
+        #[cfg(feature = "code")]
+        let code_note = "";
+
         Ok(CallToolResult::text_content(vec![TextContent::from(
             format!(
-                "âœ“ Saved to brain (memory #{}, pillar={}). {}\n\nBrain now has {} memories. \
-                 This memory is searchable â€” future `search` calls can find it.",
-                frame_id, pillar_label, notes_line, frame_count
+                "âœ“ Saved to brain (memory #{}, pillar={}). {}\n\nBrain now has {} memories. {}{}",
+                frame_id, pillar_label, notes_line, frame_count, recall_line, code_note
             ),
         )]))
     }

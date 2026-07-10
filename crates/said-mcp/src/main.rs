@@ -150,7 +150,17 @@ async fn main() -> SdkResult<()> {
              - `list_concepts` — the [[wikilink]] topics your memories connect to.\n\
              - `list_tags` — the `tags` metadata vocabulary your memories carry.\n\
              - `create` / `open` — make or switch to a brain file.\n\
-             - `admin` — recover deleted memories, manage retention.\n\n\
+             - `admin` — recover deleted memories, manage retention.\n\
+             - `compact` — tidy the file and reclaim space from deleted memories.\n\n\
+             ## THIS IS A MEMORY BRAIN (not a code index)\n\n\
+             It stores TEXT you save with `remember` and finds it by meaning. It does NOT index code \
+             or folders: there is no `ingest`, no folder-import, and no code/symbol `search`. If a user \
+             pastes code, you can `remember` it — it's kept as a text note recallable by meaning, but \
+             it is NOT searchable-as-code. If a user asks to \"index/ingest my codebase\", \"search my \
+             code\", or \"find this function/symbol\", say plainly this free memory brain doesn't do \
+             code intelligence (that's the coding build of said) — then offer what DOES fit: save key \
+             facts/decisions about the code as memories they can recall later. Don't imply code search \
+             works here.\n\n\
              ## TAG EVERY MEMORY\n\
              When you `remember`, attach `tags` describing what the memory is about (subject, \
              project, status, kind, time) so it's browsable/filterable later. Pick them yourself \

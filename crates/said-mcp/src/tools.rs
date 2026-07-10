@@ -110,6 +110,35 @@ pub struct ListConceptsTool {
 }
 
 #[mcp_tool(
+    name = "compact",
+    description = "Tidy up the brain file and reclaim space. Deleted memories go to a recycle bin \
+                   (tombstones) that keep taking up space until purged — `compact` is how you \
+                   physically reclaim it. Plain `compact` just repacks blocks + decays cold recall \
+                   weights (safe, keeps all recoverable history). To ALSO purge the recycle bin, set \
+                   drop_history=true WITH a scope: all=true purges every deleted memory (they become \
+                   UNrecoverable), or keep_per_doc=N keeps the N most recent deleted versions per \
+                   memory. ALWAYS run with dry_run=true first to preview what would be purged. This is \
+                   basic hygiene (available on every tier); it is NOT the compliance retention-sweep.",
+    destructive_hint = true
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct CompactTool {
+    /// Also purge the recycle bin (tombstones). Requires a scope: `all` or `keep_per_doc`.
+    /// Purged memories are UNrecoverable. Omit to just repack (keeps all history).
+    #[serde(default)]
+    pub drop_history: Option<bool>,
+    /// With drop_history: purge EVERY deleted memory. Mutually exclusive with keep_per_doc.
+    #[serde(default)]
+    pub all: Option<bool>,
+    /// With drop_history: keep the N most recent deleted versions per memory, purge older.
+    #[serde(default)]
+    pub keep_per_doc: Option<u32>,
+    /// Preview only — report what WOULD be purged/reclaimed without changing the file.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
+#[mcp_tool(
     name = "list_tags",
     description = "List the tags memories carry (the `tags` metadata vocabulary), with how many \
                    memories carry each. This is the FREE-FORM taxonomy you attach when remembering \
@@ -1308,14 +1337,14 @@ pub struct HarvestBlueprintsTool {
 // The code branches below keep every tool, so coding/coding-plus/full are UNCHANGED.
 #[cfg(all(not(feature = "forge"), not(feature = "code")))]
 tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, ListTagsTool, RememberTool, StatusTool,
-                      HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool]);
+                      HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool, CompactTool]);
 
 // CODE builds (coding / coding-plus / full), no forge — FULL tool set, unchanged.
 #[cfg(all(not(feature = "forge"), feature = "code"))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
-                      SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
+                      CompactTool, SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
                       RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool]);
 
@@ -1323,7 +1352,7 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
-                      SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
+                      CompactTool, SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
                       RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool,
                       ForgeListTool, ForgeGetTool, ForgeStatusTool,

@@ -56,6 +56,7 @@ all of them.
 | `list_tags` | `list-tags` | The `tags` metadata vocabulary, per-tag counts. |
 | `open` / `create` | `create` / `use` | Make or switch to a brain file. |
 | `admin` (basic) | `admin` | Recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted`. |
+| `compact` | `compact` | Tidy the file + reclaim space from deleted memories (`drop_history`/`--drop-history` to purge; `dry_run` to preview). Basic hygiene — every tier. |
 
 > **`admin` is split by tier.** The everyday **recovery** actions — `list-tombstones`, `restore`,
 > `who-deleted` — are in **every** bundle (a user must always be able to undo a delete). The
@@ -76,6 +77,31 @@ brain MCP for them returns a clean "unknown tool", and the brain CLI has no such
 Notably, **bulk folder ingest (`init` / `ingest`) is a code-tier capability** — it is why a *memory*
 brain has no "bulk import": that path belongs to the code bundles, which index folders of source. A
 memory brain is populated one distilled memory at a time (see the brain how-tos).
+
+### The #1 expectation gap: a memory brain stores TEXT, it does not index CODE
+
+The most common misread of the free brain is *"I saved my code, so I can search my code."* You can't —
+and the product now says so honestly, in the moment. What actually happens:
+
+- **You paste code into `remember`.** It is saved as a **text note**, recallable **by meaning** with
+  `ask` (and verbatim with `get`). It is **not** parsed, symbol-indexed, or AST-chunked. The `remember`
+  response says this outright when it detects code: *"kept as a text note you can recall by meaning, but
+  it does NOT index code — use the coding build."*
+- **You ask to "search my code" / "find function foo" / "index my repo folder."** The brain build has
+  **no `search`, `sym`, `ingest`, or `init`** — those tools don't exist here. The constitution instructs
+  the agent to say plainly this is a memory brain (not a code index), then offer what *does* fit: save
+  key facts/decisions about the code as memories.
+
+| You want | Brain build | Where it lives |
+|---|---|---|
+| Save a snippet and recall it later by meaning / verbatim | ✅ `remember` → `ask` / `get` | brain |
+| Symbol/AST search over source (`sym foo`, `search foo`) | ❌ not here | coding build (`said init` a repo, then `sym`/`search`) |
+| Bulk-ingest a code/docs folder | ❌ not here | coding (`init`/`ingest`); docs/OCR need `full` |
+
+This is **not a limitation to fix** — it's the tier boundary. A brain that pretended to index code (by
+advertising `search` in its success message, as an earlier build did — [FIXES-LOG](FIXES-LOG.md)) is the
+bug; being honest that memory ≠ code-index is the correct behavior. For real code intelligence, the
+coding build is the answer, and the free brain points the user there rather than over-promising.
 
 ### Added by `lsp` — coding-plus, full only
 
