@@ -10,7 +10,7 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 |---------|--------------|---------|
 | `create <file>.said` | Make a new, empty brain file. | `said create my-brain.said` |
 | `add "<note>" --id <name>` | Store a memory. `--id` is a short name you can use to fetch it later (optional — auto-named if omitted). `--tag ns:value` (repeatable) attaches browsable/filterable tags. | `said add "Wifi is sunflower-42" --id wifi --tag topic:home` |
-| `ask "<question>"` | Find memories by meaning, in plain English. **The main command** — use it for almost everything. | `said ask "what's the wifi password"` |
+| `ask "<question>"` | Find memories by meaning, in plain English. **The main command** — use it for almost everything. Add `--tag` to scope by facet; add `--deep` for broad synthesis. | `said ask "what's the wifi password"` |
 | `get <id>` | Show one memory's exact text by its `--id`. | `said get wifi` |
 | `delete <id>` | Remove a memory (recoverable from the recycle bin). | `said delete wifi` |
 | `admin recycle-bin` | List deleted memories you can still recover. | `said admin recycle-bin` |
@@ -24,10 +24,20 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 
 ## How many answers does `ask` give back?
 
-`ask` leads with the **best memory** for your question. If a few of your memories might
-fit, it shows those too — so it never hides the right one just because it wasn't 100%
-sure. Seeing two or three results means it's being careful, not confused; the top one is
-the best memory it found.
+`ask` leads with the **best memory** for your question. If a few of your memories might fit, it shows
+those too — so it never hides the right one just because it wasn't 100% sure. Seeing two or three results
+means it's being careful, not confused; the top one is the best memory it found.
+
+When you have dozens of memories and results tie across topics, **scope with tags** before asking:
+
+    said ask "offline integrations" --tag quarter:Q2
+
+Run `said list-tags` first to see facets already in use. Repeat `--tag` for AND logic (all tags must
+match). See [How to find and organize memories](how-to-find-a-specific-memory.md).
+
+For **everything on a topic** (not just the top few), add `--deep`:
+
+    said ask "payment system" --deep
 
 Each result line looks like this:
 
@@ -42,6 +52,10 @@ Each result line looks like this:
 
 - `--path <file>.said` — which brain to use (on any command). Skip it if you've run `use`.
 - `--top <N>` on `ask` — ask for more or fewer results (default is plenty for everyday use).
+- `--tag <TAG>` on `ask` — scope recall to memories carrying this tag (repeatable, AND logic). Use with
+  `list-tags` when vague queries return too many ties.
+- `--deep` on `ask` — return all relevant memories above the threshold (broad synthesis).
+- `--tag <TAG>` on `add` — attach browsable/filterable tags (repeatable).
 - `--id <name>` on `add` — give a memory a memorable name so `get`/`delete` can find it.
 
 Run `said <command> --help` to see all options for any command.

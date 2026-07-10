@@ -31,20 +31,26 @@ current folder, then a saved default. You can lean on either of the last two.
 
    - **If you work in one folder that holds exactly one `.said` file** → you don't even need `use`.
      `said` auto-detects the single `.said` file in the current directory. Just run `said ask "…"` there.
-   - **If you switch between several brains** → keep using `use` to point at the active one, or pass
-     `--path` explicitly when you want a different brain for a single command (it overrides the default
-     for that command only).
+   - **If you have another `.said` file elsewhere** (e.g. copied from a USB stick) → pass `--path` for
+     that command, or run `said use that-brain.said` to make it the default. The free CLI registers
+     **one brain per PC** when you `create` — it won't make a second file without the Enterprise build —
+     but you can still **open and use** any existing `.said` path.
    - **If you run from a folder with *no* `.said` file and no default set** → `said` will stop and tell
      you to create one, pass `--path`, or run `use`.
 
 ## Switching to a different brain
 
-Just point the default at the new one — `use` overwrites the old default, no need to "unset" first:
+Point the default at another **existing** `.said` file — `use` overwrites the old default:
 
     said use my-other-brain.said
 
-From now on, commands without `--path` use `my-other-brain.said`. (To use a different brain for a
-single command without changing the default, pass `--path that-brain.said` on just that command.)
+From now on, commands without `--path` use `my-other-brain.said`. (To use a different brain for a single
+command without changing the default, pass `--path that-brain.said` on just that command.)
+
+> **Creating a second brain** on the same PC (`said create another.said`) is blocked on the free build —
+> one brain per machine is the default. To keep separate memory files on one PC you need the Enterprise
+> (`full`) build. You can still switch between `.said` files you already have (copied, imported, or
+> created before the guard applied) with `use` and `--path`.
 
 ## Dropping the default
 

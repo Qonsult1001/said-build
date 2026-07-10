@@ -26,8 +26,8 @@ see it confirm each one:
     ✓ Saved: "packs must be locked after publish"
     ✓ Saved: "registry still needed"
 
-That's four searchable memories, built from one paste. Do this a few times and a brain goes from empty
-to richly populated in minutes — no import format, no file wrangling.
+That's four separate memories you can recall with `ask`, built from one paste. Do this a few times and a
+brain goes from empty to richly populated in minutes — no import format, no file wrangling.
 
 ## Why this works better than a bulk import would
 
@@ -36,7 +36,7 @@ self-contained sentence that will still make sense in six months, gives it a sho
 good agent) tags it so you can browse later. That per-memory judgment — *what is one memory, what's
 worth keeping, what to call it* — is exactly what makes recall good afterwards. A dumb bulk-import that
 just swallowed your text whole would skip all of that and leave you with a messy brain that's hard to
-search.
+recall with `ask`.
 
 So the "workaround" is really the feature: **the LLM is the importer**, and it's a smart one.
 
@@ -69,15 +69,16 @@ it was probably never saved as its own memory — ask the agent to add that one 
 ## Why there's no bulk import
 
 A memory brain is meant to hold **distilled, individually-useful facts**, not raw documents. Dumping a
-whole file in would fill it with noise that drowns out the good memories when you search. (If what you
+whole file in would fill it with noise that drowns out the good memories when you `ask`. (If what you
 actually have is a *folder of documents or code* you want indexed wholesale, that's a different job — the
-coding builds of `said` do that; a memory brain doesn't.) For memories, the right unit is one clear fact
-at a time — and an agent produces exactly that.
+coding builds of `said` do that; a memory brain doesn't. See
+**[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)**.) For memories, the right unit is one
+clear fact at a time — and an agent produces exactly that.
 
 ## Next
 
 - **[Store and recall notes through your agent](how-to-store-and-recall-notes-with-an-agent.md)** — the
   everyday save/recall pattern.
 - **[Organize and find your memories](how-to-organize-and-find-memories-with-an-agent.md)** — tags and
-  concepts that keep a growing brain searchable.
+  concepts that keep a growing brain easy to browse and recall.
 - **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)**

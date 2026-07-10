@@ -64,7 +64,7 @@ fact; you paste and run.
 
 A memory brain holds **distilled facts**, not raw documents — so the right unit is one clear memory at a
 time, and an LLM produces exactly that while giving each a good id and tags. Dumping a whole document in
-would fill the brain with noise that drowns out real memories on search. (If you want to index a *folder
+would fill the brain with noise that drowns out real memories on recall. (If you want to index a *folder
 of documents or code* wholesale, that's a different tool — the coding builds of `said` do bulk ingest; a
 memory brain doesn't.)
 
@@ -74,11 +74,12 @@ memory brain doesn't.)
 
 ## Result
 
-You can go from an empty brain to dozens of well-formed, tagged, searchable memories in a couple of
-pastes — the LLM does the distilling and the typing; you run and verify.
+You can go from an empty brain to dozens of well-formed, tagged memories you can recall with `ask` in a
+couple of pastes — the LLM does the distilling and the typing; you run and verify.
 
 ## See also
 
 - Everyday manual save/recall → [How to store and recall personal notes](how-to-store-and-recall-notes.md)
+- Pasted code vs coding build → [Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)
 - Importing from another memory tool (mem0, memvid) → [How to import memories](how-to-import-memories-from-another-tool.md)
 - Full options for `add` → the [Command reference](cli-reference.md).

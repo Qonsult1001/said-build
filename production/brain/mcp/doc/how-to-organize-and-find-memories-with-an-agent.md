@@ -20,10 +20,12 @@ pick. This is the everyday case and needs nothing special.
 When you want *all* the related memories, not just the single best one — for a summary, a review, or
 "tell me everything I know about X" — say so:
 
-    Pull together everything I've saved about the payment system.
+    Pull together everything I've saved about the payment system using deep recall.
 
-The agent widens its search (it calls `ask` in **deep** mode) and gathers all the relevant memories, then
-synthesizes them for you. Use this when one answer isn't enough and you want the full picture.
+The agent widens recall (it calls `ask` in **deep** mode) and gathers all the relevant memories, then
+synthesizes them for you. Use this when one answer isn't enough and you want the full picture. The magic
+phrase is to ask for **everything on a topic** or say **"using deep recall"** — the agent knows to widen
+the `ask` pool.
 
 ## Connect related memories with concepts
 
@@ -86,17 +88,38 @@ status:planned and status:todo — merge them onto one tag."*
 > question about one reaches the others). Use a `tag` to *classify* a memory by a facet (project, status,
 > kind) you'll browse or filter by. Many memories use both.
 
+## When you get too many similar results
+
+Once your brain has dozens of memories, a vague question can return **several equally good matches**
+instead of one clear winner — that's normal. The brain surfaces a **top handful**; your agent picks the
+right one. When too many look alike, **narrow with tags** before asking:
+
+1. **Browse tags** — ask the agent: *"What tags do my memories use?"* (`list_tags`).
+2. **Pick a facet** — e.g. `quarter:Q2`, `project:said`, `topic:launch`.
+3. **Ask with that tag** — tell the agent to recall using that tag plus a keyword from your question:
+
+       Ask my brain about offline integrations, but only memories tagged quarter:Q2.
+
+Behind the scenes the agent calls `ask` with a `tags` filter so only memories carrying that tag are
+considered — this breaks cross-topic ties when many notes share a broad theme like integrations or
+roadmap.
+
+If you're still unsure which result is right, ask for the exact text: *"Show me memory X word-for-word"*
+(`get`).
+
 ## If you can't find something
 
 - **The agent finds nothing** — the memory may never have been saved, or was saved with very different
   words. Ask the agent to save the fact now, then try again.
 - **You get the wrong note among near-identical ones** — add a distinctive detail to your question (a
-  name, a number, a date) so the right one stands out.
+  name, a number, a date) so the right one stands out, or **scope with a tag** (section above).
 - **Related memories aren't turning up together** — they probably don't share a concept. Re-save them
   with the same `[[concept]]` so the brain can link them.
 
 ## Next
 
+- **[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)** — pasted snippets vs indexing a
+  codebase.
 - **[Store and recall notes through your agent](how-to-store-and-recall-notes-with-an-agent.md)** — the
   everyday save-and-ask loop.
 - **[Track and restore versions of a memory](how-to-track-versions-with-an-agent.md)** — update a fact

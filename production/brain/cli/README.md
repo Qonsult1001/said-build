@@ -1,7 +1,11 @@
-# said — CLI (terminal)
+# said — CLI (terminal) · v0.11.8
 
 Use your portable brain from the command line: create a brain, store notes, and ask it questions —
 you type the `said` commands yourself. No server, no cloud, fully offline.
+
+Ships with **`said.exe`** + docs — same free memory brain as the MCP bundle; one `brain.said` file works
+in both (CLI `ask`/`add` and agent `ask`/`remember` are aligned, including tags on results and tie
+scoping hints).
 
 ## What's here
 
@@ -14,7 +18,8 @@ you type the `said` commands yourself. No server, no cloud, fully offline.
   - **How-to guides** — one real task each:
     - [`doc/how-to-store-and-recall-notes.md`](doc/how-to-store-and-recall-notes.md) — the everyday save-and-ask loop
     - [`doc/how-to-populate-a-brain-with-an-llm.md`](doc/how-to-populate-a-brain-with-an-llm.md) — fill a brain fast: let an LLM turn a pile of notes into `add` commands
-    - [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md) — narrow a search to the exact memory
+    - [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md) — find by meaning, organize with tags and concepts, scope when results tie
+    - [`doc/how-to-memory-vs-coding-brain.md`](doc/how-to-memory-vs-coding-brain.md) — pasted code vs real code search; when you need the coding build
     - [`doc/how-to-set-a-default-brain.md`](doc/how-to-set-a-default-brain.md) — stop passing `--path` every time
     - [`doc/how-to-track-versions-of-a-memory.md`](doc/how-to-track-versions-of-a-memory.md) — update a fact, keep its history
     - [`doc/how-to-recover-a-deleted-memory.md`](doc/how-to-recover-a-deleted-memory.md) — undo a delete
@@ -36,10 +41,11 @@ said --path my-brain.said ask "what is my wifi password"
 
 The `ask` result lists the most relevant memories, best first — the answer you want is in that short
 list. See [the tutorial](doc/tutorial-your-first-brain.md) for the full walkthrough and
-[`doc/cli-reference.md`](doc/cli-reference.md) for everything else.
+[`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md) when you need to narrow
+results with tags or deep recall.
 
 ## Note on recall
 
 `said` returns the **top handful** of relevant memories for a question, not a single guess — the right
-memory is essentially always in that set. You read the top results and pick the one you need. (For a
-narrower search, see [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md).)
+memory is essentially always in that set. You read the top results and pick the one you need. (For
+narrower recall, see [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md).)

@@ -43,8 +43,9 @@ Send them the `my-brain.said` file. When they point their agent at it, they get 
 
 ## Keep more than one brain
 
-You're not limited to a single brain. You might keep a **personal** brain and a separate **work** brain,
-for example. To start a fresh, empty one, ask the agent:
+You're not limited to a single file. The installer sets a **default** brain (usually `~/.said/brain.said`);
+you can also keep separate files — e.g. a **personal** brain and a **work** brain. To start a fresh, empty
+one at another path, ask the agent:
 
     Create a new brain at /path/to/work-brain.said
 

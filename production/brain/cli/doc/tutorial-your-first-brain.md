@@ -8,15 +8,16 @@ Every command below is real; type them exactly and check the "You should see:" b
 
 ## Before you start
 
-- [ ] The `said` app, version 0.11.7 or newer. Check it:
+- [ ] The `said` app, version 0.11.8 or newer. Check it:
 
       said --version
 
   You should see:
 
-      said 0.11.7
+      said 0.11.8
 
-  If `said` isn't found, install it first: **[How to download and install `said`](../how-to-install-said.md)**.
+  (Or a newer version — match whatever your install shipped.) If `said` isn't found, install it first:
+  **[How to download and install `said`](how-to-install-said.md)**.
 - [ ] A terminal open in an empty folder you can write to (we'll create one file there).
 - [ ] About 5 minutes.
 
@@ -34,6 +35,12 @@ You should see:
     Created: my-brain.said (mode: portable, immutable)
 
 There is now a file called `my-brain.said` in your folder. That's your brain — empty, for the moment.
+
+> **Already have a default brain on this PC?** The free CLI keeps **one brain per computer** — if you run
+> `said create` again, it points you at the brain you already have instead of making a second. That's
+> fine — use that file's path everywhere this tutorial says `my-brain.said`, and skip to Step 2. (A
+> second brain via `create` is an **Enterprise** feature; you can still point at any existing `.said`
+> file with `--path` or `said use`.)
 
 ## Step 2 — Store your first memory
 
@@ -91,7 +98,7 @@ You should see (among other lines):
       Memories:          2
       Memories indexed:  2
 
-Two memories stored, both searchable. That matches what you added.
+Two memories stored, both recallable with `ask`. That matches what you added.
 
 ## You did it
 
@@ -99,13 +106,14 @@ You created a portable brain, stored two memories, and asked it a question in yo
 found the right answer by meaning. That `my-brain.said` file is self-contained: copy it to a USB stick or
 another machine and it still answers the same questions, with no internet and no setup.
 
-What just happened: when you saved each note, `said` stored it as a searchable memory. When you asked a
-question, it matched your question against those memories by **meaning** — not just keywords — which is
-why it found the answer even though you asked in different words.
+What just happened: when you saved each note, `said` stored it as a memory. When you asked a question,
+it matched your question against those memories by **meaning** — not just keywords — which is why it
+found the answer even though you asked in different words.
 
 ## Next steps
 
 - Keep adding to this brain and pulling things back out → **[How to store and recall personal notes](how-to-store-and-recall-notes.md)**
 - Stop typing `--path` on every command → **[How to set a default brain file](how-to-set-a-default-brain.md)**
-- Find any memory by meaning, or fetch one by id → **[How to find a memory](how-to-find-a-specific-memory.md)**
+- Find any memory by meaning, or fetch one by id → **[How to find and organize memories](how-to-find-a-specific-memory.md)**
+- Pasted code vs real code search → **[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)**
 - Every command and flag → the [Command reference](cli-reference.md).

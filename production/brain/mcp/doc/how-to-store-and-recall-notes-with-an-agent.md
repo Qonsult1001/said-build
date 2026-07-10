@@ -64,5 +64,7 @@ The agent removes it. Deleted notes go to a recycle bin and can be recovered —
 
 ## Next
 
-- **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)**
+- **[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)** — pasted snippets vs indexing a
+  codebase.
+- **[Move your brain to another agent or machine](how-to-move-your-brain-to-an-agent.md)**
 - **[Recover a deleted memory](how-to-clean-up-your-brain-with-an-agent.md)**

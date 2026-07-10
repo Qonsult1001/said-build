@@ -31,7 +31,7 @@ The client tracker predates v0.11.4. Corrected status:
 | Dream invisible to users | ✅ **Shipped** — plain-English "Learning:" line | v0.11.4, FIXES-LOG #16 |
 | Status shows code-tier next steps | ✅ **Shipped** — `ask`/`remember`/`get` only on brain | v0.11.4, FIXES-LOG #16 |
 | Tags write-only (`quarter:Q2` invisible) | ✅ **Shipped** — `list_tags` surfaces the tag vocabulary; `ask --tag`/`tags:[…]` filters by facet | v0.11.4, FIXES-LOG #16 |
-| Score ties at 0.90 on vague asks | ✅ **Fixed WHEN SCOPED — intra-facet ties remain by design.** The tag filter cuts cross-facet bleed; within one facet a vague one-shot still ties at 0.90 (top-K + LLM-decides — the target is in the set). ⚠️ Mark it "fixed with tag scoping", NOT "fixed for unscoped vague queries" — else a client retests unscoped and reads it as a regression. | 31, 11, this doc |
+| Score ties at 0.90 on vague asks | ✅ **Fixed WHEN SCOPED — intra-facet ties remain by design.** The tag filter cuts cross-facet bleed; within one facet a vague one-shot still ties at 0.90 (top-K + LLM-decides — the target is in the set). **v0.11.8:** the server now shows tags per result and, on a tie, appends a scoping hint telling the agent HOW to narrow (see SHIPPED section below) — the workflow is now product behavior, not just a doc. ⚠️ Mark it "fixed with tag scoping", NOT "fixed for unscoped vague queries". | 31, 11, this doc |
 | `"102 of 36 memories indexed"` | ✅ **Shipped** — honest index count (tombstoned entries explained) | v0.11.4 |
 | Filler-memory noise (the tester's brain) | ✅ **Cleaned** for this brain (66 fillers tombstoned) — see "E" for the general story | this session |
 | Agent must use brain autonomously | 🟡 Documented caveat (constitution nudges; obedience = host agent) | 11-known-limitations 14.1 |
@@ -95,6 +95,36 @@ tag throwaway/test memories (`status:test`, `ttl:*`) and the user can `delete --
 tag-filter delete. Risk: **none** (docs); the optional alias is additive over a shipped path. Do **not**
 auto-delete anything — deletion stays user-driven (per the file-safety rule in
 [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md)).
+
+## SHIPPED (v0.11.8) — the scope-with-tags workflow surfaced as PRODUCT behavior
+
+The one missing piece was *when* to scope. The product already supported tag-scoped recall (`ask` has a
+`tags` filter, `list_tags` exists), and the docs taught the pattern — but the agent had to *guess* when
+recall was ambiguous. v0.11.8 makes the server say so at tie time. **All additive; zero ranking change**
+(purely enriched output + guidance — verified a single clear winner is unchanged and shows no footer).
+
+1. **Tags on every `ask` result.** Each hit now prints its user-facing facets
+   (`tags: quarter:Q2, project:said`), with the internal ones (`link:`/`pillar:`/`salience:`/`blake3:`/
+   `user_id:`/`session:`) filtered out. When several notes tie on "integrations", the agent can *see*
+   that one is `quarter:Q2` and another `quarter:Q3` — no second call needed.
+2. **Tie-detection footer.** When ≥3 results cluster within 0.05 confidence, `ask` appends the tags that
+   **distinguish** the tied set (those not shared by all of them), with counts, e.g.
+   *"5 close matches (within 0.05). To narrow, ask again scoped to a tag: • quarter:Q2 (1 of these) …
+   Don't guess which memory the user meant — scope, then re-ask."* If the tied set shares all tags (no
+   facet can disambiguate), it says so honestly instead. Data already in hand (scores + `get_meta` tags)
+   — no extra query.
+3. **Recall-side steering in the brain constitution.** A block instructing the agent: on close matches,
+   pick a facet and re-ask `ask tags:["quarter:Q2"]` (or ask the user which they mean) — never guess.
+   Agents read the connect instructions every session, closing the loop docs alone can't guarantee.
+
+**Why it matters at ~30+ memories:** below ~10 memories semantic `ask` returns one clear winner; past
+~30, many notes share vocabulary ("launch", "integrations", "roadmap") so the brain correctly returns a
+top handful and the agent must disambiguate. Tag scoping shrinks that pool *before* meaning-matching —
+the intended tie-breaker when topics overlap. This is the v0.11.4 contract ("scope with tags"), now
+surfaced by the server at the moment it applies rather than left for the agent to recall from a doc.
+
+**Still not a ranking change.** The footer is guidance; the 0.90 ties themselves are untouched (top-K +
+LLM-decides, by design). A single clear winner sees only its tag line added, no footer.
 
 ## The rule this plan commits to
 

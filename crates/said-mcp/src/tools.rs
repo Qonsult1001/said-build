@@ -51,8 +51,10 @@ pub struct SearchTool {
                    right memory is essentially always in that set (the brain surfaces the top-K, you \
                    pick). It does not invent results: if it has nothing relevant it returns nothing \
                    (say so, don't fabricate). deep=true widens the pool for broad \"tell me everything \
-                   about X\" synthesis. Same recall as `said ask` on the CLI. EFFICIENCY: don't re-ask \
-                   the same question many ways — one good `ask` and reading the results is enough.",
+                   about X\" synthesis. Same recall as `said ask` on the CLI. Each result shows its \
+                   tags; when several tie, the output appends a hint listing the tags that distinguish \
+                   them — re-ask scoped (tags:[…]) to narrow instead of guessing. EFFICIENCY: don't \
+                   re-ask the same question many ways — one good `ask` and reading the results is enough.",
     read_only_hint = true
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
@@ -191,8 +193,10 @@ pub struct IngestTool {
 
 #[mcp_tool(
     name = "remember",
-    description = "Store a piece of text in the brain as a searchable memory. \
-                   Use for notes, decisions, conversation summaries, user preferences. \
+    description = "Store a piece of text in the brain as a memory. Recall it later with `ask` (by \
+                   meaning) or `get` (by id). On the free memory brain this is text only — it does NOT \
+                   index code or folders (no symbol/AST search); pasted code is kept as a note. Use for \
+                   notes, decisions, conversation summaries, user preferences. \
                    \
                    Pick the pillar deliberately: \
                      • `episodic` (default) — raw turns, conversations, 'what happened'. \
