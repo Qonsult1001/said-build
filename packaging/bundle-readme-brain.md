@@ -1,5 +1,10 @@
 # said — your portable memory in one file
 
+> **SAID Research** — *Exploring the foundations of long-context AI, efficient reasoning models, and
+> emergent semantic memory.*
+>
+> *"The answer IS X. Because I Said so." — at ANY scale.*
+
 Thanks for downloading **said** (brain / free tier). This archive contains everything you need to run it:
 
 | File | What it is |
@@ -61,3 +66,7 @@ The complete tutorials and how-to guides live online (they're kept in sync with 
   Pasting code here saves it as a text note you can recall by meaning, not as searchable code.
 
 Questions or issues: <https://github.com/Qonsult1001/said-build/issues>
+
+---
+
+© 2026 **SAID Research**. Released under the MIT License (see `LICENSE` in this archive).
