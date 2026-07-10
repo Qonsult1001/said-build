@@ -12,13 +12,13 @@ Every step below is real. Follow them in order and check the "You should see:" b
 
 ## Before you start
 
-- [ ] The `said` app, version 0.11.8 or newer. Check it:
+- [ ] The `said` app, version 0.11.9 or newer. Check it:
 
       said-mcp --version
 
   You should see:
 
-      said-mcp 0.11.8
+      said-mcp 0.11.9
 
   (Or a newer version — match whatever your install shipped.) If `said-mcp` isn't found, install it
   first: **[How to download and install `said`](how-to-install-said.md)**.

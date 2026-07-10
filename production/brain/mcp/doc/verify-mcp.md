@@ -1,7 +1,7 @@
-# verify-mcp — `brain` variant · v0.11.8 acceptance record
+# verify-mcp — `brain` variant · v0.11.9 acceptance record
 
 **Variant:** `brain` = `--no-default-features --features brain` (`embed-model` only — no `code`, `lsp`, `docs`).
-**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.8`.
+**Binary:** `production/brain/mcp/said-mcp.exe` — `said-mcp 0.11.9`.
 **Transport:** MCP stdio JSON-RPC. Isolated brain, single session (state carried across calls).
 
 > This is a per-release acceptance record — re-run it against the shipped binary each release. The tool
@@ -30,7 +30,7 @@ The brain bundle advertises **only** the memory tools it can actually deliver. N
 | `admin` | recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted` | ✅ |
 | `create` / `open` | make or switch to a brain file | ✅ |
 
-### Recall UX (v0.11.8 — tags + tie footer)
+### Recall UX (v0.11.9 — tags + tie footer)
 
 | Behavior | Verified |
 |---|---|

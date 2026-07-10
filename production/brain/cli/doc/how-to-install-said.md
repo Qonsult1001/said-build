@@ -93,7 +93,7 @@ Open a **new** terminal and run:
 
 You should see:
 
-    said 0.11.8
+    said 0.11.9
 
   (Or a newer version — match whatever your install shipped.)
 

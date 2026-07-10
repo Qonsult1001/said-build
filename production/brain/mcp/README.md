@@ -1,4 +1,4 @@
-# said — MCP (AI agent) · v0.11.8
+# said — MCP (AI agent) · v0.11.9
 
 Connect your portable brain to an AI agent (Claude Desktop, Cursor, …) so the agent reads and writes it
 for you — remembering facts automatically during your work and recalling them later, even in a fresh
