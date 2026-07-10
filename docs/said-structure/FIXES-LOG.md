@@ -597,6 +597,36 @@ Cargo.toml, tag `v0.11.3` pushed to trigger `build-binaries.yml`, which rebuilds
 runners and publishes them as one consistent release. (Rule, learned in this cycle: never hand-patch
 individual release assets across a version — bump the version and rebuild the whole matrix via CI.)
 
+## 17. (RESOLVED) Brain-surface polish — prompts, compact, code-expectation honesty
+
+A batch of brain-tier surface fixes after v0.11.5 (same tier-accuracy discipline as #16):
+
+1. **Prompt picker leaked internal prompts.** `prompts/list` advertised `onboard`, `answerer`, and
+   `fix-template`. `answerer` is the agent system prompt (auto-injected on connect — noise in a picker);
+   `fix-template` is an INTERNAL template the orchestrator passes to `learn_fix` (code-tier), meaningless
+   on the memory build. **Fix:** advertise ONLY `onboard`; the other two stay retrievable by name for
+   internal callers. Also made `onboard` **tier-specific** — the brain build speaks in memory terms
+   (agent-voiced "a notebook that never gets thrown away", save/recall, "learns how you search"), with
+   none of the code vocabulary (init/overview/snapshot/"enterprise monolith") a memory user has no tools
+   for. Code builds keep the codebase welcome.
+2. **No cleanup path for deleted memories on brain MCP.** A brain user could `delete` but had no tool to
+   purge tombstones / reclaim space (CLI had `compact --drop-history`; MCP brain build had nothing —
+   breaking "agent is the UI"). `retention-sweep` is correctly enterprise (policy/compliance purge with
+   age cutoffs + legal holds), but basic "tidy my recycle bin" is not. **Fix:** added a `compact` MCP
+   tool in every tier (plain repack; `drop_history` + `all`/`keep_per_doc` to purge; `dry_run`; same
+   scope guardrails as the CLI).
+3. **Brain falsely promised code search.** Pasting code into `remember` succeeded but the message said
+   *"future `search` calls can find it"* — `search` doesn't exist on the brain build, and it implied
+   code-indexing that never happens. The #1 user-expectation gap ("I saved my code, so I can search my
+   code"). **Fix:** the `remember` success message is now tier-accurate (brain says "stored as text — ask
+   for it later", not `search`); when the saved content looks like code it appends an honest note ("kept
+   as text recallable by meaning, but does NOT index code — use the coding build"); and the constitution
+   gained a "THIS IS A MEMORY BRAIN (not a code index)" section so the agent handles "search/ingest my
+   code" honestly. Documented in
+   [40-build-tier-capability-matrix.md](40-build-tier-capability-matrix.md) "The #1 expectation gap".
+   Verified live: a user asking "can you search my code from my memory?" gets the correct "No — not as
+   code search; Yes — as text via ask/get" answer, not an over-promise.
+
 ## Production surface parity — the standard
 
 To stop the class of defect in #15 from recurring, every shipped `.said` binary must satisfy, per build
