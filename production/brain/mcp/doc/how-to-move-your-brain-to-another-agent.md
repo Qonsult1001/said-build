@@ -41,26 +41,21 @@ Send them the `my-brain.said` file. When they point their agent at it, they get 
 > **Heads-up:** whoever has the file has everything in it. Don't share a brain that holds passwords or
 > private notes unless you mean to.
 
-## Keep more than one brain
+## Open a different brain file
 
-You're not limited to a single file. The installer sets a **default** brain (usually `~/.said/brain.said`);
-you can also keep separate files — e.g. a **personal** brain and a **work** brain. To start a fresh, empty
-one at another path, ask the agent:
-
-    Create a new brain at /path/to/work-brain.said
-
-The agent makes an empty brain file at that path. Anything you save while it's attached goes there —
-your other brains are untouched. Each brain is a separate file with its own memories.
-
-## Switch which brain an agent uses (without restarting)
-
-If your agent is already running and you want it to use a *different* brain file, ask it:
+The free version keeps **one brain per computer** — the installer sets your default (usually
+`~/.said/brain.said`). But you can still **attach an agent to a different `.said` file that already
+exists** — for example a brain someone shared with you, or one you copied from another machine. If your
+agent is running and you want it to use a different existing file, ask it:
 
     Switch to the brain at /path/to/other-brain.said
 
 The agent attaches to that file for the rest of the session (this is the brain's `open` tool). Ask it to
-switch back the same way. This is how you move between your personal and work brains in one session —
-switch, work, switch back; each stays separate.
+switch back the same way.
+
+> **Creating multiple brains on one machine** (e.g. a separate personal vs work brain) is an
+> **Enterprise** feature — on the free build, `create` keeps you to one brain per computer and points you
+> at the one you already have. `open` still lets you attach to any existing `.said` file.
 
 ## Next
 
