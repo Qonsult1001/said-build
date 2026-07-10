@@ -599,6 +599,7 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::GetTool(t) => self.handle_get(t),
             SaidTools::ListConceptsTool(t) => self.handle_list_concepts(t),
             SaidTools::ListTagsTool(t) => self.handle_list_tags(t),
+            SaidTools::CompactTool(t) => self.handle_compact(t),
             #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
@@ -974,6 +975,76 @@ impl SaidServerHandler {
         let body = serde_json::to_string_pretty(&arr)
             .unwrap_or_else(|_| "[]".to_string());
         Ok(CallToolResult::text_content(vec![TextContent::from(body)]))
+    }
+
+    fn handle_compact(&self, t: CompactTool) -> Result<CallToolResult, CallToolError> {
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+        let drop_history = t.drop_history.unwrap_or(false);
+        let all = t.all.unwrap_or(false);
+        let keep = t.keep_per_doc.map(|v| v as usize);
+        let dry_run = t.dry_run.unwrap_or(false);
+
+        // Same guardrails as `said compact` — a bare drop-history must not nuke the whole
+        // recycle bin by accident; it requires an explicit scope.
+        if drop_history && !all && keep.is_none() {
+            return Err(CallToolError::from_message(
+                "drop_history needs a scope: set all=true to purge every deleted memory, \
+                 or keep_per_doc=N to keep the N most recent deleted versions per memory."
+                    .to_string()));
+        }
+        if drop_history && all && keep.is_some() {
+            return Err(CallToolError::from_message(
+                "drop_history: choose all=true OR keep_per_doc=N, not both.".to_string()));
+        }
+        if (all || keep.is_some()) && !drop_history {
+            return Err(CallToolError::from_message(
+                "all / keep_per_doc require drop_history=true.".to_string()));
+        }
+
+        let tombstones = brain.tombstone_count();
+        let tomb_bytes = brain.tombstone_bytes();
+
+        // Dry run: report what a purge WOULD reclaim, change nothing.
+        if dry_run {
+            let would_drop = if !drop_history { 0 }
+                else if all { tombstones }
+                else { tombstones.saturating_sub(keep.unwrap()) }; // approximate: keep-N per doc
+            return Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+                "[dry run] recycle bin holds {} deleted memory frame(s) ({} bytes).{}\n\
+                 Nothing changed. Re-run without dry_run to apply.",
+                tombstones, tomb_bytes,
+                if drop_history {
+                    format!(" A purge would drop ~{} tombstone(s) and reclaim space.", would_drop)
+                } else {
+                    " Plain compact would repack blocks + decay cold recall weights (keeps all history).".to_string()
+                },
+            ))]));
+        }
+
+        let dropped = if drop_history {
+            if all { brain.drop_history() } else { brain.drop_history_keep(keep.unwrap()) }
+        } else { 0 };
+        let (blocks, saved) = brain.compact();
+        let decayed = brain.consolidate();
+        brain.save().map_err(|e| CallToolError::from_message(e))?;
+
+        let mut msg = format!("✓ Compacted: {} block(s) repacked, {} bytes saved.", blocks, saved);
+        if dropped > 0 {
+            msg.push_str(&format!("\n  Purged {} deleted memory frame(s) from the recycle bin \
+                                   (no longer recoverable).", dropped));
+        } else if drop_history {
+            msg.push_str("\n  Recycle bin was already empty.");
+        }
+        if decayed > 0 {
+            msg.push_str(&format!("\n  Tidied {} cold recall weight(s).", decayed));
+        }
+        if !drop_history && tombstones > 0 {
+            msg.push_str(&format!("\n  ({} deleted memories are still recoverable — pass \
+                                   drop_history=true with all=true to purge them for good.)", tombstones));
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(msg)]))
     }
 
     fn handle_list_tags(&self, t: ListTagsTool) -> Result<CallToolResult, CallToolError> {
