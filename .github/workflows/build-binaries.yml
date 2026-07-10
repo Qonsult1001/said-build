@@ -77,6 +77,13 @@ jobs:
           if [ "${{ matrix.bundle }}" != "brain" ]; then
             cp "target/release/${{ matrix.target.orch }}" dist/
           fi
+          # Bundle a README (+ LICENSE if present) into every archive — the world-class norm
+          # (goreleaser/ripgrep/gh): the download is self-orienting and points to the full online
+          # guides, without carrying the whole doc tree. Brain gets its tailored README.
+          if [ -f packaging/bundle-readme-brain.md ]; then
+            cp packaging/bundle-readme-brain.md dist/README.md
+          fi
+          [ -f LICENSE ] && cp LICENSE dist/ || true
           ls -la dist
 
       # ── Native installers (per OS). GitHub builds the packages for us on tag push; no local
