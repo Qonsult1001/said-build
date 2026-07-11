@@ -59,9 +59,20 @@ where F: FnMut(usize, usize, &str)
 /// Resolve the export path to the `conversations.json` text: accept the JSON file directly, a directory
 /// containing it, or (best-effort) a `.zip` export — pulling `conversations.json` out of the archive.
 fn read_conversations_json(path: &str, source: &str) -> Result<String, String> {
+    // How to get the export — shown on any "can't find it" error so a first-timer isn't stuck. The
+    // conversations live on OpenAI/Anthropic's servers, so the user requests a data export first; we
+    // only ever read the LOCAL unzipped file (offline, no account, no API).
+    let how_to = if source == "claude" {
+        "Get your export: Claude → Settings → Privacy → Export data. You'll get an email with a link; \
+         download and UNZIP it, then point at that folder (it contains conversations.json)."
+    } else {
+        "Get your export: ChatGPT → Settings → Data Controls → Export data. You'll get an email with a \
+         link; download and UNZIP it, then point at that folder (it contains conversations.json)."
+    };
+
     let p = std::path::Path::new(path);
     if !p.exists() {
-        return Err(format!("{} export not found: {}", source, path));
+        return Err(format!("{} export not found at '{}'.\n{}", source, path, how_to));
     }
     // A directory → look for conversations.json inside it.
     if p.is_dir() {
@@ -70,7 +81,7 @@ fn read_conversations_json(path: &str, source: &str) -> Result<String, String> {
             return std::fs::read_to_string(&cj)
                 .map_err(|e| format!("read {}: {}", cj.display(), e));
         }
-        return Err(format!("no conversations.json in directory {}", path));
+        return Err(format!("no conversations.json in '{}'.\n{}", path, how_to));
     }
     // A .zip → extract conversations.json from it.
     if p.extension().and_then(|e| e.to_str()) == Some("zip") {
