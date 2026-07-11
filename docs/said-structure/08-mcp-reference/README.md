@@ -10,7 +10,7 @@ said-mcp
 
 By default attaches to a sibling `.said` file (`./brain.said`, auto-promoting to the most-populated brain in the directory). Override via `--said <path>` or the `open` tool once running.
 
-## Tool list (25 tools default; 31 with `--features forge`, as of 2026-04-23)
+## Tool list (25 tools default; 31 with `--features forge`; +1 `import` on brain/full bundles via `feature = "browser"`, as of 2026-04-23)
 
 ### Core retrieval
 - [ask](ask.md) — 3-engine smart fusion (Sym + Grep + SCA) + auto-dream
@@ -22,6 +22,9 @@ By default attaches to a sibling `.said` file (`./brain.said`, auto-promoting to
 - [remember](remember.md) — store text with pillar hints + salience + surprise detection
 - [ingest](ingest.md) — single file / folder with optional `--pointer` equivalent
 - [init](init.md) — bulk-ingest a directory (tree-sitter AST chunking)
+
+### Personal-data import — brain + full bundles only (`feature = "browser"`)
+- [import](import.md) — pull the user's OWN data (browser history / local mail file) into memories. A **memory** tool: present in the **brain** and **full** bundles, ABSENT from coding/coding-plus. Does not index code.
 
 ### File lifecycle
 - [create](create.md) — create empty `.said` with chosen mode

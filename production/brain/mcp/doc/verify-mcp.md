@@ -7,9 +7,9 @@
 > This is a per-release acceptance record — re-run it against the shipped binary each release. The tool
 > surface below is the **exact** `tools/list` of this build; if a future build changes it, update this doc.
 
-## Result: PASS ✅ — 13 tools, all memory, all clean
+## Result: PASS ✅ — 14 tools, all memory, all clean
 
-### The real tool surface (`tools/list` — 13 tools)
+### The real tool surface (`tools/list` — 14 tools)
 
 The brain bundle advertises **only** the memory tools it can actually deliver. No `search`, `sym`,
 `init`, `ingest`, `overview`, `snapshot`, `lsp_*`, or blueprint/fix tools — those are code-tier and are
@@ -28,6 +28,7 @@ The brain bundle advertises **only** the memory tools it can actually deliver. N
 | `list_tags` | the `tags` metadata vocabulary + per-tag counts | ✅ returns the tag list |
 | `compact` | tidy the file + reclaim space from deleted memories | ✅ dry-run: "recycle bin holds 1 deleted memory frame (38 bytes)" |
 | `admin` | recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted` | ✅ |
+| `import` | import the user's OWN data as memories — `source=browser` (Chromium history, offline read-only) or `source=email` (a local `.mbox`/`.emlx` file) | ✅ |
 | `create` / `open` | make or switch to a brain file | ✅ |
 
 ### Recall UX (v0.11.9 — tags + tie footer)

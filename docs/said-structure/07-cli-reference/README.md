@@ -32,7 +32,7 @@ said [--path <file.said>] [--json] <subcommand> [args]
 - [remember](remember.md) — shorthand for `add` with pillar hints
 - [init](init.md) — bulk-ingest a directory via tree-sitter + all plugins
 - [ingest](ingest.md) — single file or folder with `--pointer` for Enterprise
-- [import](import.md) — migrate from mem0 / memvid
+- [import](import.md) — import the user's OWN personal data (`browser` / `email` / `chatgpt` / `claude`; brain + full bundles) **or** migrate from mem0 / memvid (`import from`)
 - [checkout](checkout.md) — restore a past version as the new HEAD
 - [edit](edit.md) — surgical anchored insert/replace/delete on a source file (no whole-file rewrite)
 
@@ -99,7 +99,7 @@ Commands:
   clean         Remove dangling state
   init          Bulk-ingest a directory
   ingest        Ingest a document, video, or folder
-  import        Migrate from mem0 / memvid / ...
+  import        Import your data (browser/email/chatgpt/claude) or migrate (from mem0/memvid)
   admin         Recycle bin + compliance (list/restore/legal-hold/audit/sweep)
   use           Set default .said file
   journal       Append a timestamped journal entry

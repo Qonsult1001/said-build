@@ -4,7 +4,9 @@
 
 ## What the roadmap entry says
 
-> One-line migration from competitors (mem0, memvid, Zep, LangMem) — `said import --from <mem0|memvid|zep|langmem> <path>` pulls their on-disk/API exports into `.said` frames via a shared `MigrationAdapter` trait. Preserves timestamps, user_ids, and source metadata as tags.
+> One-line migration from competitors (mem0, memvid, Zep, LangMem) — `said import from --from <mem0|memvid|zep|langmem> --source <path>` pulls their on-disk/API exports into `.said` frames via a shared `MigrationAdapter` trait. Preserves timestamps, user_ids, and source metadata as tags.
+
+**Syntax:** migration lives under the `from` subcommand (`said import from …`) now that `said import` also has personal-data subcommands (`browser`/`email`/`chatgpt`/`claude`). See [CLI import](../07-cli-reference/import.md).
 
 ## Status per adapter
 

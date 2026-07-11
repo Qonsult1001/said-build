@@ -21,6 +21,37 @@ Every `said` command you need for personal-memory use, in one place. Each comman
 | `list-concepts [--prefix p]` | List the `[[wikilink]]` concepts your memories are linked to, with a count per concept. | `said list-concepts` |
 | `list-tags [--prefix p]` | List the `tags` your memories carry (the metadata vocabulary), with a count per tag. Reuse these instead of inventing synonyms. | `said list-tags --prefix project:` |
 | `use <file>.said` | Set the default brain so you can skip `--path`. | `said use my-brain.said` |
+| `import <source>` | Bring in your own data or migrate from another tool. Sources below. | `said import browser` |
+
+## Importing data (`import`)
+
+`said import <source>` fills a brain from real sources. All imports are **offline and read-only** —
+they read files already on your disk and never modify the originals. Re-running re-syncs (deduped).
+See the walkthrough: [How to import your own data](how-to-import-your-own-data.md).
+
+| Source | What it imports | Example |
+|--------|-----------------|---------|
+| `import browser` | Every installed Chromium browser + profile (Chrome, Edge, Brave, Opera, Vivaldi). Each page → a memory tagged `domain:<host>`. | `said import browser` |
+| `import email <MAIL>` | A local `.mbox` file **or** an Apple Mail `.emlx` folder. Covers Thunderbird and Gmail/Outlook **via export** (Takeout / mbox export) — never logs in. Each message → a memory tagged `from:<addr>`, `date:<day>`. | `said import email "All mail.mbox"` |
+| `import chatgpt <EXPORT>` | Your ChatGPT data export. Point at the unzipped folder or its `conversations.json`. | `said import chatgpt ./export/conversations.json` |
+| `import claude <EXPORT>` | Your Claude data export. Point at the unzipped folder or its `conversations.json`. | `said import claude ./export/conversations.json` |
+| `import from --from <tool> --source <path>` | Migrate from another memory tool (`mem0`, `memvid`). `--list` shows adapters. | `said import from --from mem0 --source ./export.jsonl` |
+
+Import-specific flags (all imports also accept `--path` and `--json`):
+
+- `import browser`: `--since-days N` (recent N days; `0` = all), `--min-visits N` (skip one-off pages),
+  `--max N` (cap pages per profile, newest kept), `--db <path>` (one specific `History` DB — advanced).
+- `import email`: `--max N` (cap messages, newest kept), `--max-chars N` (cap each message's text;
+  default 20000).
+- `import chatgpt` / `import claude`: `--max-chars N` (cap each transcript; default 20000).
+- `import from`: `--from <tool>`, `--source <path>`, `--list` (show adapters and exit).
+
+After importing, ask **temporal** questions — `said ask "what was the last website i visited?"` returns
+the globally most-recent page across all browser profiles; `"what was the last email i received?"`
+does the same for mail.
+
+> **Live inbox sync is not shipped.** `import email` reads local files only. Syncing directly from a
+> live Gmail / Microsoft 365 inbox (OAuth, no export) is a separate, future feature.
 
 ## How many answers does `ask` give back?
 

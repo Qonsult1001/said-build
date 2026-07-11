@@ -113,6 +113,7 @@ found the answer even though you asked in different words.
 ## Next steps
 
 - Keep adding to this brain and pulling things back out → **[How to store and recall personal notes](how-to-store-and-recall-notes.md)**
+- Pre-fill it from your real life in one command (`said import browser` imports your web history) → **[How to import your own data](how-to-import-your-own-data.md)**
 - Stop typing `--path` on every command → **[How to set a default brain file](how-to-set-a-default-brain.md)**
 - Find any memory by meaning, or fetch one by id → **[How to find and organize memories](how-to-find-a-specific-memory.md)**
 - Pasted code vs real code search → **[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)**

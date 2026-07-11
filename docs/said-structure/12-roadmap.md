@@ -31,8 +31,8 @@ All offline. No OAuth work. LEANN's [`apps/`](../../research/LEANN/apps/) direct
 
 - [ ] **`said-watch`** — filesystem watcher; auto-ingest on change via existing content-type crates. ~1 week.
 - [ ] **`said-git`** — local `.git` dir ingester via `git2`; one Episodic frame per commit, Code frames for per-file blame. ~1 week.
-- [ ] **`said-mail-local`** — Apple Mail emlx + generic mbox + eml + Outlook PST. Port from [LEANN `email_rag.py`](../../research/LEANN/apps/email_rag.py). ~1.5 weeks.
-- [ ] **`said-browser-local`** — Chrome/Edge/Brave/Firefox/Safari history SQLite, auto-find profiles cross-OS. Port from [LEANN `browser_rag.py`](../../research/LEANN/apps/browser_rag.py). ~1 week.
+- [x] **`said-mail-local`** — SHIPPED as `said import email` (`.mbox` + Apple Mail `.emlx`; covers Gmail-Takeout + Outlook/M365 export). Ported from [LEANN `email_rag.py`](../../research/LEANN/apps/email_rag.py). Outlook **PST** still open; live Gmail/M365 API sync is the Q3 OAuth pilot below. See [personal-import](06-ingestion-plugins/personal-import.md).
+- [x] **`said-browser-local`** — SHIPPED as `said import browser` (auto-detects every Chromium browser + profile: Chrome/Edge/Brave/Opera/Vivaldi, history SQLite, read-only + offline, GLOBAL recency). Ported from [LEANN `browser_rag.py`](../../research/LEANN/apps/browser_rag.py). Firefox/Safari still open.
 - [ ] **`said-chat-local`** — iMessage chat.db + WhatsApp/Signal/Telegram/Slack/Discord/Teams exports. Port from [LEANN `imessage_rag.py`](../../research/LEANN/apps/imessage_rag.py) + [`slack_rag.py`](../../research/LEANN/apps/slack_rag.py). ~1.5 weeks.
 - [ ] **`said-obsidian`** — Obsidian vault ingester, preserves `[[wikilinks]]` as cross-doc tags. ~3-5 days.
 
@@ -181,7 +181,7 @@ We do NOT currently ingest a large class of everyday formats. Each one is a diff
 - [ ] **RTF** — legacy Word exports still common in legal.
 
 ### Mail + messaging
-- [ ] **MBOX / EML / MSG** — email corpus ingest. Headers → tags (`from:`, `to:`, `subject:`), thread → lineage, attachments → auto-ingested with `email:` tag.
+- [~] **MBOX / EML / MSG** — basic message ingest **SHIPPED** as `said import email` (`.mbox` + Apple Mail `.emlx`; headers → `from:`/`date:`/`sent_at:` tags; deduped by Message-ID). Still open: thread → lineage, attachments → auto-ingested with `email:` tag, `.msg` support.
 - [ ] **PST / OST** — Outlook archives. Needs `libpff` or a Rust port.
 - [ ] **Slack export (JSON)** — bulk team export → per-channel, per-thread frames.
 - [ ] **Teams export** — same shape, Microsoft's export format.

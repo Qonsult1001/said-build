@@ -24,7 +24,7 @@ From MCP:
 From migration:
 
 ```
-said import --from mem0 --source memories.jsonl
+said import from --from mem0 --source memories.jsonl
 # mem0 category "preference" auto-routes to Semantic
 ```
 
@@ -60,7 +60,7 @@ Under BYO-LLM, Semantic frames are **authored by callers**, not synthesized by `
 
 **Migration adapters:**
 ```
-said import --from mem0 --source memories.jsonl
+said import from --from mem0 --source memories.jsonl
 # Every mem0 row with category "preference" lands as Semantic
 ```
 

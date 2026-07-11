@@ -103,6 +103,11 @@ You should see: a count (at least 1) and a short summary — the agent called `s
 saved in `my-brain.said`, a real file you own. Copy that file to another machine, point a different
 agent at it, and every memory comes along.
 
+> **Want to fill it fast?** Ask the agent *"import my browsing history"* — it pulls your own browser
+> pages in as memories (offline and read-only), so you can immediately ask *"what was the last website I
+> visited?"* See
+> **[Import your own data through your agent](how-to-import-your-own-data-with-an-agent.md)**.
+
 ## Recap
 
 You just:
@@ -118,6 +123,8 @@ Your agent now has a memory that persists across conversations, models, and mach
 
 - **[Store and recall notes through your agent](how-to-store-and-recall-notes-with-an-agent.md)** — the
   everyday pattern of saving and asking.
+- **[Import your own data through your agent](how-to-import-your-own-data-with-an-agent.md)** — pull your
+  browser history or email in as memories, then ask temporal questions.
 - **[Move your brain to another agent or machine](how-to-move-your-brain-to-another-agent.md)** — one
   file, any MCP agent.
 - Prefer the terminal? **[The command-line walkthrough](../../cli/doc/tutorial-your-first-brain.md)** does all of this

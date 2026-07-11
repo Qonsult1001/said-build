@@ -74,6 +74,11 @@ You should see the agent confirm it saved that. Then, to prove it stuck, **open 
 
 The agent should answer **sunflower-42**, recalled from the brain. That's connected and working.
 
+**A great first thing to try:** ask the agent to *"import my browsing history"* — it pulls your own
+browser pages in as memories (offline, read-only), so you can immediately ask *"what was the last website
+I visited?"* See
+**[Import your own data through your agent](how-to-import-your-own-data-with-an-agent.md)**.
+
 ## Troubleshooting
 
 - **The server doesn't appear / shows as failed.** Almost always the `--path` or `command` is wrong.
@@ -91,3 +96,5 @@ The agent should answer **sunflower-42**, recalled from the brain. That's connec
 - **[MCP tutorial](tutorial-connect-your-brain-to-an-agent.md)** — the full walk-through from zero.
 - **[Store and recall notes through your agent](how-to-store-and-recall-notes-with-an-agent.md)** — the
   everyday pattern once you're connected.
+- **[Import your own data through your agent](how-to-import-your-own-data-with-an-agent.md)** — pull in
+  your browser history or email and ask *"what was the last website I visited?"*

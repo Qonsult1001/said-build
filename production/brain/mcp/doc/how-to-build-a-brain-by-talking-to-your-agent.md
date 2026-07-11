@@ -1,10 +1,15 @@
 # How to build up a whole brain just by talking to your agent
 
 You have a lot you want your brain to hold — a project's open tasks, everything you decided in a
-meeting, a stack of facts about a client. There's **no "bulk import" button** for memories (that's on
-purpose — see [Why there's no bulk import](#why-theres-no-bulk-import) below). But you don't need one:
-you can fill a brain fast by letting your **AI agent do the saving for you**, one memory at a time. It's
-a simple trick, and it works surprisingly well.
+meeting, a stack of facts about a client. There's **no "bulk import" button for pasted text or documents**
+(that's on purpose — see [Why there's no bulk import of raw text](#why-theres-no-bulk-import-of-raw-text)
+below). But you don't need one: you can fill a brain fast by letting your **AI agent do the saving for
+you**, one memory at a time. It's a simple trick, and it works surprisingly well.
+
+> **There is one kind of bulk import — your own personal data.** The agent can pull your **browser
+> history** or an exported **email `.mbox`** straight in as memories (offline, read-only). That's a
+> different job from the pasted-text batching below — see
+> **[Import your own data through your agent](how-to-import-your-own-data-with-an-agent.md)**.
 
 You've connected your brain to an agent already (if not, do the
 **[MCP tutorial](tutorial-connect-your-brain-to-an-agent.md)** first).
@@ -66,14 +71,18 @@ After a batch, ask the agent to prove it stuck — in a **fresh** question, not 
 The agent should recall the items you just saved, best-first, quoting them back. If something's missing,
 it was probably never saved as its own memory — ask the agent to add that one now and try again.
 
-## Why there's no bulk import
+## Why there's no bulk import of raw text
 
 A memory brain is meant to hold **distilled, individually-useful facts**, not raw documents. Dumping a
-whole file in would fill it with noise that drowns out the good memories when you `ask`. (If what you
-actually have is a *folder of documents or code* you want indexed wholesale, that's a different job — the
-coding builds of `said` do that; a memory brain doesn't. See
+whole file of prose in would fill it with noise that drowns out the good memories when you `ask`. (If what
+you actually have is a *folder of documents or code* you want indexed wholesale, that's a different job —
+the coding builds of `said` do that; a memory brain doesn't. See
 **[Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)**.) For memories, the right unit is one
 clear fact at a time — and an agent produces exactly that.
+
+**Personal data is the exception** — browser history and email have clean, per-item structure (a page, a
+message) with dates and senders already attached, so they import cleanly one memory per item. That's what
+the **[import your own data](how-to-import-your-own-data-with-an-agent.md)** guide covers.
 
 ## Next
 

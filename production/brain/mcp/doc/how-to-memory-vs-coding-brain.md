@@ -44,6 +44,7 @@ if it looks like source code, *does NOT index code — use the coding build*.
 |---|---|---|
 | Save a fact, decision, password, meeting note | ✅ `remember` | ✅ |
 | Recall in plain English later | ✅ `ask` | ✅ |
+| Import your browser history / email as memories | ✅ `import` | ✅ |
 | Paste a short code snippet as a note | ✅ (text only) | ✅ |
 | Index a whole repo (`said init`) | ❌ | ✅ |
 | Look up a function by name (`sym`) | ❌ | ✅ |

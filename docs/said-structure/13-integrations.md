@@ -50,8 +50,8 @@ One crate per integration, feature-gated inside `said-mcp`'s Cargo.toml. All off
 |---|---|---|---|
 | `said-watch` | filesystem events | No | original |
 | `said-git` | local `.git` dir via `git2` | No | myNeutron-style developer memory |
-| `said-mail-local` | Apple Mail emlx, mbox, eml, Outlook PST | No | [LEANN email_rag](#leann-precedent) |
-| `said-browser-local` | Chrome/Edge/Brave/Firefox/Safari history SQLite | No | [LEANN browser_rag](#leann-precedent) |
+| `said-mail-local` | Apple Mail emlx, mbox, eml (Outlook PST TODO) | No | [LEANN email_rag](#leann-precedent) — **SHIPPED** as `said import email` (in `sca-core`, not a separate crate) |
+| `said-browser-local` | Chrome/Edge/Brave/Opera/Vivaldi history SQLite (Firefox/Safari TODO) | No | [LEANN browser_rag](#leann-precedent) — **SHIPPED** as `said import browser` (in `sca-core`, not a separate crate) |
 | `said-chat-local` | iMessage chat.db, WhatsApp/Signal/Telegram exports, Slack/Discord/Teams exports | No | [LEANN imessage_rag, slack_rag](#leann-precedent) |
 | `said-obsidian` | Obsidian vault on disk | No | Mem.ai / notes use case |
 | `said-gmail-live` | Gmail IMAP + OAuth2 | **Yes** — Q3 | the OAuth pilot |

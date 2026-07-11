@@ -4,20 +4,22 @@
 
 ## What it does
 
-`said import --from <adapter> --source <path>` reads a competitor's export file and writes matched records into `.said` frames via the right pillar. Source metadata (timestamps, user_ids, categories) survives as tags so admin tools can still query provenance after migration.
+`said import from --from <adapter> --source <path>` reads a competitor's export file and writes matched records into `.said` frames via the right pillar. Source metadata (timestamps, user_ids, categories) survives as tags so admin tools can still query provenance after migration.
+
+> **Syntax note:** migration is the `from` subcommand of `said import` (`said import from --from …`). The bare `said import --from …` form is obsolete — `import` now takes a subcommand (`browser` / `email` / `chatgpt` / `claude` / `from`) since personal-data import shipped. See [CLI import](../07-cli-reference/import.md).
 
 ## Where it lives
 
 - [`crates/sca-core/src/migrate.rs`](../../../crates/sca-core/src/migrate.rs) — `MigrationAdapter` trait, `MigratedRecord`, `run_migration`, `MemvidAdapter`, `Mem0Adapter`, `adapter_for`, `registered_adapters`
-- CLI — `said import --from <name> --source <path>` in [`said-cli/src/main.rs`](../../../crates/said-cli/src/main.rs)
-- MCP — not yet (planned)
+- CLI — `said import from --from <name> --source <path>` in [`said-cli/src/main.rs`](../../../crates/said-cli/src/main.rs)
+- MCP — the `import` tool exists for **personal-data** import (browser/email), but **competitor migration adapters are CLI-only** — no `from`-style migration over MCP yet
 
 ## Inputs
 
 ```
-said import --from memvid --source /path/to/memories.json
-said import --from mem0 --source /path/to/memories.jsonl
-said import --list    # list registered adapters
+said import from --from memvid --source /path/to/memories.json
+said import from --from mem0 --source /path/to/memories.jsonl
+said import from --list    # list registered adapters
 ```
 
 Enterprise brains refuse content-bearing imports unless the adapter maps records to External pillar. Caller gets a clear error with remediation (switch to Portable or modify the adapter).
@@ -125,7 +127,7 @@ Keep the competitor's id stable (prefix with system name like `zep:`) so provena
 
 - mem0 SQLite not supported — users must export to JSONL first
 - Zep / LangMem adapters not yet shipped — schemas in flux
-- No MCP `import` tool (planned)
+- Competitor migration is CLI-only — the MCP `import` tool covers personal-data (browser/email) but not `from`-style migration adapters
 
 ## See also
 

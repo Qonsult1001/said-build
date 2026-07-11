@@ -81,5 +81,6 @@ couple of pastes — the LLM does the distilling and the typing; you run and ver
 
 - Everyday manual save/recall → [How to store and recall personal notes](how-to-store-and-recall-notes.md)
 - Pasted code vs coding build → [Memory brain vs coding brain](how-to-memory-vs-coding-brain.md)
+- Importing your browser history, email, or chat exports → [How to import your own data](how-to-import-your-own-data.md)
 - Importing from another memory tool (mem0, memvid) → [How to import memories](how-to-import-memories-from-another-tool.md)
 - Full options for `add` → the [Command reference](cli-reference.md).

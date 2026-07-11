@@ -27,12 +27,12 @@ right one, and **we already have the entire playbook**. `G:\development\SAID-ECH
 (MIT-licensed, portable, **fully offline** — reads *local* files, no cloud, no account) contains working
 readers we can port to Rust ingest crates:
 
-| LEANN reader | Reads (locally) | → said crate (already roadmapped, doc 13 Q2) |
+| LEANN reader | Reads (locally) | → said status |
 |---|---|---|
-| `browser_rag.py` | Chrome/Edge/Brave/Firefox/Safari **history SQLite** — every web search | `said-browser-local` |
-| `email_rag.py` | Apple Mail emlx, mbox, eml, **Outlook PST** | `said-mail-local` |
-| `chatgpt_rag.py` / `claude_rag.py` / `gemini_rag.py` | **your own exported AI chats** (chat.html / conversations.json) | (new) `said-chat-import` |
-| `imessage_rag.py` | iMessage `chat.db`, WhatsApp/Signal/Telegram/Slack/Discord exports | `said-chat-local` |
+| `browser_rag.py` | Chrome/Edge/Brave/Opera/Vivaldi **history SQLite** — every web search | **SHIPPED** — `said import browser` (`sca-core::browser_ingest`) |
+| `email_rag.py` | Apple Mail emlx, mbox, eml | **SHIPPED (mbox/emlx)** — `said import email`. Outlook **PST** not yet; user exports to `.mbox` |
+| `chatgpt_rag.py` / `claude_rag.py` / `gemini_rag.py` | **your own exported AI chats** (conversations.json) | **SHIPPED (ChatGPT/Claude)** — `said import chatgpt`/`claude`. Gemini not yet |
+| `imessage_rag.py` | iMessage `chat.db`, WhatsApp/Signal/Telegram/Slack/Discord exports | roadmap — `said-chat-local` |
 | `document_rag.py` / `image_rag.py` / `code_rag.py` | local docs / images / code | (docs → coding/full tiers) |
 
 **This is the differentiated free wow-moment ChatGPT/Claude memory cannot match:** *"Point said at your
@@ -40,12 +40,13 @@ browser history or your ChatGPT export and ask it anything — offline, in one f
 that cleanly at free. It solves the survey's #1 and #4 gaps at once — **capture friction** and **cold
 start** — because the brain arrives *pre-populated from data the user already has*.
 
-> **Tier caveat (be honest):** these are *ingest* paths — currently a **code-tier** capability (bulk
-> folder/file ingest is gated out of the free memory brain, doc 40). To make personal-data capture a
-> FREE hook, we ship **specific, first-party importers** (browser/chat-export) into the brain build as
-> named commands (`said import-browser`, `said import-chatgpt`) — NOT the general `init`/`ingest` (which
-> stays code-tier). One-purpose importers of the user's OWN personal data are a memory feature, not code
-> intelligence.
+> **Tier note (SHIPPED):** bulk *code/docs* folder ingest stays a **code-tier** capability (gated out of
+> the free memory brain, doc 40). But personal-data capture is now a **shipped FREE hook**: first-party,
+> offline importers live in the brain build (`feature = "browser"`) as `said import <source>` subcommands
+> (`import browser` / `import email` / `import chatgpt` / `import claude`) and the MCP `import` tool —
+> NOT the general `init`/`ingest` (which stays code-tier). One-purpose importers of the user's OWN
+> personal data are a memory feature, not code intelligence. See
+> [personal-import](06-ingestion-plugins/personal-import.md).
 
 ## The requirements list — what "world-class free" needs (prioritized)
 
@@ -68,15 +69,21 @@ start** — because the brain arrives *pre-populated from data the user already 
       to the user to discover.
 
 ### Tier 2 — the differentiated free hook (what makes it *world-class*, not just clean)
-- [ ] **Local personal-data import (the "bring your data" wow).** Ship first-party, offline importers into
-      the FREE brain build, ported from LEANN `apps/`:
-  - `said import-chatgpt <export.zip>` / `said import-claude <export>` — your own AI chat history →
-    memories. (Lowest friction: users already have these exports; instant non-empty brain.)
-  - `said import-browser` — Chrome/Edge/Firefox history SQLite (auto-find profiles) → searchable memories.
-  - `said import-email <mbox/emlx/pst>` — local mail → memories.
+- [x] **Local personal-data import (the "bring your data" wow).** SHIPPED — first-party, offline importers
+      in the FREE brain build (`feature = "browser"`), on both CLI (`said import <source>`) and the MCP
+      `import` tool:
+  - `said import chatgpt <export>` / `said import claude <export>` — your own AI chat history →
+    Episodic memories. (Lowest friction: users already have these exports; instant non-empty brain.)
+  - `said import browser` — auto-detects EVERY installed Chromium browser + profile (Chrome/Edge/Brave/
+    Opera/Vivaldi) → External-pointer memories, read-only + offline.
+  - `said import email <mbox|emlx>` — a LOCAL mail file (`.mbox` / Apple Mail `.emlx`; covers Gmail via
+    Takeout + Outlook/M365 via export) → Episodic memories. Offline, no login. **Live Gmail/M365 API sync
+    (OAuth) is a separate, later feature for the WASM surface — not this offline binary.**
   Each is a *named, single-purpose importer of the user's own data* (a memory feature), distinct from the
   code-tier `init`/`ingest`. This is the cold-start and capture-friction fix in one, and the axis no free
-  competitor matches.
+  competitor matches. **Global recency** (`visited_at:`/`sent_at:` absolute-time sort across all
+  profiles/accounts) makes "what was the last website I visited?" correct. See
+  [personal-import](06-ingestion-plugins/personal-import.md).
 
 ### Tier 3 — reach parity with the mass-market path (the biggest scope; decide deliberately)
 - [ ] **Browser layer (the non-MCP consumer path).** A lightweight browser extension (or the existing WASM
@@ -102,10 +109,11 @@ Do **not** claim "best memory product on earth." Do claim the bundle nobody else
 
 1. **v0.11.x (now):** finish Tier 0 polish (version consistency) + Tier 1 (productize one-click connect
    and the < 2-min first-run wow — mostly wiring/message work on foundations already shipped).
-2. **v0.12.0 (the "world-class" release):** Tier 2 — ship `said import-chatgpt` first (highest wow, lowest
-   friction; ports directly from LEANN `chatgpt_rag`), then `import-browser`. This is the release that
-   earns the "world-class free" grade — it closes cold-start + capture-friction with the one axis no free
-   competitor has.
+2. **Tier 2 (SHIPPED):** `said import chatgpt`/`claude`, `import browser`, and `import email` are all
+   shipped on CLI + MCP (`feature = "browser"`, brain + full bundles). This is the axis that earns the
+   "world-class free" grade — it closes cold-start + capture-friction, the one axis no free competitor
+   has. Remaining Tier-2 polish: the WASM live-Gmail/M365 OAuth connector (separate from the shipped
+   offline `import email`).
 3. **Later:** Tier 3 browser layer for mass-market non-MCP reach; Tier 4 opt-ins.
 
 ## Sources
@@ -117,5 +125,6 @@ Do **not** claim "best memory product on earth." Do claim the bundle nobody else
   [Top 10 AI Memory Products 2026](https://medium.com/@bumurzaqov2/top-10-ai-memory-products-2026-09d7900b5ab1),
   [State of AI Agent Memory 2026](https://mem0.ai/blog/state-of-ai-agent-memory-2026).
 - Offline personal-data capture prior art (MIT, local-only): `G:\development\SAID-ECHO\research\LEANN\apps\`
-  (`browser_rag`, `email_rag`, `chatgpt_rag`, `claude_rag`, `imessage_rag`) — already roadmapped as the
-  Q2 integrations ([13-integrations.md](13-integrations.md), [12-roadmap.md](12-roadmap.md)).
+  (`browser_rag`, `email_rag`, `chatgpt_rag`, `claude_rag`, `imessage_rag`) — the browser/email/chat
+  readers are now **shipped** as `said import` (see [personal-import](06-ingestion-plugins/personal-import.md));
+  iMessage/Gemini remain roadmap ([13-integrations.md](13-integrations.md), [12-roadmap.md](12-roadmap.md)).

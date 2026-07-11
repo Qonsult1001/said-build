@@ -7,6 +7,11 @@
 If you've been using another memory tool, you don't have to start over — `said` can read
 its export and bring those memories in.
 
+> **Importing your own browser history, email, or chat exports** is a different command family
+> (`said import browser` / `email` / `chatgpt` / `claude`). This guide is only about **migrating** from
+> another *memory tool*. For personal data, see
+> [How to import your own data](how-to-import-your-own-data.md).
+
 ## Steps
 
 1. Check which tools `said` can import from:

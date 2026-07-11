@@ -55,6 +55,8 @@ all of them.
 | `list_concepts` | `list-concepts` | The `[[wikilink]]` concept vocabulary, per-concept counts. |
 | `list_tags` | `list-tags` | The `tags` metadata vocabulary, per-tag counts. |
 | `open` / `create` | `create` / `use` | Make or switch to a brain file. |
+| `import` | `import browser` / `import email` / `import chatgpt` / `import claude` | Pull the user's OWN personal data (browser history / local mail file / AI-chat export) into memories. **Gated behind `feature = "browser"`** — in the **brain** and **full** bundles; ABSENT from coding/coding-plus. A *memory* import, distinct from code-tier `init`/`ingest`. See [personal-import](06-ingestion-plugins/personal-import.md) + [CLI import](07-cli-reference/import.md) / [MCP import](08-mcp-reference/import.md). |
+| `import from` (migration) | `import from` | Migrate another tool's export (mem0, memvid) into the brain. Not feature-gated — every bundle. |
 | `admin` (basic) | `admin` | Recycle-bin recovery: `list-tombstones`, `restore`, `who-deleted`. |
 | `compact` | `compact` | Tidy the file + reclaim space from deleted memories (`drop_history`/`--drop-history` to purge; `dry_run` to preview). Basic hygiene — every tier. |
 
@@ -74,9 +76,12 @@ brain MCP for them returns a clean "unknown tool", and the brain CLI has no such
 `snapshot` · `sandbox` · `clean` · `journal` · `session_end` · `tool_completion` · `salience` ·
 `dream` · `recall_fix` · `learn_fix` · `recall_blueprint` · `learn_blueprint` · `harvest_*`
 
-Notably, **bulk folder ingest (`init` / `ingest`) is a code-tier capability** — it is why a *memory*
-brain has no "bulk import": that path belongs to the code bundles, which index folders of source. A
-memory brain is populated one distilled memory at a time (see the brain how-tos).
+Notably, **bulk folder ingest of source code / documents (`init` / `ingest`) is a code-tier
+capability** — that path belongs to the code bundles, which AST-index folders of source. This is
+distinct from **personal-data `import`** (browser history / local mail / AI-chat exports), which IS a
+memory feature and ships in the **brain** bundle (`feature = "browser"`, see the memory-core table
+above). So a memory brain populates two ways: one distilled memory at a time (`remember`), or in bulk
+from the user's OWN personal data (`import`) — but it never AST-indexes a code repo.
 
 ### The #1 expectation gap: a memory brain stores TEXT, it does not index CODE
 
@@ -95,6 +100,7 @@ and the product now says so honestly, in the moment. What actually happens:
 | You want | Brain build | Where it lives |
 |---|---|---|
 | Save a snippet and recall it later by meaning / verbatim | ✅ `remember` → `ask` / `get` | brain |
+| Import your OWN browser history / local mail / AI-chat export | ✅ `import browser` / `email` / `chatgpt` / `claude` | brain (`feature = "browser"`) + full |
 | Symbol/AST search over source (`sym foo`, `search foo`) | ❌ not here | coding build (`said init` a repo, then `sym`/`search`) |
 | Bulk-ingest a code/docs folder | ❌ not here | coding (`init`/`ingest`); docs/OCR need `full` |
 
