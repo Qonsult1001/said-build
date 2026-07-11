@@ -92,7 +92,9 @@ status:planned and status:todo — merge them onto one tag."*
 
 Once your brain has dozens of memories, a vague question can return **several equally good matches**
 instead of one clear winner — that's normal. The brain surfaces a **top handful**; your agent picks the
-right one. When too many look alike, **narrow with tags** before asking:
+right one. On genuine ties, `ask` also appends a **close matches** note (tag counts + scoping hints) so
+the agent knows to re-ask with a tag instead of guessing. When too many look alike, **narrow with tags**
+before asking:
 
 1. **Browse tags** — ask the agent: *"What tags do my memories use?"* (`list_tags`).
 2. **Pick a facet** — e.g. `quarter:Q2`, `project:said`, `topic:launch`.

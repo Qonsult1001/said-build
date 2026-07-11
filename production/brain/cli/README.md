@@ -47,5 +47,9 @@ results with tags or deep recall.
 ## Note on recall
 
 `said` returns the **top handful** of relevant memories for a question, not a single guess — the right
-memory is essentially always in that set. You read the top results and pick the one you need. (For
-narrower recall, see [`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md).)
+memory is essentially always in that set. Each result line shows **tags** (e.g. `quarter:Q2`). When
+several results genuinely tie, `ask` prints a **close matches** footer with tag counts and suggests
+`--tag` scoping — but stays quiet when `#1` clearly wins (no chatty footer on obvious answers).
+
+You read the top results and pick the one you need. For narrower recall, see
+[`doc/how-to-find-a-specific-memory.md`](doc/how-to-find-a-specific-memory.md).

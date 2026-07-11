@@ -35,17 +35,21 @@ When you have dozens of memories and results tie across topics, **scope with tag
 Run `said list-tags` first to see facets already in use. Repeat `--tag` for AND logic (all tags must
 match). See [How to find and organize memories](how-to-find-a-specific-memory.md).
 
+On genuine ties (several close scores, no clear winner), `ask` prints a **close matches** footer listing
+which tags distinguish the results — use `--tag` to narrow. When `#1` clearly wins, no footer is shown.
+
 For **everything on a topic** (not just the top few), add `--deep`:
 
     said ask "payment system" --deep
 
 Each result line looks like this:
 
-    1. [0.55][semantic] wifi
+    1. [0.55][semantic] wifi   tags: topic:home
         The wifi password is sunflower-42.
 
 - The first number is a confidence score (higher = better match).
 - `wifi` is the memory's id (use it with `get` or `delete`).
+- `tags:` shows facets you can filter with `--tag`.
 - The line below is the memory itself.
 
 ## Useful flags

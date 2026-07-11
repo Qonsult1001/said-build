@@ -28,7 +28,7 @@ free memory brain (terminal + agent, same file format).
     - [`doc/how-to-organize-and-find-memories-with-an-agent.md`](doc/how-to-organize-and-find-memories-with-an-agent.md) — find one note, get everything on a topic, link memories with concepts, browse by tags
     - [`doc/how-to-track-versions-with-an-agent.md`](doc/how-to-track-versions-with-an-agent.md) — update a fact, see its history, roll it back
     - [`doc/how-to-clean-up-your-brain-with-an-agent.md`](doc/how-to-clean-up-your-brain-with-an-agent.md) — delete, recover from the recycle bin, set retention
-    - [`doc/how-to-move-your-brain-to-another-agent.md`](doc/how-to-move-your-brain-to-another-agent.md) — one file, any agent/machine; keep multiple brains and switch between them
+    - [`doc/how-to-move-your-brain-to-another-agent.md`](doc/how-to-move-your-brain-to-another-agent.md) — one file, any agent/machine; open a shared brain or switch to another existing file
     - [`doc/how-to-memory-vs-coding-brain.md`](doc/how-to-memory-vs-coding-brain.md) — pasted code vs real code search; when you need the coding build
   - **[`doc/verify-mcp.md`](doc/verify-mcp.md)** — how to drive the MCP server end-to-end and confirm each
     tool works (for review / acceptance).
@@ -61,6 +61,12 @@ save at session end); there's nothing to paste. Full walkthrough in
 ## How recall works through an agent
 
 `.said` does the hard work — it narrows thousands of memories down to the **most relevant few** (the top
-handful) and returns them to the agent. The **agent then reads those and answers you** (or picks the
-right one) — the memory system surfaces the top-K, the LLM does the final reasoning. That's why the
-right memory being *in the returned set* is what matters, and it essentially always is.
+handful) and returns them to the agent. Each result shows its **tags** so you can see which facet each
+memory belongs to. When several results genuinely tie (close scores, no clear winner), `ask` appends a
+**close matches** note with tag counts and scoping hints — the agent is steered to re-ask with a tag
+filter instead of guessing.
+
+The **agent then reads those and answers you** (or picks the right one) — the memory system surfaces the
+top-K, the LLM does the final reasoning. That's why the right memory being *in the returned set* is what
+matters, and it essentially always is. When results are noisy at scale, see
+[`doc/how-to-organize-and-find-memories-with-an-agent.md`](doc/how-to-organize-and-find-memories-with-an-agent.md).

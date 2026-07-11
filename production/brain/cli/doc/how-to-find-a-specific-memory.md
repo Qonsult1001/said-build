@@ -92,8 +92,9 @@ See what concepts exist before adding near-duplicates:
 ## When you get too many similar results
 
 Once your brain has dozens of memories, a vague `ask` can return **several equally good matches** instead
-of one clear winner — that's normal. The brain surfaces a **top handful**; you read the list and pick.
-When too many look alike, **narrow with tags** before asking:
+of one clear winner — that's normal. The brain surfaces a **top handful**; you read the list and pick. On
+genuine ties, `ask` prints a **close matches** footer (tag counts + `--tag` hints); it stays quiet when
+`#1` clearly wins. When too many look alike, **narrow with tags** before asking:
 
 1. **Browse tags** — `said list-tags`
 2. **Pick a facet** — e.g. `quarter:Q2`, `project:said`, `topic:launch`
