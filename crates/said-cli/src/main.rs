@@ -2246,21 +2246,43 @@ fn cmd_import(path: Option<&str>, source: &ImportSource, json: bool) -> Result<(
             found.into_iter().map(|d| (format!("{} ({})", d.browser, d.profile), d.db_path)).collect()
         };
         let mut imported = 0usize;
+        let mut profiles_with_data = 0usize;
+        let mut empty_or_skipped = 0usize;
         for (label, db_path) in &targets {
-            if !json { use std::io::Write; print!("Importing {} … ", label); let _ = std::io::stdout().flush(); }
             match sca_core::browser_ingest::ingest_browser_history(
                 &mut brain, db_path, *max, *min_visits, *since_days, |_, _, _| {}
             ) {
-                Ok(r) => { imported += r.entries_ingested; if !json { println!("{} pages", r.entries_ingested); } }
-                Err(e) => { if !json { println!("skipped ({})", e); } }
+                Ok(r) if r.entries_ingested > 0 => {
+                    imported += r.entries_ingested;
+                    profiles_with_data += 1;
+                    if !json { println!("  ✓ {} — {} pages", label, r.entries_ingested); }
+                }
+                // An empty/unused profile (e.g. Chrome's "Default" you never browse in) or a locked/
+                // unreadable one: not an error, just nothing to import. Don't alarm the user with a raw
+                // SQL message — a first-timer reads "no such table: urls" as a broken install.
+                Ok(_) => { empty_or_skipped += 1; }
+                Err(_) => { empty_or_skipped += 1; }
             }
         }
         brain.save()?;
         if json {
-            println!("{}", serde_json::json!({"imported": imported, "sources": targets.len()}));
+            println!("{}", serde_json::json!({
+                "imported": imported, "profiles_with_data": profiles_with_data,
+                "profiles_empty_or_skipped": empty_or_skipped,
+            }));
+        } else if imported == 0 {
+            println!("No browser history to import — the profiles found were empty or unreadable.");
+            println!("(If a browser is open, that's fine; it may just be a fresh/unused profile. Try");
+            println!(" `said import browser --db <path-to-a-History-file>` to target one directly.)");
         } else {
-            println!("\n✓ Imported {} pages from {} browser profile(s).", imported, targets.len());
-            println!("  Recall:        said ask \"that article about X\"");
+            let skip_note = if empty_or_skipped > 0 {
+                format!(" ({} empty/unused profile{} skipped)", empty_or_skipped,
+                    if empty_or_skipped == 1 { "" } else { "s" })
+            } else { String::new() };
+            println!("\n✓ Imported {} pages from {} browser profile{}{}.",
+                imported, profiles_with_data,
+                if profiles_with_data == 1 { "" } else { "s" }, skip_note);
+            println!("  Recall:         said ask \"that article about X\"");
             println!("  Filter by site: said ask \"...\" --tag domain:github.com");
             println!("  Re-run anytime to sync new history (deduped).");
         }
