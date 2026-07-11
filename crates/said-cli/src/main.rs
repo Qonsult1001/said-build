@@ -1240,6 +1240,32 @@ enum ImportSource {
         #[arg(long)]
         db: Option<String>,
     },
+    /// Import your ChatGPT conversation export (the `conversations.json` from your data export).
+    ///
+    /// Each conversation becomes a searchable memory (title + transcript, Episodic). Point at the
+    /// unzipped export folder or its `conversations.json`. Re-import = re-sync (deduped). To export:
+    /// ChatGPT → Settings → Data controls → Export data, then unzip the emailed archive.
+    #[cfg(feature = "browser")]
+    Chatgpt {
+        /// Path to the export folder or `conversations.json` (unzip the export first).
+        /// (Named `export` to avoid clashing with the global `--path` brain flag.)
+        export: String,
+        /// Cap each conversation's stored transcript to this many characters (0 = no cap).
+        #[arg(long, default_value_t = 20000)]
+        max_chars: usize,
+    },
+    /// Import your Claude conversation export (the `conversations.json` from your data export).
+    ///
+    /// Each conversation becomes a searchable memory (title + transcript, Episodic). Point at the
+    /// unzipped export folder or its `conversations.json`. Re-import = re-sync (deduped).
+    #[cfg(feature = "browser")]
+    Claude {
+        /// Path to the export folder or `conversations.json` (unzip the export first).
+        export: String,
+        /// Cap each conversation's stored transcript to this many characters (0 = no cap).
+        #[arg(long, default_value_t = 20000)]
+        max_chars: usize,
+    },
     /// Import from another memory tool's export (mem0, memvid) via a migration adapter.
     From {
         /// Source system: `mem0`, `memvid`. Omit with --list to see current adapters.
@@ -2289,11 +2315,39 @@ fn cmd_import(path: Option<&str>, source: &ImportSource, json: bool) -> Result<(
         return Ok(());
     }
 
+    // AI-chat-export import (ChatGPT / Claude conversations.json) — Episodic memories.
+    #[cfg(feature = "browser")]
+    if let ImportSource::Chatgpt { export: p, max_chars } | ImportSource::Claude { export: p, max_chars } = source {
+        let is_claude = matches!(source, ImportSource::Claude { .. });
+        let src = if is_claude { "Claude" } else { "ChatGPT" };
+        let mut brain = open_brain(path)?;
+        if !json { use std::io::Write; print!("Importing {} conversations from {} … ", src, p); let _ = std::io::stdout().flush(); }
+        let report = if is_claude {
+            sca_core::chat_import::import_claude(&mut brain, p, *max_chars, |_,_,_| {})
+        } else {
+            sca_core::chat_import::import_chatgpt(&mut brain, p, *max_chars, |_,_,_| {})
+        }?;
+        brain.save()?;
+        if json {
+            println!("{}", serde_json::json!({
+                "imported": report.conversations_imported, "seen": report.conversations_seen,
+                "skipped_empty": report.skipped_empty, "source": report.source,
+            }));
+        } else {
+            println!("done.\n✓ Imported {} {} conversation(s) into your brain{}.",
+                report.conversations_imported, src,
+                if report.skipped_empty > 0 { format!(" ({} empty skipped)", report.skipped_empty) } else { String::new() });
+            println!("  Recall: said ask \"what did I discuss about X\"");
+            println!("  Filter: said ask \"...\" --tag source:{}", if is_claude { "claude" } else { "chatgpt" });
+        }
+        return Ok(());
+    }
+
     // Migration from another memory tool (mem0, memvid).
     let (from, source, list) = match source {
         ImportSource::From { from, source, list } => (from.as_deref(), source.as_deref(), *list),
         #[cfg(feature = "browser")]
-        ImportSource::Browser { .. } => unreachable!("handled above"),
+        _ => unreachable!("browser/chatgpt/claude handled above"),
     };
     if list {
         let names = sca_core::migrate::registered_adapters();
