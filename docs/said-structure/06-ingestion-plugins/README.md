@@ -9,6 +9,7 @@ Feature-gated modules that extend `.said` to ingest formats beyond plain text. E
 - [whisper](whisper.md) — audio / video transcription via sherpa-rs with DirectML acceleration
 - [code](code.md) — AST-chunked source via tree-sitter (7 languages)
 - [LSP](lsp.md) — language-server integration (rust-analyzer / tsserver / pyright) for cross-file refs
+- [personal-import](personal-import.md) — **FREE-tier** `said import <browser|email|chatgpt|claude>`: pull the user's own personal data (browser history, mail, AI-chat exports) into memories. Distinct from code-tier `init`/`ingest` — a *memory* feature (`import` verb, External/Episodic pillar), not code intelligence.
 
 ## Which feature pulls in which plugin
 
@@ -24,6 +25,7 @@ whisper      = ["dep:sherpa-rs", "dep:symphonia"]
 directml     = ["sherpa-rs/directml"]                   # Windows GPU acceleration
 code         = ["dep:tree-sitter", "dep:tree-sitter-rust", ... /* 7 langs */]
 lsp          = ["dep:lsp-types"]
+browser      = ["dep:rusqlite"]   # personal-import: Chrome/Edge History SQLite → External-pointer memories (see personal-import.md). NATIVE-only.
 gpu          = ["dep:wgpu", "dep:pollster"]             # GPU Hamming search
 encryption   = ["dep:aes-gcm"]
 mmap         = []

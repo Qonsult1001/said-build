@@ -50,3 +50,6 @@ hard-eval/repo/
 # MCP binary backups — never commit (repo bloat; not release assets)
 production/brain/mcp/old/**/*.exe
 production/brain/**/*.exe
+
+# temporary reference clones — delete later, never commit
+local-research/
