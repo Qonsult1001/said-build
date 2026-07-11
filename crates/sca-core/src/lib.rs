@@ -71,6 +71,7 @@ pub mod document_ingest;
 #[cfg(feature = "browser")]
 pub mod browser_ingest;
 pub mod chat_import;
+pub mod email_ingest;
 pub mod steering;
 pub mod workstate;
 pub mod project;

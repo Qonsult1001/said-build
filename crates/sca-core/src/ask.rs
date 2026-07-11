@@ -993,6 +993,110 @@ pub fn ask(
         }
     }
 
+    // Temporal-recency answer ("what was the LAST website I visited?", "my most recent
+    // page"). The static encoder is context-free — it cannot tell "last" apart from any
+    // other adjective, so the semantic engine returns *a* relevant page and the abstention
+    // gate can even DROP the genuinely most-recent page (it shares no words with the query).
+    // So for an explicit recency query we don't merely reorder survivors — we go back to the
+    // brain, pull the `import browser` pages ordered by their `recency:N` tag (rank 1 = most
+    // recently visited, stamped DESC by last_visit_time at ingest), and LEAD with them. This
+    // is a deterministic, non-semantic answer for a deterministic, non-semantic question —
+    // the newest page by wall-clock, exactly what "last" means. A non-temporal query is
+    // untouched (byte-identical), and if the brain has no recency-tagged pages at all we
+    // leave the semantic result as-is.
+    if query_wants_recency(query) {
+        // Recency-tagged personal-data memories come from `import browser` (web pages) AND `import email`
+        // (mail messages). Route the temporal query to whichever matches the question: "last website/
+        // page/site" → browser only; "last email" → email only; an unqualified "most recent / last thing"
+        // → both, merged.
+        //
+        // THE SORT KEY IS THE ABSOLUTE TIMESTAMP, NOT A PER-IMPORT ORDINAL. Each import stamps
+        // `recency:1` on its own newest item, so three browser profiles yield three `recency:1` pages;
+        // ranking by that ordinal made a years-old page from one profile tie the truly-newest page from
+        // another. We rank by `visited_at:<unix>` (browser) / `sent_at:<unix>` (email) — the real
+        // wall-clock time — so "last site I visited" returns yesterday's Profile-1 page, never a 3-year-
+        // old Profile-3 page, regardless of how many profiles/accounts or in what order they were imported.
+        let ql = query.to_lowercase();
+        let word = |w: &str| ql.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w);
+        let wants_browser = word("website") || word("site") || word("page") || word("url")
+            || word("browser") || word("web") || word("visited") || word("visit");
+        let wants_email = word("email") || word("mail") || word("message") || word("inbox")
+            || word("received") || word("sender") || word("wrote");
+        // If neither source is named explicitly, consider both (a bare "what was the last / most recent").
+        let (use_browser, use_email) = if wants_browser || wants_email {
+            (wants_browser, wants_email)
+        } else {
+            (true, true)
+        };
+
+        // Absolute epoch for a doc_id, from whichever source tag it carries (both are unix seconds).
+        let epoch_of = |brain: &SaidFile, id: &str| -> Option<i64> {
+            let meta = brain.frames.get_meta(id)?;
+            // Preferred: the absolute epoch tag written since the recency fix.
+            if let Some(e) = meta.tags.iter().find_map(|t| {
+                t.strip_prefix("visited_at:").or_else(|| t.strip_prefix("sent_at:"))
+                    .and_then(|n| n.parse::<i64>().ok())
+            }) {
+                return Some(e);
+            }
+            // Fallback for frames imported BEFORE the fix (they carry only `visited:<yyyy-mm-dd>` /
+            // `date:<yyyy-mm-dd>`): parse the day to a midnight epoch so a mixed old/new brain still
+            // sorts by wall-clock. Day-granularity is fine — it still puts yesterday above last year.
+            meta.tags.iter().find_map(|t| {
+                let d = t.strip_prefix("visited:").or_else(|| t.strip_prefix("date:"))?;
+                date_to_epoch(d)
+            })
+        };
+
+        let mut source_ids: Vec<String> = Vec::new();
+        if use_browser { source_ids.extend(brain.frames.doc_ids_by_tag("ingest:browser").into_iter().map(|s| s.to_string())); }
+        if use_email { source_ids.extend(brain.frames.doc_ids_by_tag("ingest:email").into_iter().map(|s| s.to_string())); }
+        // (id, epoch) for every recency-tagged personal memory, sorted NEWEST-FIRST by absolute time.
+        // Set of doc_ids from the REQUESTED source(s) only — so a "last website" query recency-sorts
+        // browser pages but does NOT pull an email above them just because the email also has a date
+        // (source routing must be respected, not just "anything dated").
+        let wanted: HashSet<String> = source_ids.iter().cloned().collect();
+        let mut ranked: Vec<(i64, String)> = source_ids
+            .into_iter()
+            .filter_map(|id| epoch_of(brain, &id).map(|e| (e, id)))
+            .collect();
+        if !ranked.is_empty() {
+            ranked.sort_by(|a, b| b.0.cmp(&a.0)); // descending epoch → most recent first
+            // Build lead candidates from the globally-most-recent items, dedup against whatever the
+            // engines already surfaced. Bound to `top` so we never flood.
+            let existing: HashSet<String> = kept.iter().map(|c| c.doc_id.clone()).collect();
+            let mut lead: Vec<AskCandidate> = Vec::new();
+            for (rank, (_epoch, id)) in ranked.iter().take(top.max(1)).enumerate() {
+                if existing.contains(id) { continue; } // already surfaced; re-sorted below
+                if let Some(content) = brain.get(id) {
+                    lead.push(AskCandidate {
+                        doc_id: id.clone(),
+                        // Confidence descends with global rank so the newest leads and the order is
+                        // stable; kept above the semantic floor so it isn't re-gated.
+                        confidence: (1.0 - rank as f32 * 0.02).max(0.5),
+                        kind: "text",
+                        content,
+                        location: None,
+                    });
+                }
+            }
+            // Partition kept into recency-sortable (from a REQUESTED source AND dated) vs the rest, then
+            // order the tagged block — plus the fresh leads — strictly by absolute epoch, newest first.
+            let (tagged, untagged): (Vec<_>, Vec<_>) =
+                kept.into_iter().partition(|c| wanted.contains(&c.doc_id) && epoch_of(brain, &c.doc_id).is_some());
+            let mut merged = lead;
+            merged.extend(tagged);
+            merged.sort_by(|a, b| {
+                let ea = epoch_of(brain, &a.doc_id).unwrap_or(i64::MIN);
+                let eb = epoch_of(brain, &b.doc_id).unwrap_or(i64::MIN);
+                eb.cmp(&ea) // newest first
+            });
+            merged.extend(untagged);
+            merged.truncate(top);
+            kept = merged;
+        }
+    }
+
     // Auto-dream — intrinsic to recall, fired HERE in core so EVERY caller (CLI, MCP,
     // Rust API, orchestrator) gets identical brain-state evolution. Previously each
     // caller duplicated this trigger; SaidFile::maybe_dream is the single source of
@@ -1000,6 +1104,48 @@ pub fn ask(
     brain.maybe_dream();
 
     (kept, keywords)
+}
+
+/// Parse a "yyyy-mm-dd" tag value to a unix-seconds epoch (midnight UTC). Used as the fallback recency
+/// sort key for personal-data frames imported before the absolute `visited_at:`/`sent_at:` tag existed.
+/// Returns None on anything that isn't a plain ISO date. Howard Hinnant days-from-civil.
+fn date_to_epoch(d: &str) -> Option<i64> {
+    let mut p = d.split('-');
+    let y: i64 = p.next()?.parse().ok()?;
+    let m: i64 = p.next()?.parse().ok()?;
+    let day: i64 = p.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) { return None; }
+    let ym = if m <= 2 { y - 1 } else { y };
+    let era = if ym >= 0 { ym } else { ym - 399 } / 400;
+    let yoe = ym - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86400)
+}
+
+/// Does the query explicitly ask for the MOST RECENT / LAST item (temporal-recency intent)?
+/// Deliberately narrow — only fires on unambiguous recency cues so a normal meaning query is
+/// untouched. Used to switch `ask` into recency-ranked order over `recency:`-tagged memories
+/// (browser history). Word-boundary matched so "lastname"/"latest_build" don't trip it.
+fn query_wants_recency(query: &str) -> bool {
+    let q = query.to_lowercase();
+    const CUES: &[&str] = &[
+        "most recent", "most recently", "last visited", "last website", "last page",
+        "last site", "last url", "last thing", "latest", "recently visited",
+        "what was the last", "what did i last", "my last", "just visited",
+        "last email", "latest email", "most recent email", "last message", "last mail",
+    ];
+    if CUES.iter().any(|c| q.contains(c)) {
+        return true;
+    }
+    // Standalone "last" / "recent" as a whole word (but not inside "lastname" etc.).
+    let has_word = |w: &str| {
+        q.split(|c: char| !c.is_ascii_alphanumeric()).any(|tok| tok == w)
+    };
+    has_word("recent") || (has_word("last") && (has_word("visit") || has_word("visited")
+        || has_word("website") || has_word("site") || has_word("page") || has_word("url")
+        || has_word("email") || has_word("mail") || has_word("message") || has_word("received")))
 }
 
 // ── Coding-fix recall: ONE scorer, shared by said-cli and said-orchestration ──

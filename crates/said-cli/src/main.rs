@@ -1266,6 +1266,26 @@ enum ImportSource {
         #[arg(long, default_value_t = 20000)]
         max_chars: usize,
     },
+    /// Import a local mail file — a `.mbox` mailbox or an Apple Mail `.emlx` folder.
+    ///
+    /// OFFLINE, no login: reads mail that's already on your disk. A `.mbox` file covers Thunderbird,
+    /// **Gmail (via Google Takeout → Mail)**, and **Outlook/M365 (via export)** — you export to a file,
+    /// we read it, no account access. Each message → a searchable memory (subject + from + body,
+    /// Episodic), tagged `from:<addr>`, `date:<day>`, `recency:<rank>` so "what was my last email"
+    /// ranks by date. Re-import = re-sync (deduped by Message-ID). Live Gmail/M365 API sync (OAuth) is
+    /// a separate, later feature — this command never talks to a mail server.
+    #[cfg(feature = "browser")]
+    Email {
+        /// Path to a `.mbox` file OR a folder of Apple Mail `.emlx` files.
+        /// (Named `mail` to avoid clashing with the global `--path` brain flag.)
+        mail: String,
+        /// Cap total messages imported (0 = all). Newest-first, so a cap keeps the most recent.
+        #[arg(long, default_value_t = 0)]
+        max: usize,
+        /// Cap each message's stored text to this many characters (0 = no cap).
+        #[arg(long, default_value_t = 20000)]
+        max_chars: usize,
+    },
     /// Import from another memory tool's export (mem0, memvid) via a migration adapter.
     From {
         /// Source system: `mem0`, `memvid`. Omit with --list to see current adapters.
@@ -2261,22 +2281,28 @@ fn cmd_import(path: Option<&str>, source: &ImportSource, json: bool) -> Result<(
     #[cfg(feature = "browser")]
     if let ImportSource::Browser { since_days, min_visits, max, db } = source {
         let mut brain = open_brain(path)?;
-        let targets: Vec<(String, String)> = if let Some(p) = db {
-            vec![("(custom)".to_string(), p.clone())]
+        // (display label, profile tag value, History db path). The profile tag ("Chrome/Profile 1")
+        // lets recall be profile-scoped AND keeps the GLOBAL recency sort correct across profiles.
+        let targets: Vec<(String, String, String)> = if let Some(p) = db {
+            vec![("(custom)".to_string(), "custom".to_string(), p.clone())]
         } else {
             let found = sca_core::browser_ingest::discover_chromium_history();
             if found.is_empty() {
                 return Err("No Chromium browser history found (looked for Chrome, Edge, Brave, Opera, \
                             Vivaldi). Pass --db <path-to-History> to import a specific file.".into());
             }
-            found.into_iter().map(|d| (format!("{} ({})", d.browser, d.profile), d.db_path)).collect()
+            found.into_iter()
+                .map(|d| (format!("{} ({})", d.browser, d.profile),
+                          format!("{}/{}", d.browser, d.profile),
+                          d.db_path))
+                .collect()
         };
         let mut imported = 0usize;
         let mut profiles_with_data = 0usize;
         let mut empty_or_skipped = 0usize;
-        for (label, db_path) in &targets {
+        for (label, profile, db_path) in &targets {
             match sca_core::browser_ingest::ingest_browser_history(
-                &mut brain, db_path, *max, *min_visits, *since_days, |_, _, _| {}
+                &mut brain, db_path, profile, *max, *min_visits, *since_days, |_, _, _| {}
             ) {
                 Ok(r) if r.entries_ingested > 0 => {
                     imported += r.entries_ingested;
@@ -2343,11 +2369,35 @@ fn cmd_import(path: Option<&str>, source: &ImportSource, json: bool) -> Result<(
         return Ok(());
     }
 
+    // Local mail-file import (.mbox / .emlx) — a MEMORY feature, offline, no login. Distinct from the
+    // (later, separate) live Gmail/M365 OAuth connector.
+    #[cfg(feature = "browser")]
+    if let ImportSource::Email { mail, max, max_chars } = source {
+        let mut brain = open_brain(path)?;
+        if !json { use std::io::Write; print!("Importing mail from {} … ", mail); let _ = std::io::stdout().flush(); }
+        let report = sca_core::email_ingest::import_email(&mut brain, mail, *max, *max_chars, |_,_,_| {})?;
+        brain.save()?;
+        if json {
+            println!("{}", serde_json::json!({
+                "imported": report.messages_imported, "seen": report.messages_seen,
+                "skipped_empty": report.skipped_empty, "source": report.source,
+            }));
+        } else {
+            println!("done.\n✓ Imported {} message(s) from your {} mail{}.",
+                report.messages_imported, report.source,
+                if report.skipped_empty > 0 { format!(" ({} empty skipped)", report.skipped_empty) } else { String::new() });
+            println!("  Recall:        said ask \"that email about X\"");
+            println!("  By sender:     said ask \"...\" --tag from:alice@example.com");
+            println!("  Most recent:   said ask \"what was the last email i received?\"");
+        }
+        return Ok(());
+    }
+
     // Migration from another memory tool (mem0, memvid).
     let (from, source, list) = match source {
         ImportSource::From { from, source, list } => (from.as_deref(), source.as_deref(), *list),
         #[cfg(feature = "browser")]
-        _ => unreachable!("browser/chatgpt/claude handled above"),
+        _ => unreachable!("browser/chatgpt/claude/email handled above"),
     };
     if list {
         let names = sca_core::migrate::registered_adapters();

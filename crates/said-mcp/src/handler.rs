@@ -602,6 +602,8 @@ impl ServerHandler for SaidServerHandler {
             SaidTools::CompactTool(t) => self.handle_compact(t),
             #[cfg(feature = "code")]
             SaidTools::IngestTool(t) => self.handle_ingest(t),
+            #[cfg(feature = "browser")]
+            SaidTools::ImportTool(t) => self.handle_import(t),
             SaidTools::RememberTool(t) => self.handle_remember(t),
             SaidTools::StatusTool(_) => self.handle_status(),
             #[cfg(feature = "code")]
@@ -1234,6 +1236,157 @@ impl SaidServerHandler {
                 "Document ingestion disabled â€” rebuild said-mcp with --features docs".to_string(),
             ))
         }
+    }
+
+    // Personal-data import (the agent-native `import` tool). Mirrors the CLI `said import browser`:
+    // auto-detects every Chromium browser + profile, imports them all as external-pointer memories
+    // with recency tags, deduped by URL. The live browser DB is opened read-only. Gated on `browser`.
+    #[cfg(feature = "browser")]
+    fn handle_import(&self, t: ImportTool) -> Result<CallToolResult, CallToolError> {
+        let source = t.source.as_deref().map(str::trim).map(str::to_lowercase);
+
+        // source='email' — import a local .mbox / .emlx mail file (offline, no login).
+        if source.as_deref() == Some("email") {
+            let mail = t.mail.as_deref().ok_or_else(|| CallToolError::from_message(
+                "source='email' needs a `mail` path — a `.mbox` file or an Apple Mail `.emlx` folder. \
+                 (Gmail: Google Takeout → Mail → the .mbox. Outlook/M365: export to .mbox. This is \
+                 offline — it never logs into your mail account.)".to_string()))?;
+            let max = t.max.unwrap_or(0) as usize;
+            let max_chars = t.max_chars.unwrap_or(20000) as usize;
+            let mut brain = self.brain.lock().map_err(|e|
+                CallToolError::from_message(format!("brain lock: {}", e)))?;
+            let report = sca_core::email_ingest::import_email(&mut brain, mail, max, max_chars, |_,_,_| {})
+                .map_err(CallToolError::from_message)?;
+            brain.save().map_err(CallToolError::from_message)?;
+            let total = brain.frames.active_count();
+            drop(brain);
+            self.mark_populated();
+            let msg = format!(
+                "✓ Imported {} message(s) from your {} mail{}.\n\nBrain now holds {} memories. \
+                 Recall with `ask` (e.g. ask \"that email about X\"), filter by sender with tag \
+                 `from:<addr>`, or ask \"what was the last email I received?\" (ranked by date). \
+                 Re-run `import` to sync new mail (deduped by Message-ID).",
+                report.messages_imported, report.source,
+                if report.skipped_empty > 0 { format!(" ({} empty skipped)", report.skipped_empty) } else { String::new() },
+                total);
+            return Ok(CallToolResult::text_content(vec![TextContent::from(msg)]));
+        }
+
+        // source='chatgpt' / 'claude' — import an AI-chat data export (conversations.json).
+        if matches!(source.as_deref(), Some("chatgpt") | Some("claude")) {
+            let is_claude = source.as_deref() == Some("claude");
+            let src = if is_claude { "Claude" } else { "ChatGPT" };
+            let export = t.export.as_deref().ok_or_else(|| CallToolError::from_message(format!(
+                "source='{}' needs an `export` path — the unzipped {} data-export folder or its \
+                 `conversations.json`. Request the export first ({} → Settings → {} → Export data), \
+                 download and unzip it, then point `export` at that folder. Offline — no account access.",
+                if is_claude { "claude" } else { "chatgpt" }, src, src,
+                if is_claude { "Privacy" } else { "Data controls" })))?;
+            let max_chars = t.max_chars.unwrap_or(20000) as usize;
+            let mut brain = self.brain.lock().map_err(|e|
+                CallToolError::from_message(format!("brain lock: {}", e)))?;
+            let report = if is_claude {
+                sca_core::chat_import::import_claude(&mut brain, export, max_chars, |_,_,_| {})
+            } else {
+                sca_core::chat_import::import_chatgpt(&mut brain, export, max_chars, |_,_,_| {})
+            }.map_err(CallToolError::from_message)?;
+            brain.save().map_err(CallToolError::from_message)?;
+            let total = brain.frames.active_count();
+            drop(brain);
+            self.mark_populated();
+            let msg = format!(
+                "✓ Imported {} {} conversation(s) into your brain{}.\n\nBrain now holds {} memories. \
+                 Recall with `ask` (e.g. ask \"what did I discuss about X\"), filter with tag \
+                 `source:{}`. Re-run `import` to re-sync (deduped).",
+                report.conversations_imported, src,
+                if report.skipped_empty > 0 { format!(" ({} empty skipped)", report.skipped_empty) } else { String::new() },
+                total, if is_claude { "claude" } else { "chatgpt" });
+            return Ok(CallToolResult::text_content(vec![TextContent::from(msg)]));
+        }
+
+        // Otherwise: source='browser' (default). Reject any unknown source clearly.
+        match source.as_deref() {
+            None | Some("") | Some("browser") => {}
+            Some(other) => {
+                return Err(CallToolError::from_message(format!(
+                    "Unknown import source '{}'. This build imports source='browser' (Chromium web \
+                     history), source='email' (a local .mbox/.emlx mail file), or source='chatgpt' / \
+                     source='claude' (an AI-chat data export via `export`).",
+                    other
+                )));
+            }
+        }
+
+        let max = t.max.unwrap_or(0) as usize;
+        let min_visits = t.min_visits.unwrap_or(1);
+        let since_days = t.since_days.unwrap_or(0);
+
+        // Which History DBs to read: one explicit db, or auto-detect every installed browser/profile.
+        // (display label, profile tag value, path) — the profile tag keeps the global recency sort correct.
+        let targets: Vec<(String, String, String)> = if let Some(p) = t.db.as_ref() {
+            vec![("(custom)".to_string(), "custom".to_string(), p.clone())]
+        } else {
+            let found = sca_core::browser_ingest::discover_chromium_history();
+            if found.is_empty() {
+                return Err(CallToolError::from_message(
+                    "No Chromium browser history found (looked for Chrome, Edge, Brave, Opera, \
+                     Vivaldi). Pass db=\"<path-to-History>\" to import a specific file.".to_string(),
+                ));
+            }
+            found.into_iter()
+                .map(|d| (format!("{} ({})", d.browser, d.profile),
+                          format!("{}/{}", d.browser, d.profile),
+                          d.db_path))
+                .collect()
+        };
+
+        let mut brain = self.brain.lock().map_err(|e| {
+            CallToolError::from_message(format!("brain lock: {}", e))
+        })?;
+
+        let mut imported = 0usize;
+        let mut profiles_with_data = 0usize;
+        let mut empty_or_skipped = 0usize;
+        let mut per_profile: Vec<String> = Vec::new();
+        for (label, profile, db_path) in &targets {
+            match sca_core::browser_ingest::ingest_browser_history(
+                &mut brain, db_path, profile, max, min_visits, since_days, |_, _, _| {}
+            ) {
+                Ok(r) if r.entries_ingested > 0 => {
+                    imported += r.entries_ingested;
+                    profiles_with_data += 1;
+                    per_profile.push(format!("  ✓ {} — {} pages", label, r.entries_ingested));
+                }
+                // Empty/unused/locked profile — not an error, just nothing to import.
+                Ok(_) => { empty_or_skipped += 1; }
+                Err(_) => { empty_or_skipped += 1; }
+            }
+        }
+        brain.save().map_err(CallToolError::from_message)?;
+        let total = brain.frames.active_count();
+        drop(brain);
+        self.mark_populated();
+
+        let msg = if imported == 0 {
+            "No browser history to import — the profiles found were empty or unreadable. \
+             If a browser is open that's fine; it may just be a fresh/unused profile. Try \
+             import with db=\"<path-to-a-History-file>\" to target one directly.".to_string()
+        } else {
+            let skip_note = if empty_or_skipped > 0 {
+                format!(" ({} empty/unused profile{} skipped)", empty_or_skipped,
+                    if empty_or_skipped == 1 { "" } else { "s" })
+            } else { String::new() };
+            format!(
+                "✓ Imported {} pages from {} browser profile{}{}.\n{}\n\nBrain now holds {} memories. \
+                 Recall with `ask` (e.g. ask \"that article about X\"), or ask a temporal question \
+                 like \"what was the last website I visited?\" (ranked by recency). Filter by site with \
+                 tag `domain:<host>`. Re-run `import` anytime to sync new history (deduped by URL).",
+                imported, profiles_with_data,
+                if profiles_with_data == 1 { "" } else { "s" }, skip_note,
+                per_profile.join("\n"), total
+            )
+        };
+        Ok(CallToolResult::text_content(vec![TextContent::from(msg)]))
     }
 
     fn handle_remember(&self, t: RememberTool) -> Result<CallToolResult, CallToolError> {

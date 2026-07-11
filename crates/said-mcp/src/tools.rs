@@ -188,6 +188,74 @@ pub struct IngestTool {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Tool 3b: IMPORT — pull the user's OWN personal data (browser history) into the brain
+// ════════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "browser")]
+#[mcp_tool(
+    name = "import",
+    description = "Import the user's OWN personal data into the brain as recall-by-meaning memories. \
+                   The agent-native twin of the CLI `said import`. Four sources: \
+                   \
+                   source='browser' (default) — auto-detects EVERY installed Chromium browser + profile \
+                   (Chrome, Edge, Brave, Opera, Vivaldi) and imports them all. Zero config, fully offline, \
+                   the live browser DB is opened READ-ONLY. Use when the user says 'import my browsing \
+                   history' or asks 'what was the last website I visited?'. Each page → an external-pointer \
+                   memory (title + live URL), tagged `domain:<host>`, `visits:`/`typed:`, `visited:<date>`, \
+                   `recency:<rank>` (temporal queries rank by wall-clock). \
+                   \
+                   source='email' — imports a LOCAL mail file: a `.mbox` mailbox or an Apple Mail `.emlx` \
+                   folder, passed as `mail`. OFFLINE, no login. A `.mbox` covers Thunderbird, Gmail (via \
+                   Google Takeout → Mail) and Outlook/M365 (via export) — the user exports to a file, we \
+                   read it; this NEVER logs into a mail account (live Gmail/M365 API sync is a separate \
+                   feature). Each message → an Episodic memory (subject + from + body), tagged \
+                   `from:<addr>`, `date:<day>`, `recency:<rank>`. Use when the user says 'import my email' \
+                   or asks 'what was the last email I received?'. \
+                   \
+                   source='chatgpt' / source='claude' — imports an AI-chat DATA EXPORT, passed as `export` \
+                   (the unzipped export folder or its `conversations.json`). The user requests an export \
+                   from ChatGPT/Claude first (Settings → Data controls/Privacy → Export), downloads and \
+                   unzips it, then points `export` at it. Each conversation → an Episodic memory (title + \
+                   transcript). Use when the user says 'import my ChatGPT/Claude conversations'. \
+                   \
+                   Re-run anytime to re-sync (deduped). After import, recall with `ask`, filtering by \
+                   `domain:` / `from:` / `source:` tags. A MEMORY feature — it does NOT index code (that is \
+                   the coding build's `ingest`/`init`).",
+    destructive_hint = false,
+    read_only_hint = false
+)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct ImportTool {
+    /// What to import: `browser` (default, the user's Chromium history), `email` (a local mail file),
+    /// `chatgpt` or `claude` (an AI-chat data-export folder / `conversations.json`).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// [browser] Only import pages visited within the last N days (0 or omitted = all history).
+    #[serde(default)]
+    pub since_days: Option<u32>,
+    /// [browser] Only import pages with at least this many visits (default 1 = everything titled).
+    #[serde(default)]
+    pub min_visits: Option<u32>,
+    /// Cap the number of items imported (0 or omitted = no cap; newest first). Applies to both sources.
+    #[serde(default)]
+    pub max: Option<u64>,
+    /// [browser] Advanced: import ONE specific History SQLite file instead of auto-detecting all browsers.
+    #[serde(default)]
+    pub db: Option<String>,
+    /// [email] Path to a `.mbox` file OR a folder of Apple Mail `.emlx` files. Required when source='email'.
+    #[serde(default)]
+    pub mail: Option<String>,
+    /// [email/chatgpt/claude] Cap each stored message/transcript to this many characters (0 = no cap;
+    /// default 20000).
+    #[serde(default)]
+    pub max_chars: Option<u64>,
+    /// [chatgpt/claude] Path to the unzipped data-export folder or its `conversations.json`. Required
+    /// when source='chatgpt' or source='claude'.
+    #[serde(default)]
+    pub export: Option<String>,
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Tool 4: REMEMBER — store text as a memory
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1339,12 +1407,25 @@ pub struct HarvestBlueprintsTool {
 //     dream, sync, journal, session_end, tool_completion   → not user-facing memory verbs / not in
 //                                                            the brain CLI → hidden from the free surface
 // The code branches below keep every tool, so coding/coding-plus/full are UNCHANGED.
-#[cfg(all(not(feature = "forge"), not(feature = "code")))]
+// The `browser` axis is ORTHOGONAL to code/forge: the personal-data `import` tool is a memory
+// feature that ships in the `brain` and `full` bundles (feature = "browser"). It's added to each
+// branch's list only when that feature is on, so a coding/coding-plus build (no browser) never
+// advertises it. This doubles each branch on the browser axis — verbose but explicit, matching the
+// existing per-bundle style; exactly one `tool_box!` compiles per build.
+
+// BRAIN build (no code, no forge) — WITHOUT browser import.
+#[cfg(all(not(feature = "forge"), not(feature = "code"), not(feature = "browser")))]
 tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, ListTagsTool, RememberTool, StatusTool,
                       HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool, CompactTool]);
 
-// CODE builds (coding / coding-plus / full), no forge — FULL tool set, unchanged.
-#[cfg(all(not(feature = "forge"), feature = "code"))]
+// BRAIN build (no code, no forge) — WITH browser import (the default brain bundle).
+#[cfg(all(not(feature = "forge"), not(feature = "code"), feature = "browser"))]
+tool_box!(SaidTools, [AskTool, GetTool, ListConceptsTool, ListTagsTool, RememberTool, StatusTool,
+                      HistoryTool, CheckoutTool, DeleteTool, OpenTool, CreateTool, AdminTool, CompactTool,
+                      ImportTool]);
+
+// CODE builds (coding / coding-plus), no forge, no browser — FULL tool set, unchanged.
+#[cfg(all(not(feature = "forge"), feature = "code", not(feature = "browser")))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
@@ -1352,7 +1433,18 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
                       RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool]);
 
-#[cfg(feature = "forge")]
+// CODE build with browser (e.g. `full` without forge) — FULL tool set + import.
+#[cfg(all(not(feature = "forge"), feature = "code", feature = "browser"))]
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
+                      DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
+                      CompactTool, SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
+                      LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool,
+                      ImportTool]);
+
+// FORGE build — no browser.
+#[cfg(all(feature = "forge", not(feature = "browser")))]
 tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
                       SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
                       DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
@@ -1363,3 +1455,16 @@ tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, Create
                       ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
                       ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,
                       ForgeGapsTool]);
+
+// FORGE build WITH browser (full forge shipping build).
+#[cfg(all(feature = "forge", feature = "browser"))]
+tool_box!(SaidTools, [SearchTool, AskTool, GetTool, IngestTool, OpenTool, CreateTool, InitTool, SyncTool, RememberTool, JournalTool, StatusTool, ListConceptsTool, ListTagsTool,
+                      SymTool, HistoryTool, CheckoutTool, EditTool, EditBatchTool, DeleteTool,
+                      DiscoverTool, OverviewTool, SnapshotTool, SandboxTool, CleanTool,
+                      CompactTool, SessionEndTool, ToolCompletionTool, SalienceTool, DreamTool, AdminTool,
+                      LspDefTool, LspRefsTool, LspHoverTool, LspSymbolsTool,
+                      RecallFixTool, LearnFixTool, RecallBlueprintTool, LearnBlueprintTool, HarvestBlueprintsTool, HarvestScanTool,
+                      ForgeListTool, ForgeGetTool, ForgeStatusTool,
+                      ForgeLoadTool, ForgeRunTool, ForgeResetTool, ForgeInitTool,
+                      ForgePlanQuestionsTool, ForgePlanApplyTool, ForgeSyncTool,
+                      ForgeGapsTool, ImportTool]);
