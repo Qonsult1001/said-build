@@ -1,4 +1,4 @@
-# said — MCP (AI agent) · v0.11.9
+# said — MCP (AI agent) · v0.12.0
 
 Connect your portable brain to an AI agent (Claude Desktop, Cursor, …) so the agent reads and writes it
 for you — remembering facts automatically during your work and recalling them later, even in a fresh
@@ -25,6 +25,7 @@ free memory brain (terminal + agent, same file format).
   - **How-to guides** — one real task each (all agent-driven — you talk to the agent, it calls the tools):
     - [`doc/how-to-store-and-recall-notes-with-an-agent.md`](doc/how-to-store-and-recall-notes-with-an-agent.md) — the everyday save-and-ask flow
     - [`doc/how-to-build-a-brain-by-talking-to-your-agent.md`](doc/how-to-build-a-brain-by-talking-to-your-agent.md) — fill a brain fast: paste a pile of info, the agent saves it one memory at a time
+    - [`doc/how-to-import-your-own-data-with-an-agent.md`](doc/how-to-import-your-own-data-with-an-agent.md) — import your browser history or email as memories, then ask "what was the last website I visited?"
     - [`doc/how-to-organize-and-find-memories-with-an-agent.md`](doc/how-to-organize-and-find-memories-with-an-agent.md) — find one note, get everything on a topic, link memories with concepts, browse by tags
     - [`doc/how-to-track-versions-with-an-agent.md`](doc/how-to-track-versions-with-an-agent.md) — update a fact, see its history, roll it back
     - [`doc/how-to-clean-up-your-brain-with-an-agent.md`](doc/how-to-clean-up-your-brain-with-an-agent.md) — delete, recover from the recycle bin, set retention
@@ -39,7 +40,11 @@ The brain MCP server exposes **memory-only** tools — this is the Personal tier
 tools are not present:
 
 `ask` · `remember` · `get` · `list_concepts` · `list_tags` · `status` · `history` · `checkout` ·
-`delete` · `compact` · `open` · `create` · `admin`
+`delete` · `compact` · `open` · `create` · `admin` · `import`
+
+`import` pulls the user's **own** personal data in as memories — `source=browser` (Chromium history,
+offline and read-only) or `source=email` (a local `.mbox` / `.emlx` file). No login, no cloud. See
+[`doc/how-to-import-your-own-data-with-an-agent.md`](doc/how-to-import-your-own-data-with-an-agent.md).
 
 ## Connect it (example: an MCP client config)
 

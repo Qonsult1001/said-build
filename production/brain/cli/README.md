@@ -1,4 +1,4 @@
-# said — CLI (terminal) · v0.11.9
+# said — CLI (terminal) · v0.12.0
 
 Use your portable brain from the command line: create a brain, store notes, and ask it questions —
 you type the `said` commands yourself. No server, no cloud, fully offline.
