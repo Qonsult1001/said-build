@@ -29,6 +29,76 @@ pub struct BrowserIngestReport {
     pub source_db: String,
 }
 
+/// A discovered browser history DB: which browser, which profile, and the path.
+#[derive(Debug, Clone)]
+pub struct DiscoveredBrowser {
+    pub browser: String,   // "Chrome", "Edge", "Brave", …
+    pub profile: String,   // "Default", "Profile 1", …
+    pub db_path: String,   // absolute path to the `History` SQLite file
+}
+
+/// The Chromium family — ALL share the identical `urls` schema, so one query serves every one of them.
+/// This is a DATA-DRIVEN table: adding another Chromium browser (Vivaldi, Arc, …) is a one-line entry
+/// here, not new code. Each entry is the per-OS parent dir that contains the browser's profile folders
+/// (Default, Profile 1, …), each of which holds a `History` file. (Firefox/Safari use a DIFFERENT schema
+/// — deliberately NOT here; they'd be separate readers, matching LEANN which ships Chromium only.)
+///
+/// `{app_local}` = %LOCALAPPDATA% (Windows) / ~/Library/Application Support (macOS) / ~/.config (Linux),
+/// resolved by `chromium_roots()`.
+const CHROMIUM_BROWSERS: &[(&str, &str, &str, &str)] = &[
+    // (browser,   windows subpath under %LOCALAPPDATA%,        macOS subpath under App Support,  linux subpath under ~/.config)
+    ("Chrome",     "Google/Chrome/User Data",                    "Google/Chrome",                  "google-chrome"),
+    ("Edge",       "Microsoft/Edge/User Data",                   "Microsoft Edge",                 "microsoft-edge"),
+    ("Brave",      "BraveSoftware/Brave-Browser/User Data",      "BraveSoftware/Brave-Browser",    "BraveSoftware/Brave-Browser"),
+    ("Opera",      "Opera Software/Opera Stable",                "com.operasoftware.Opera",        "opera"),
+    ("Vivaldi",    "Vivaldi/User Data",                          "Vivaldi",                        "vivaldi"),
+];
+
+/// Resolve the OS-specific base dir where Chromium browsers keep their profile data.
+fn chromium_base() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    { std::env::var("LOCALAPPDATA").ok().map(std::path::PathBuf::from) }
+    #[cfg(target_os = "macos")]
+    { std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join("Library/Application Support")) }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    { std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")) }
+}
+
+/// Auto-discover every installed Chromium browser and ALL its profiles that have a history DB.
+/// Dynamic + zero-config: the user runs `import browser` and we find what's there. Overlap between
+/// browsers is harmless — the URL-keyed dedup in `ingest_browser_history` merges duplicates.
+pub fn discover_chromium_history() -> Vec<DiscoveredBrowser> {
+    let base = match chromium_base() { Some(b) => b, None => return Vec::new() };
+    let mut found = Vec::new();
+    for (browser, win, mac, linux) in CHROMIUM_BROWSERS {
+        #[cfg(target_os = "windows")] let sub = *win;
+        #[cfg(target_os = "macos")]   let sub = *mac;
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))] let sub = *linux;
+        let user_data = base.join(sub);
+        if !user_data.is_dir() { continue; }
+        // Each profile folder (Default, Profile 1, …) may hold a `History` SQLite file.
+        if let Ok(entries) = std::fs::read_dir(&user_data) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if !p.is_dir() { continue; }
+                let hist = p.join("History");
+                if hist.is_file() {
+                    let profile = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                    // Only real profiles (Default / "Profile N"), skip System Profile / Guest.
+                    if profile == "Default" || profile.starts_with("Profile ") {
+                        found.push(DiscoveredBrowser {
+                            browser: browser.to_string(),
+                            profile,
+                            db_path: hist.to_string_lossy().into_owned(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
 /// Ingest a Chrome/Edge `History` SQLite DB into `brain` as external-pointer memories.
 ///
 /// * `brain`        — the open `.said` file to write into
@@ -37,12 +107,15 @@ pub struct BrowserIngestReport {
 /// * `max_entries`  — cap the number of most-recently-visited pages ingested (0 = no cap).
 /// * `min_visits`   — only ingest pages visited at least this many times (1 = everything; raise it to
 ///                    keep only pages that mattered). A cheap, deterministic relevance filter.
+/// * `since_days`   — only ingest pages last-visited within this many days (0 = all history). The
+///                    "import my recent browsing" control — dynamic recency window, not a fixed cap.
 /// * `progress`     — `(done, total, label)` callback, same shape as document_ingest.
 pub fn ingest_browser_history<F>(
     brain: &mut SaidFile,
     history_db: &str,
     max_entries: usize,
     min_visits: u32,
+    since_days: u32,
     mut progress: F,
 ) -> Result<BrowserIngestReport, String>
 where
@@ -57,13 +130,26 @@ where
     )
     .map_err(|e| format!("open browser history '{}': {}", history_db, e))?;
 
-    // Chrome/Edge share the same `urls` schema: (url, title, visit_count, last_visit_time).
-    // Order by recency so `max_entries` keeps the MOST RECENT pages.
-    let sql = "SELECT url, title, visit_count \
-               FROM urls \
-               WHERE visit_count >= ?1 \
-               ORDER BY last_visit_time DESC";
-    let mut stmt = conn.prepare(sql)
+    // Chrome/Edge/Brave/… share the same `urls` schema: (url, title, visit_count, typed_count,
+    // last_visit_time). typed_count = how often the user TYPED/searched this URL (higher intent than a
+    // passive visit) — a stronger salience signal, adopted from LEANN's latest reader. Order by recency
+    // so `max_entries` keeps the MOST RECENT pages.
+    //
+    // Chrome time = microseconds since 1601-01-01. `since_days` → a WHERE cutoff in that epoch: the
+    // "import my last N days" recency window (0 = all). Computed against a passed-in "now" is overkill;
+    // SQLite's own clock via strftime keeps it deterministic and DB-relative.
+    let since_clause = if since_days > 0 {
+        // Chrome epoch µs of (now - since_days). 11644473600 = seconds between 1601 and 1970.
+        format!(" AND last_visit_time >= (strftime('%s','now','-{} days') + 11644473600) * 1000000",
+            since_days)
+    } else { String::new() };
+    let sql = format!(
+        "SELECT url, title, visit_count, typed_count \
+         FROM urls \
+         WHERE visit_count >= ?1{} \
+         ORDER BY last_visit_time DESC",
+        since_clause);
+    let mut stmt = conn.prepare(&sql)
         .map_err(|e| format!("prepare urls query (is this a Chrome/Edge History DB?): {}", e))?;
 
     let rows = stmt.query_map([min_visits], |r| {
@@ -71,15 +157,16 @@ where
             r.get::<_, String>(0)?,                       // url
             r.get::<_, Option<String>>(1)?.unwrap_or_default(), // title
             r.get::<_, i64>(2)? as u32,                   // visit_count
+            r.get::<_, i64>(3)? as u32,                   // typed_count
         ))
     }).map_err(|e| format!("query urls: {}", e))?;
 
     // Collect first (we need a total for the progress bar, and to apply max_entries).
-    let mut entries: Vec<(String, String, u32)> = Vec::new();
+    let mut entries: Vec<(String, String, u32, u32)> = Vec::new();
     for row in rows {
-        let (url, title, visits) = row.map_err(|e| format!("read row: {}", e))?;
+        let (url, title, visits, typed) = row.map_err(|e| format!("read row: {}", e))?;
         if url.is_empty() { continue; }
-        entries.push((url, title, visits));
+        entries.push((url, title, visits, typed));
         if max_entries > 0 && entries.len() >= max_entries { break; }
     }
 
@@ -87,7 +174,7 @@ where
     let mut ingested = 0usize;
     let mut skipped_no_title = 0usize;
 
-    for (i, (url, title, visits)) in entries.iter().enumerate() {
+    for (i, (url, title, visits, typed)) in entries.iter().enumerate() {
         progress(i, total, "browser");
         // A page with no title carries almost no searchable signal beyond the URL itself; skip it (the
         // distil-don't-pollute rule). The URL is still reachable via a direct grep if ever needed.
@@ -106,16 +193,21 @@ where
         };
         // Stable doc_id from the URL so re-ingest UPDATES the same entry (dedup) rather than duplicating.
         let doc_id = format!("browser/{}", stable_id(url));
+        // Tags: `domain:<host>` makes browsing history TAG-FILTERABLE (ask --tag domain:github.com) —
+        // pairs with the tie-scoping UX. `typed:<n>` is the search-intent salience signal from LEANN.
+        let mut tags = vec![
+            "ingest:browser".to_string(),
+            format!("visits:{}", visits),
+        ];
+        if !host.is_empty() { tags.push(format!("domain:{}", host)); }
+        if *typed > 0 { tags.push(format!("typed:{}", typed)); }
         brain.remember_as_external_pointer(
             Some(&doc_id),
             url,
             Some("text/html"),
             Some(title.trim()),
             &summary,
-            vec![
-                "ingest:browser".to_string(),
-                format!("visits:{}", visits),
-            ],
+            tags,
         );
         ingested += 1;
     }
@@ -175,13 +267,15 @@ mod tests {
         let _ = std::fs::remove_file(&db);
         {
             let c = rusqlite::Connection::open(&db).unwrap();
+            // Real Chrome schema includes `typed_count`. last_visit_time is Chrome-epoch µs; use a huge
+            // value so the (default since_days=0) query has no cutoff effect.
             c.execute_batch(
-                "CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER);
-                 INSERT INTO urls(url,title,visit_count,last_visit_time) VALUES
-                   ('https://doc.rust-lang.org/std/vec/struct.Vec.html','Vec in std::vec - Rust',12,300),
-                   ('https://arxiv.org/abs/2506.08276','LEANN: low-storage vector index',3,200),
-                   ('https://news.ycombinator.com/','Hacker News',40,100),
-                   ('https://blank.example/no-title','',1,50);"
+                "CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, typed_count INTEGER, last_visit_time INTEGER);
+                 INSERT INTO urls(url,title,visit_count,typed_count,last_visit_time) VALUES
+                   ('https://doc.rust-lang.org/std/vec/struct.Vec.html','Vec in std::vec - Rust',12,5,13300000000000000),
+                   ('https://arxiv.org/abs/2506.08276','LEANN: low-storage vector index',3,0,13200000000000000),
+                   ('https://news.ycombinator.com/','Hacker News',40,20,13100000000000000),
+                   ('https://blank.example/no-title','',1,0,13050000000000000);"
             ).unwrap();
         }
         let mut brain = SaidFile::create(
@@ -189,7 +283,8 @@ mod tests {
                 .to_string_lossy().as_ref());
         assert!(brain.auto_load_encoder());
 
-        let report = ingest_browser_history(&mut brain, &db_str, 0, 1, |_, _, _| {}).unwrap();
+        // max=0 (all), min_visits=1, since_days=0 (all history).
+        let report = ingest_browser_history(&mut brain, &db_str, 0, 1, 0, |_, _, _| {}).unwrap();
         assert_eq!(report.entries_seen, 4);
         assert_eq!(report.entries_ingested, 3, "3 titled pages ingested");
         assert_eq!(report.skipped_no_title, 1, "the untitled page is skipped");
@@ -202,6 +297,10 @@ mod tests {
         assert!(meta.tags.iter().any(|t| t == "ingest:browser"), "tagged ingest:browser");
         assert!(meta.tags.iter().any(|t| t.starts_with("external:uri=https://doc.rust-lang.org")),
             "carries the live URL as external:uri, content NOT embedded");
+        // New v0.12 signals: domain tag (filterable) + typed count (search-intent salience).
+        assert!(meta.tags.iter().any(|t| t == "domain:doc.rust-lang.org"),
+            "carries a filterable domain: tag");
+        assert!(meta.tags.iter().any(|t| t == "typed:5"), "carries the typed-count salience signal");
 
         let _ = std::fs::remove_file(&db);
     }

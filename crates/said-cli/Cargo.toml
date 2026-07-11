@@ -37,6 +37,9 @@ code = ["sca-core/code"]
 lsp = ["sca-core/lsp"]
 docs = ["sca-core/docs"]
 ocr = ["sca-core/ocr"]
+# browser — FREE personal-data import (`said import browser`): Chromium history SQLite → External-pointer
+# memories. A MEMORY feature (in the brain bundle), distinct from code-tier init/ingest. See doc 06/personal-import.
+browser = ["sca-core/browser"]
 # enterprise — compliance admin actions (legal-hold, retention-sweep, tamper-evident audit) for
 # regulated/production deployments. Gated out of the free brain + dev tiers; shipped in `full` only.
 enterprise = []
@@ -64,7 +67,7 @@ release = ["code", "docs", "ocr", "whisper", "embed-model", "lsp", "forge", "for
 #   coding-plus  coding + LSP cross-file intelligence
 #   full         everything readable: code + docs (PDF/DOCX) + OCR + LSP
 # ---------------------------------------------------------------------------
-brain = ["embed-model"]
+brain = ["embed-model", "browser"]
 # `simd` pulls in simsimd's runtime-dispatched (AVX2/AVX-512 auto-detected) Hamming core —
 # the documented 3-4× speedup on the top-50 retrieval path (docs/said-structure/09-cargo-
 # features.md). Enabled by default in the coding builds; the scalar count_ones() fallback

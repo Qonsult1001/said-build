@@ -494,15 +494,8 @@ enum Commands {
     /// Enterprise brains refuse content-embedding imports â€” use `--list` to
     /// see the adapters registered today.
     Import {
-        /// Source system: `mem0`, `memvid`. Use `--list` to see current adapters.
-        #[arg(long)]
-        from: Option<String>,
-        /// Path to the competitor's export (file or directory).
-        #[arg(long)]
-        source: Option<String>,
-        /// List registered adapters and exit.
-        #[arg(long)]
-        list: bool,
+        #[command(subcommand)]
+        source: ImportSource,
     },
     /// Recover deleted memories (and, in the Enterprise build, manage retention)
     ///
@@ -1220,6 +1213,47 @@ enum ForgeVerb {
     },
 }
 
+/// Sources for `said import` — bring data INTO the brain. Two families:
+///   - your OWN personal data (browser history, …), read locally + offline (a memory feature)
+///   - another memory tool's export (mem0, memvid) via the migration adapters
+/// Distinct from the coding-tier `init`/`ingest` (which index source code).
+#[derive(Subcommand)]
+enum ImportSource {
+    /// Import your browser history (Chrome, Edge, Brave, Opera, Vivaldi) as searchable memories.
+    ///
+    /// Auto-detects every installed Chromium browser + profile on this machine and imports them all
+    /// (duplicates merged by URL). Each page → an external-pointer memory (title + URL), tagged
+    /// `domain:<host>` (filter with `ask --tag domain:…`), `visits:`/`typed:`. The live browser DB is
+    /// read-only, never modified. Re-run anytime to re-sync.
+    #[cfg(feature = "browser")]
+    Browser {
+        /// Only import pages last visited within this many days (0 = all history).
+        #[arg(long, default_value_t = 0)]
+        since_days: u32,
+        /// Only import pages visited at least this many times (skip one-off visits). Default 1 = all.
+        #[arg(long, default_value_t = 1)]
+        min_visits: u32,
+        /// Cap total pages per profile (0 = no cap). Recency-ordered, so a cap keeps the newest.
+        #[arg(long, default_value_t = 0)]
+        max: usize,
+        /// Import a specific History DB path instead of auto-detecting (advanced).
+        #[arg(long)]
+        db: Option<String>,
+    },
+    /// Import from another memory tool's export (mem0, memvid) via a migration adapter.
+    From {
+        /// Source system: `mem0`, `memvid`. Omit with --list to see current adapters.
+        #[arg(long)]
+        from: Option<String>,
+        /// Path to the export (file or directory).
+        #[arg(long)]
+        source: Option<String>,
+        /// List registered adapters and exit.
+        #[arg(long)]
+        list: bool,
+    },
+}
+
 /// Subcommands for `said admin â€¦`. Kept separate so clap renders a clean
 /// nested help menu and each action can grow its own flags over time.
 #[derive(Subcommand)]
@@ -1581,8 +1615,7 @@ fn run() {
         Commands::Admin { ref action } => cmd_admin(cli.path.as_deref(), action, cli.json),
         #[cfg(feature = "code")]
         Commands::Vault { ref action } => cmd_vault(action, cli.json),
-        Commands::Import { ref from, ref source, list } =>
-            cmd_import(cli.path.as_deref(), from.as_deref(), source.as_deref(), list, cli.json),
+        Commands::Import { ref source } => cmd_import(cli.path.as_deref(), source, cli.json),
         Commands::Use { ref file } => cmd_use(file, cli.json),
         #[cfg(feature = "docs")]
         Commands::Ingest { ref target, pointer, ref summary } =>
@@ -2196,13 +2229,50 @@ fn resolve_vault_user(as_flag: Option<&str>) -> Result<String, String> {
 // said import --from <adapter> --source <path> â€” competitor migration
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-fn cmd_import(
-    path: Option<&str>,
-    from: Option<&str>,
-    source: Option<&str>,
-    list: bool,
-    json: bool,
-) -> Result<(), String> {
+fn cmd_import(path: Option<&str>, source: &ImportSource, json: bool) -> Result<(), String> {
+    // Personal-data import (the user's OWN browser history) — a MEMORY feature, distinct from the
+    // migration adapters below and from the code-tier init/ingest. Auto-detects every Chromium browser.
+    #[cfg(feature = "browser")]
+    if let ImportSource::Browser { since_days, min_visits, max, db } = source {
+        let mut brain = open_brain(path)?;
+        let targets: Vec<(String, String)> = if let Some(p) = db {
+            vec![("(custom)".to_string(), p.clone())]
+        } else {
+            let found = sca_core::browser_ingest::discover_chromium_history();
+            if found.is_empty() {
+                return Err("No Chromium browser history found (looked for Chrome, Edge, Brave, Opera, \
+                            Vivaldi). Pass --db <path-to-History> to import a specific file.".into());
+            }
+            found.into_iter().map(|d| (format!("{} ({})", d.browser, d.profile), d.db_path)).collect()
+        };
+        let mut imported = 0usize;
+        for (label, db_path) in &targets {
+            if !json { use std::io::Write; print!("Importing {} … ", label); let _ = std::io::stdout().flush(); }
+            match sca_core::browser_ingest::ingest_browser_history(
+                &mut brain, db_path, *max, *min_visits, *since_days, |_, _, _| {}
+            ) {
+                Ok(r) => { imported += r.entries_ingested; if !json { println!("{} pages", r.entries_ingested); } }
+                Err(e) => { if !json { println!("skipped ({})", e); } }
+            }
+        }
+        brain.save()?;
+        if json {
+            println!("{}", serde_json::json!({"imported": imported, "sources": targets.len()}));
+        } else {
+            println!("\n✓ Imported {} pages from {} browser profile(s).", imported, targets.len());
+            println!("  Recall:        said ask \"that article about X\"");
+            println!("  Filter by site: said ask \"...\" --tag domain:github.com");
+            println!("  Re-run anytime to sync new history (deduped).");
+        }
+        return Ok(());
+    }
+
+    // Migration from another memory tool (mem0, memvid).
+    let (from, source, list) = match source {
+        ImportSource::From { from, source, list } => (from.as_deref(), source.as_deref(), *list),
+        #[cfg(feature = "browser")]
+        ImportSource::Browser { .. } => unreachable!("handled above"),
+    };
     if list {
         let names = sca_core::migrate::registered_adapters();
         if json {
